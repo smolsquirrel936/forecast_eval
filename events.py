@@ -31,7 +31,7 @@ class Forecast:
     #       a model-defined `payload` (e.g. predicted_return / median_path).
     # Why:  payload is intentionally `Any` so the SignalEmitter API stays
     #       model-agnostic — the harness never inspects model internals, it just
-    #       hands the Forecast to whichever emitter is configured (SPEC §3).
+    #       hands the Forecast to whichever emitter is configured (SPEC §3). 
     timestamp: datetime
     horizon_bars: int
     payload: Any

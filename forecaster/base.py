@@ -5,7 +5,7 @@ query time t. The implementation MUST NOT consult any data source outside
 of `history_df`. The Forecast it returns must carry `timestamp <= t`.
 """
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Any, List, Optional, Sequence, Union
 
 import pandas as pd
 
@@ -28,6 +28,31 @@ class Forecaster(ABC):
         # Why:  abstract so the harness depends only on the interface; concrete
         #       implementations (naive, toto2) supply the actual model.
         ...
+
+    def forecast_series_batch(
+        self,
+        timestamps: Sequence[Any],
+        prices: Sequence[float],
+        boundaries: Sequence[int],
+        *,
+        batch_size: Union[int, str] = "auto",
+    ) -> List[Forecast]:
+        # Tech: generic fallback — for each boundary b, rebuild the history-through-b
+        #       frame and call forecast(); returns one Forecast per boundary in order.
+        # Why:  lets run.precompute_forecasts work with ANY forecaster (e.g. tests'
+        #       baselines), so the batched-precompute plumbing is model-agnostic. This
+        #       fallback is O(n) per boundary (it has no fixed context window to slice
+        #       to), so it offers no speedup; Toto2 overrides it with a real GPU-batched
+        #       implementation. `batch_size` is ignored here (nothing to batch).
+        out: List[Forecast] = []
+        for b in boundaries:
+            hist = pd.DataFrame({
+                "timestamp": list(timestamps[: b + 1]),
+                "price": list(prices[: b + 1]),
+                "volume": [1] * (b + 1),
+            })
+            out.append(self.forecast(hist))
+        return out
 
 
 def assert_no_lookahead(

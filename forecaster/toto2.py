@@ -25,8 +25,9 @@ Notes:
     ``_prepare_context`` to return a ``(C, T)`` array and set the
     ``series_ids`` shape accordingly.
 """
-from typing import Any, Literal, Optional
+from typing import Any, List, Literal, Optional, Sequence, Union
 
+import numpy as np
 import pandas as pd
 
 from ..events import Forecast
@@ -103,6 +104,16 @@ class Toto2Forecaster(Forecaster):
         from toto2 import Toto2Model  # type: ignore[import-not-found]
 
         self._torch = torch
+
+        # Tech: disable TF32 for cuBLAS matmuls and cuDNN.
+        # Why:  TF32's ~10-bit mantissa makes cuBLAS pick batch-shape-dependent GEMM
+        #       kernels whose accumulation diverges ~0.1-0.2% between B=1 (sequential
+        #       forecast) and a large batch (precompute). Full fp32 is batch-invariant,
+        #       so the batched precompute path is bit-identical to the per-tick path
+        #       (verified diff 0.0) — the backtest reproduces exactly regardless of
+        #       batch size. Costs a little matmul speed; correctness wins here.
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
         dev = self.device
         if dev == "auto":
             dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -179,12 +190,25 @@ class Toto2Forecaster(Forecaster):
         # qs: (Q=9, B=1, C=1, H)
         median = qs[MEDIAN_IDX, 0, 0, :].detach().cpu().numpy()
 
+        # Tech: hand the median path + last context price + timestamp to the shared
+        #       Forecast builder.
+        # Why:  the median->Forecast conversion (signal_step, return, payload) is
+        #       identical for the single and batched paths, so it lives in one place
+        #       (_make_forecast) to guarantee they agree.
+        return self._make_forecast(
+            median, float(ctx[-1]), history_df["timestamp"].iloc[-1]
+        )
+
+    def _make_forecast(self, median: np.ndarray, last_price: float,
+                       timestamp: Any) -> Forecast:
         # Tech: pick the predicted price from the chosen horizon step (last/first/
-        #       mean) and convert it to a return vs. the last context price.
+        #       mean), convert it to a return vs. the last context price, and pack
+        #       the Forecast (stamped at `timestamp`, carrying the full median path).
         # Why:  signal_step lets the caller decide whether the trade thesis is the
         #       end-of-horizon level, the next step, or the average; emitters key off
-        #       predicted_return, so we derive it here in one place.
-        last_price = float(ctx[-1])
+        #       predicted_return, so we derive it once here. Stamping at the last
+        #       observed row keeps it look-ahead-clean; the median_path lets reports
+        #       inspect the whole forecast, not just the scalar the emitter uses.
         if self.signal_step == "first":
             predicted_price = float(median[0])
         elif self.signal_step == "mean":
@@ -192,19 +216,178 @@ class Toto2Forecaster(Forecaster):
         else:
             predicted_price = float(median[-1])
         predicted_return = (predicted_price - last_price) / last_price
-
-        # Tech: return the Forecast stamped at the last history timestamp, carrying
-        #       predicted price/return, last price, and the full median path.
-        # Why:  stamping at the last observed row keeps it look-ahead-clean; shipping
-        #       the median_path lets reports/diagnostics inspect the whole forecast,
-        #       not just the scalar the emitter uses.
         return Forecast(
-            timestamp=history_df["timestamp"].iloc[-1],
+            timestamp=timestamp,
             horizon_bars=self.forecast_horizon_bars,
             payload={
                 "predicted_price": predicted_price,
                 "predicted_return": predicted_return,
                 "last_price": last_price,
-                "median_path": median.tolist(),
+                "median_path": [float(x) for x in median],
             },
         )
+
+    def forecast_series_batch(
+        self,
+        timestamps: Sequence[Any],
+        prices: Sequence[float],
+        boundaries: Sequence[int],
+        *,
+        batch_size: Union[int, str] = "auto",
+    ) -> List[Forecast]:
+        """Batch-forecast many boundaries at once (SPEC §6 speedup path).
+
+        For each index ``b`` in ``boundaries`` the model is conditioned on the
+        trailing context of ``prices[:b+1]`` and the resulting Forecast is
+        stamped at ``timestamps[b]`` — identical inputs/outputs to calling
+        ``forecast()`` on the history-through-b frame, but every window is run
+        on the GPU in batches instead of one at a time.
+
+        Only ``bar_freq=None`` is supported: per-window resampling would make
+        the contexts ragged and unbatchable. Requires every boundary to have
+        at least one full ``context_length``-aligned window of history (the
+        scripts enforce ``warmup >= context_length``).
+        """
+        # Tech: load the model on first use and reject the resample path.
+        # Why:  batching needs uniform-length contexts; bar_freq aggregation yields
+        #       a variable number of bars per window, so it must use sequential
+        #       forecast() instead. Failing loudly beats silently wrong batches.
+        if self._model is None:
+            self._model = self._load_model()
+        assert self._patch_size is not None
+        if self.bar_freq is not None:
+            raise NotImplementedError(
+                "forecast_series_batch supports bar_freq=None only; per-window "
+                "resampling yields ragged contexts — use sequential forecast()."
+            )
+
+        # Tech: compute the uniform context length T (context_length floored to a
+        #       patch_size multiple) and verify every boundary has >= T history.
+        # Why:  PatchedCausalStdScaler needs T divisible by patch_size; a single T
+        #       across all windows is what makes them stack into one rectangular
+        #       batch. The earliest boundary is the binding constraint.
+        prices = np.asarray(prices, dtype=np.float32)
+        boundaries = list(boundaries)
+        if not boundaries:
+            return []
+        T = (self.context_length // self._patch_size) * self._patch_size
+        if T == 0:
+            raise ValueError(
+                f"context_length {self.context_length} < patch_size "
+                f"{self._patch_size}"
+            )
+        if min(boundaries) + 1 < T:
+            raise ValueError(
+                f"boundary {min(boundaries)} has < {T} bars of history; raise "
+                f"warmup to >= context_length or use sequential forecast()."
+            )
+
+        # Tech: materialize all windows as a single (num, T) array of trailing
+        #       context slices — pure numpy views, no per-window DataFrame.
+        # Why:  building one DataFrame per window is exactly the O(n) overhead this
+        #       path exists to avoid; numpy slicing the fixed price array is ~free.
+        windows = np.stack([prices[b + 1 - T: b + 1] for b in boundaries])
+
+        # Tech: resolve the batch size (probe VRAM when "auto") then run each chunk
+        #       through the model, collecting the median path per row.
+        # Why:  one big forward would blow VRAM on the activation side; chunking by a
+        #       VRAM-aware batch size saturates the GPU without OOM, and
+        #       _forecast_chunk recovers from an over-estimate by splitting.
+        bs = self._auto_batch_size(T) if batch_size == "auto" else int(batch_size)
+        medians: List[np.ndarray] = []
+        for i in range(0, len(windows), bs):
+            medians.append(self._forecast_chunk(windows[i: i + bs], T))
+        med = np.concatenate(medians, axis=0)  # (num, H)
+
+        # Tech: turn each row's median path into a Forecast stamped at its boundary.
+        # Why:  same _make_forecast as the single path → byte-identical payload
+        #       semantics; last_price is the window's final close.
+        return [
+            self._make_forecast(med[j], float(windows[j][-1]), timestamps[b])
+            for j, b in enumerate(boundaries)
+        ]
+
+    def _forecast_chunk(self, windows_chunk: np.ndarray, T: int) -> np.ndarray:
+        # Tech: run one (chunk, 1, T) batch through the model and return the median
+        #       quantile path as a (chunk, H) numpy array; on CUDA OOM, recursively
+        #       split the chunk in half and retry until it fits (or a single row
+        #       still OOMs, which re-raises).
+        # Why:  the auto batch size is an estimate; halving-on-OOM makes an optimistic
+        #       guess self-correcting instead of crashing the whole run.
+        torch = self._torch
+        dev = next(self._model.parameters()).device
+        try:
+            t = torch.tensor(
+                windows_chunk, dtype=torch.float32, device=dev
+            ).reshape(len(windows_chunk), 1, T)
+            m = torch.ones_like(t, dtype=torch.bool)
+            sid = torch.zeros(len(windows_chunk), 1, dtype=torch.long, device=dev)
+            with torch.no_grad():
+                qs = self._model.forecast(
+                    {"target": t, "target_mask": m, "series_ids": sid},
+                    horizon=self.forecast_horizon_bars,
+                )
+            # qs: (Q=9, chunk, C=1, H) -> median over Q, single channel.
+            return qs[MEDIAN_IDX, :, 0, :].detach().cpu().numpy()
+        except torch.cuda.OutOfMemoryError:
+            if len(windows_chunk) == 1:
+                raise
+            torch.cuda.empty_cache()
+            mid = len(windows_chunk) // 2
+            first = self._forecast_chunk(windows_chunk[:mid], T)
+            second = self._forecast_chunk(windows_chunk[mid:], T)
+            return np.concatenate([first, second], axis=0)
+
+    def _auto_batch_size(self, T: int, *, safety: float = 0.8,
+                         cap: int = 1024) -> int:
+        # Tech: preflight that runs before every batched backtest — measure the
+        #       activation memory of a B=1 and B=8 forward, read free VRAM, and solve
+        #       batch = floor((free*safety - base_act) / per_sample), clamped to
+        #       [1, cap]. Any probe failure falls back to a safe small batch.
+        # Why:  hard-coding a batch size either wastes the 5090's headroom or OOMs on
+        #       a busy GPU; measuring on the actual device/model adapts to whatever
+        #       VRAM is free at launch. The _forecast_chunk OOM-split is the backstop.
+        torch = self._torch
+        if not torch.cuda.is_available():
+            return 32  # CPU: no VRAM probe; a modest fixed batch is fine.
+        dev = next(self._model.parameters()).device
+        idx = dev.index if dev.index is not None else torch.cuda.current_device()
+
+        def _activation_peak(b: int) -> int:
+            # Peak *transient* memory of a B-row forward = peak allocated minus the
+            # weights already resident before the forward.
+            torch.cuda.synchronize(idx)
+            torch.cuda.reset_peak_memory_stats(idx)
+            before = torch.cuda.memory_allocated(idx)
+            t = torch.zeros(b, 1, T, dtype=torch.float32, device=dev)
+            m = torch.ones_like(t, dtype=torch.bool)
+            sid = torch.zeros(b, 1, dtype=torch.long, device=dev)
+            with torch.no_grad():
+                self._model.forecast(
+                    {"target": t, "target_mask": m, "series_ids": sid},
+                    horizon=self.forecast_horizon_bars,
+                )
+            torch.cuda.synchronize(idx)
+            peak = torch.cuda.max_memory_allocated(idx)
+            del t, m, sid
+            return peak - before
+
+        try:
+            torch.cuda.empty_cache()
+            act1 = _activation_peak(1)
+            act8 = _activation_peak(8)
+            per_sample = max(1, (act8 - act1) // 7)
+            base_act = max(0, act1 - per_sample)
+            torch.cuda.empty_cache()
+            free, _total = torch.cuda.mem_get_info(idx)
+            budget = free * safety - base_act
+            n = int(budget // per_sample)
+            n = max(1, min(cap, n))
+            print(
+                f"[toto2] auto batch-size: {n} (free {free / 2**30:.1f}GB, "
+                f"~{per_sample / 2**20:.0f}MB/sample, base {base_act / 2**20:.0f}MB)"
+            )
+            return n
+        except Exception as exc:  # noqa: BLE001 — any probe failure is non-fatal
+            print(f"[toto2] auto batch-size probe failed ({exc}); using 8")
+            return 8

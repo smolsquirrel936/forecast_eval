@@ -37,30 +37,57 @@ from forecast_eval.strategy.threshold import ThresholdEmitter
 
 DEFAULT_DATA = (
     Path(__file__).resolve().parent.parent
-    / "dataset" / "tick" / "TXF_OHLC_1min.csv"
+    / "dataset" / "RPT" / "TXF_RPT_minute.csv"
 )
 
 
 def load_minute_bars(path: Path, n_bars: int | None) -> pd.DataFrame:
-    """Load the 1-min OHLC file, dropping NaN closes.
+    """Load a 1-min OHLC file as ticks, dropping NaN closes.
 
-    If ``n_bars`` is None, return every traded minute. Otherwise return
-    the trailing ``n_bars`` rows. See real_data_demo for why dropping
-    NaNs matters (Toto2 propagates them; ~17 % of raw rows are gaps).
+    Handles two schemas transparently (same as real_data_demo):
+
+    * ``tick/TXF_OHLC_1min.csv`` — columns ``timestamp,open,high,low,close``.
+    * ``RPT/TXF_RPT_minute.csv`` — columns
+      ``datetime,contract,open,high,low,close,volume``. TXF trades several
+      contract months at once, so a minute can appear under multiple
+      ``contract`` values; we keep the **highest-volume** row per minute
+      (the front month) for a continuous series with automatic rollover.
+
+    If ``n_bars`` is None, return every traded minute; otherwise return
+    the trailing ``n_bars`` rows. Dropping NaN closes matters because
+    Toto2 propagates them (~17 % of raw rows are gaps).
     """
-    # Tech: read + parse + drop NaN closes; trim to the trailing n_bars only when a
-    #       limit is given, then project to the tick schema.
-    # Why:  this variant defaults to the *full* dataset (n_bars=None), unlike the
-    #       demo — so the trim is conditional; everything else mirrors the demo loader.
+    # Tech: read the CSV and normalize the timestamp column name — the RPT file
+    #       calls it "datetime", the legacy tick file calls it "timestamp".
+    # Why:  downstream code and the framework's tick schema key off "timestamp";
+    #       normalizing here lets one loader serve both files unchanged.
     df = pd.read_csv(path)
+    if "datetime" in df.columns and "timestamp" not in df.columns:
+        df = df.rename(columns={"datetime": "timestamp"})
     df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df = df.dropna(subset=["close"]).reset_index(drop=True)
+
+    # Tech: if a per-minute "contract" column exists, collapse each minute to the
+    #       single highest-volume contract before anything else.
+    # Why:  multiple contract months print at the same minute; mixing them would put
+    #       several rows on one timestamp (breaking the monotonic-time assumption) and
+    #       splice prices across strikes. The most-traded contract is the front month,
+    #       so volume-max selection tracks the liquid leg and rolls over cleanly.
+    if "contract" in df.columns:
+        idx = df.groupby("timestamp")["volume"].idxmax()
+        df = df.loc[idx].reset_index(drop=True)
+
+    # Tech: drop NaN closes, sort by time, trim to the trailing n_bars only when a
+    #       limit is given, then project to the [timestamp, price, volume] schema.
+    # Why:  this variant defaults to the *full* dataset (n_bars=None), unlike the
+    #       demo — so the trim is conditional; real per-bar volume is used when
+    #       present, else a constant 1 for the volume-less legacy file.
+    df = df.dropna(subset=["close"]).sort_values("timestamp").reset_index(drop=True)
     if n_bars is not None:
         df = df.tail(n_bars).reset_index(drop=True)
     return pd.DataFrame({
         "timestamp": df["timestamp"],
         "price": df["close"].astype(float),
-        "volume": 1,
+        "volume": df["volume"].astype(float) if "volume" in df.columns else 1,
     })
 
 
@@ -72,7 +99,7 @@ def main(argv=None) -> int:
     #       capped by the model regardless of how much history is available.
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--data", type=Path, default=DEFAULT_DATA,
-                    help="Path to TXF_OHLC_1min.csv")
+                    help="Path to a 1-min OHLC csv (RPT or tick schema)")
     ap.add_argument("--n-bars", type=int, default=None,
                     help="Trailing rows to use (default: full dataset)")
     ap.add_argument("--lookback-frac", type=float, default=0.30,
@@ -89,6 +116,12 @@ def main(argv=None) -> int:
     ap.add_argument("--fee-rate", type=float, default=0.00015)
     ap.add_argument("--forced-close", action="store_true",
                     help="Force close at every DAY<->NIGHT session boundary")
+    ap.add_argument("--precompute", action="store_true",
+                    help="Batch all forecasts on the GPU before replaying execution "
+                         "(much faster for Toto2; identical results)")
+    ap.add_argument("--batch-size", default="auto",
+                    help="Forecast batch size for --precompute: 'auto' (probe VRAM) "
+                         "or an integer")
     ap.add_argument("--output-dir", type=Path, default=None,
                     help="Defaults to <myPaper>/outputs/real_data_<timestamp>/")
     args = ap.parse_args(argv)
@@ -186,6 +219,16 @@ def main(argv=None) -> int:
         forced_close_on_session_end=args.forced_close,
         progress=True,
         progress_desc=f"backtest ({n} bars)",
+        # Only materialize the trailing context the forecaster consumes, not the
+        # whole history-through-t, each stride. Safe here because bar_freq=None, so
+        # context_length raw rows == context_length bars (identical model input).
+        # If a bar_freq aggregation were enabled, this would need a larger window.
+        history_window=args.context_length,
+        # Batch every forecast on the GPU up front, then replay execution. Only
+        # used when --precompute is passed; batch_size 'auto' probes free VRAM.
+        precompute=args.precompute,
+        batch_size=(args.batch_size if args.batch_size == "auto"
+                    else int(args.batch_size)),
     )
     elapsed = time.time() - t0
     print(f"  backtest done in {elapsed:.1f}s "
@@ -220,16 +263,14 @@ def main(argv=None) -> int:
     for k, v in metrics["attribution"].items():
         print(f"  {k:38s} {v if not isinstance(v, float) else f'{v:+.6f}'}")
 
-    # Buy-and-hold over the eval window only — comparing strategy PnL (which
-    # only trades the trailing 70%) against buy-and-hold over the full 100%
-    # would be apples-to-oranges.
-    # Tech: slice the eval window and compute buy-and-hold on just those bars.
-    # Why:  the strategy only traded the eval window, so the baseline must cover the
-    #       same window for the comparison to be fair (a full-history hold would
-    #       include the silent warmup the strategy never traded).
-    eval_ticks = ticks.iloc[warmup:].reset_index(drop=True)
-    print("\n=== Buy-and-hold floor (eval window, same fee) ===")
-    bh = buy_and_hold_pnl(eval_ticks, fee_rate=args.fee_rate)
+    # Tech: compute buy-and-hold over the *full* loaded series (warmup + eval).
+    # Why:  this is the whole-dataset floor — what a passive holder would have earned
+    #       over the entire window at the same fee. Note the strategy only trades the
+    #       trailing eval region, so the warmup bars here are price drift the strategy
+    #       never participated in; the delta below is therefore not a like-for-like
+    #       window comparison (it spans more than the strategy traded).
+    print("\n=== Buy-and-hold floor (full data, same fee) ===")
+    bh = buy_and_hold_pnl(ticks, fee_rate=args.fee_rate)
     for k, v in bh.items():
         print(f"  {k:38s} {v if not isinstance(v, float) else f'{v:+.6f}'}")
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
+import numpy as np
 import pandas as pd
 
 from .environment import Environment
@@ -73,6 +74,42 @@ class BacktestResult:
         return out
 
 
+def precompute_forecasts(
+    forecaster: Forecaster,
+    ticks: pd.DataFrame,
+    *,
+    batch_size: Any = "auto",
+) -> Dict[int, Forecast]:
+    """Batch-compute every forecast the run loop will request, keyed by bar_idx.
+
+    The run loop fires a forecast at each stride boundary past warm-up; those
+    inputs depend only on the (fixed) price history, never on trading state, so
+    they can all be computed up front. This calls the forecaster's batched path
+    (`forecast_series_batch`) — Toto2 runs them on the GPU in VRAM-sized batches
+    — and returns ``{bar_idx: Forecast}`` for the replay loop to look up.
+    """
+    # Tech: rebuild the SAME stream the run loop consumes — Environment sorts
+    #       chronologically and DROPS off-hours prints — then index boundaries into
+    #       that filtered sequence, not the raw ticks frame.
+    # Why:  the loop's bar_idx counts only in-session bars, so indexing raw ticks
+    #       (which include the dropped 13:45-15:00 / overnight gaps) misaligns the
+    #       cache keys and silently forecasts the wrong bar. Materializing the stream
+    #       guarantees bar_idx here matches bar_idx in run_backtest's loop exactly.
+    rows = list(Environment(ticks).stream())
+    n = len(rows)
+    warmup = forecaster.warmup_bars
+    stride = forecaster.forecast_stride_bars
+    boundaries = [b for b in range(warmup, n) if (b - warmup) % stride == 0]
+    if not boundaries:
+        return {}
+    timestamps = [r.timestamp for r in rows]
+    prices = np.asarray([r.price for r in rows], dtype=float)
+    fc_list = forecaster.forecast_series_batch(
+        timestamps, prices, boundaries, batch_size=batch_size,
+    )
+    return dict(zip(boundaries, fc_list))
+
+
 def run_backtest(
     ticks: pd.DataFrame,
     *,
@@ -90,6 +127,10 @@ def run_backtest(
     warmup_bars: int = 0,
     progress: bool = False,
     progress_desc: str = "backtest",
+    history_window: Optional[int] = None,
+    forecasts_cache: Optional[Dict[int, Forecast]] = None,
+    precompute: bool = False,
+    batch_size: Any = "auto",
 ) -> BacktestResult:
     # Tech: wire up the four collaborating objects for this run.
     # Why:  each is constructed fresh per backtest so no state leaks between runs;
@@ -121,6 +162,17 @@ def run_backtest(
     else:
         stride = forecast_stride_bars
         warmup = warmup_bars
+
+    # Tech: when precompute is requested (and no cache was supplied), batch-compute
+    #       every forecast up front, keyed by bar_idx.
+    # Why:  forecasts depend only on the fixed price history, so doing them off the
+    #       critical loop lets the GPU run them batched (SPEC §6 speedup #1); the
+    #       loop below then does an O(1) lookup instead of a per-stride model call.
+    #       An explicit forecasts_cache (e.g. loaded from disk) wins over precompute.
+    if use_forecaster and forecasts_cache is None and precompute:
+        forecasts_cache = precompute_forecasts(
+            forecaster, ticks, batch_size=batch_size
+        )
 
     # Tech: rolling history buffers (parallel lists of ts/price/volume).
     # Why:  rebuilt into a DataFrame slice at each forecast boundary; growing plain
@@ -228,17 +280,39 @@ def run_backtest(
         if bar_idx >= warmup and (bar_idx - warmup) % stride == 0:
             forecast: Optional[Forecast] = None
             if use_forecaster:
-                # Tech: build a fresh DataFrame from the history-through-t buffers and
-                #       run the model; raise if the returned forecast looks ahead of t.
-                # Why:  passing only rows ≤ t is the structural look-ahead defense; the
-                #       runtime timestamp check is a belt-and-suspenders guard that
-                #       catches a forecaster which fabricates a future timestamp.
-                hist_df = pd.DataFrame({
-                    "timestamp": history_ts,
-                    "price": history_px,
-                    "volume": history_vol,
-                })
-                forecast = forecaster.forecast(hist_df)
+                if forecasts_cache is not None:
+                    # Tech: O(1) lookup of a forecast computed up front in batches,
+                    #       keyed by this bar index.
+                    # Why:  the precompute path (SPEC §6 #1) moves all GPU work off the
+                    #       loop; the forecast for bar_idx is identical to what the live
+                    #       call would produce, so the rest of the loop is unchanged.
+                    forecast = forecasts_cache[bar_idx]
+                else:
+                    # Tech: build a fresh DataFrame from the history-through-t buffers
+                    #       and run the model. When history_window is set, only the
+                    #       trailing that-many rows are materialized (lo clamps to 0
+                    #       early in the run).
+                    # Why:  passing only rows ≤ t is the structural look-ahead defense.
+                    #       The window cap is a pure speedup — a forecaster that only
+                    #       consumes a fixed context tail (e.g. Toto2's context_length)
+                    #       gets an identical slice, but we avoid rebuilding the whole
+                    #       O(n) frame every stride.
+                    lo = (
+                        0 if history_window is None
+                        else max(0, len(history_px) - history_window)
+                    )
+                    hist_df = pd.DataFrame({
+                        "timestamp": history_ts[lo:],
+                        "price": history_px[lo:],
+                        "volume": history_vol[lo:],
+                    })
+                    forecast = forecaster.forecast(hist_df)
+
+                # Tech: shared look-ahead guard + record, for both the cached and live
+                #       paths — fail if the forecast is stamped ahead of the current tick.
+                # Why:  belt-and-suspenders against a forecaster (or a mis-keyed cache)
+                #       that hands back a future-stamped forecast; either way it would
+                #       be a look-ahead leak (SPEC §6).
                 if forecast.timestamp > market.timestamp:
                     raise RuntimeError(
                         f"Look-ahead leak: forecast.timestamp "

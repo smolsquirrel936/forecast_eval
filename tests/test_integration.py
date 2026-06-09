@@ -10,9 +10,11 @@ import pandas as pd
 import pytest
 
 from forecast_eval.events import Forecast
+from forecast_eval.forecaster.base import Forecaster
 from forecast_eval.metrics import buy_and_hold_pnl, compute_metrics
 from forecast_eval.run import fee_sensitivity_sweep, run_backtest
 from forecast_eval.strategy.base import SignalEmitter
+from forecast_eval.strategy.threshold import ThresholdEmitter
 
 
 class _ScriptedEmitter(SignalEmitter):
@@ -109,6 +111,67 @@ def test_buy_and_hold_pnl_basic_math():
 
 
 # -------- Fee sensitivity sweep ----------------------------------------------
+
+class _MomentumForecaster(Forecaster):
+    """Deterministic, data-dependent forecaster: predicted return = last bar's
+    return. Data-dependence makes the precompute<->sequential parity test
+    sensitive to a mis-keyed cache (wrong forecast at the wrong bar)."""
+
+    def __init__(self, *, warmup_bars=2, forecast_stride_bars=1,
+                 forecast_horizon_bars=1):
+        self.warmup_bars = warmup_bars
+        self.forecast_stride_bars = forecast_stride_bars
+        self.forecast_horizon_bars = forecast_horizon_bars
+
+    def forecast(self, history_df):
+        p = history_df["price"].to_numpy(dtype=float)
+        last = float(p[-1])
+        prev = float(p[-2]) if len(p) >= 2 else last
+        pr = (last - prev) / prev if prev else 0.0
+        return Forecast(
+            timestamp=history_df["timestamp"].iloc[-1],
+            horizon_bars=self.forecast_horizon_bars,
+            payload={"predicted_price": last * (1 + pr),
+                     "predicted_return": pr, "last_price": last},
+        )
+
+
+def test_precompute_matches_sequential():
+    """The batched-precompute path must produce the exact same backtest as the
+    per-tick sequential path — same forecasts, fills, and PnL. Uses the generic
+    forecast_series_batch fallback (Forecaster base), so this validates the
+    run.py cache keying/replay plumbing independent of any GPU model."""
+    ticks = _make_ticks(
+        [100, 101, 100, 102, 103, 101, 104, 103, 105, 102, 106, 104, 107, 105]
+    )
+
+    def go(precompute: bool):
+        return run_backtest(
+            ticks,
+            forecaster=_MomentumForecaster(warmup_bars=2,
+                                           forecast_stride_bars=1,
+                                           forecast_horizon_bars=1),
+            emitter=ThresholdEmitter(buy_threshold=0.005, sell_threshold=-0.005),
+            tick_size=1.0,
+            aggression_ticks=0,
+            fee_rate=0.00015,
+            contract_multiplier=1.0,
+            precompute=precompute,
+        )
+
+    seq, pre = go(False), go(True)
+
+    # Same number of forecasts, and each one identical (timestamp + payload).
+    assert seq.n_forecasts == pre.n_forecasts > 0
+    for a, b in zip(seq.forecasts, pre.forecasts):
+        assert a.timestamp == b.timestamp
+        assert a.payload == b.payload
+    # Same trading outcome.
+    assert len(seq.fills) == len(pre.fills)
+    assert seq.summary()["net_pnl_points"] == pytest.approx(
+        pre.summary()["net_pnl_points"]
+    )
+
 
 def test_fee_sweep_monotonic_in_fee_rate():
     """Higher fees → lower net PnL (or equal when no fills happen)."""
