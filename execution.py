@@ -115,17 +115,20 @@ class Execution:
             else:
                 return None
 
-        # Tech: charge the per-side fee, clear the book, and emit the FillEvent
-        #       (quantity fixed at 1 contract in v1).
+        # Tech: charge the per-side fee on the full filled quantity, clear the book,
+        #       and emit the FillEvent for order.quantity contracts (no partial fills
+        #       in this print-only sim — the whole order fills at once).
         # Why:  the order is consumed exactly once — clearing `_pending` before
         #       returning prevents a double fill on the next tick, and fee is taken
-        #       on this leg because SPEC §4.6 charges every fill, open or close.
-        fee = fill_price * self.fee_rate
+        #       on this leg because SPEC §4.6 charges every fill, open or close. Fee
+        #       scales with quantity since §4.6 is a per-contract cost; quantity=1
+        #       (the v1 default) leaves both fee and size identical to before (#7).
+        fee = fill_price * self.fee_rate * order.quantity
         self._pending = None
         return FillEvent(
             timestamp=market.timestamp,
             side=order.side,
             fill_price=fill_price,
-            quantity=1,
+            quantity=order.quantity,
             fee=fee,
         )

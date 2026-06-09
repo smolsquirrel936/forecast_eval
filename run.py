@@ -118,6 +118,7 @@ def run_backtest(
     fee_rate: float = 0.00015,
     contract_multiplier: float = 200.0,
     max_position: int = 1,
+    max_aggression_ticks: Optional[int] = None,
     forecaster: Optional[Forecaster] = None,
     emitter: Optional[SignalEmitter] = None,
     exit_rule: Optional[ExitRule] = None,
@@ -144,6 +145,7 @@ def run_backtest(
         tick_size=tick_size,
         aggression_ticks=aggression_ticks,
         max_position=max_position,
+        max_aggression_ticks=max_aggression_ticks,
     )
     # Tech: default to the alternating dummy emitter when none is supplied.
     # Why:  the Phase 1 path validates execution/fees without a model; making the
@@ -322,20 +324,26 @@ def run_backtest(
                 forecasts.append(forecast)
                 n_forecasts += 1
 
-            # Tech: convert the forecast to a direction, log the signal with its
-            #       emit-time price, and let the Trader act on it.
+            # Tech: convert the forecast to a Signal (direction + conviction strength),
+            #       log it with the emit-time price, and let the Trader act on it with
+            #       that strength.
             # Why:  the signal record (price + session at emit) is what frictionless
-            #       attribution replays later; on_signal applies the no-flip state
-            #       machine and may or may not produce an order.
-            direction = emitter.emit(forecast)
+            #       attribution replays later (it reads `direction` only, so its per-
+            #       unit edge number is unaffected by sizing); strength carries the
+            #       forecast's confidence into the Trader for aggression (#1) and size
+            #       (#7). emit_signal defaults to strength 1.0 for emitters without a
+            #       distribution, so the dummy/naive paths are unchanged.
+            sig = emitter.emit_signal(forecast)
+            direction = sig.direction
             n_signals += 1
             signals.append({
                 "timestamp": market.timestamp,
                 "direction": direction,
                 "price": market.price,
                 "session": market.session,
+                "strength": sig.strength,
             })
-            order = trader.on_signal(direction, market)
+            order = trader.on_signal(direction, market, strength=sig.strength)
             if order is not None:
                 n_orders += 1
                 orders.append(order)

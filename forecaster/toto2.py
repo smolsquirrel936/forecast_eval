@@ -33,9 +33,15 @@ import pandas as pd
 from ..events import Forecast
 from .base import Forecaster
 
-# Tech: index of the median (Q0.5) row in the model's 9-quantile output.
-# Why:  toto2 returns a quantile fan; we trade off the median path, so this picks
-#       the central forecast out of qs[Q, B, C, H].
+# Tech: the nine quantile levels toto2 emits along axis 0 of its forecast output,
+#       and the index of the median (Q0.5) row.
+# Why:  verified against toto/toto2 (configuration.py `quantiles` default and
+#       model.py QuantileKnotsOutputHead knots, also exposed live as
+#       model.output_head.knots): evenly-spaced deciles, so index 4 == Q0.5. These
+#       levels are the x-axis of the predictive CDF used for prob_up / strength
+#       below — if a checkpoint ever ships different knots, read them off the model
+#       instead of trusting this constant.
+QUANTILE_LEVELS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 MEDIAN_IDX = 4  # index of Q0.5 in the 9-quantile output
 
 
@@ -177,45 +183,71 @@ class Toto2Forecaster(Forecaster):
         m = torch.ones_like(t, dtype=torch.bool)
         sid = torch.zeros(1, 1, dtype=torch.long, device=dev)
 
-        # Tech: run inference under no_grad and extract the median quantile's path,
-        #       moving it back to CPU/numpy.
+        # Tech: run inference under no_grad and extract the full quantile fan for
+        #       the single series, moving it back to CPU/numpy as (Q=9, H).
         # Why:  no_grad avoids building an autograd graph (faster, less memory) since
-        #       we never backprop; qs[MEDIAN_IDX, 0, 0, :] is the single-series median
-        #       forecast across the horizon.
+        #       we never backprop; keeping all nine quantile rows (not just the
+        #       median) is what lets _make_forecast derive directional probability and
+        #       a predictive band for confidence-scaled trading (#1/#2/#7).
         with torch.no_grad():
             qs = self._model.forecast(
                 {"target": t, "target_mask": m, "series_ids": sid},
                 horizon=self.forecast_horizon_bars,
             )
         # qs: (Q=9, B=1, C=1, H)
-        median = qs[MEDIAN_IDX, 0, 0, :].detach().cpu().numpy()
+        fan = qs[:, 0, 0, :].detach().cpu().numpy()
 
-        # Tech: hand the median path + last context price + timestamp to the shared
+        # Tech: hand the quantile fan + last context price + timestamp to the shared
         #       Forecast builder.
-        # Why:  the median->Forecast conversion (signal_step, return, payload) is
-        #       identical for the single and batched paths, so it lives in one place
-        #       (_make_forecast) to guarantee they agree.
+        # Why:  the fan->Forecast conversion (signal_step, return, prob_up, payload)
+        #       is identical for the single and batched paths, so it lives in one
+        #       place (_make_forecast) to guarantee they agree.
         return self._make_forecast(
-            median, float(ctx[-1]), history_df["timestamp"].iloc[-1]
+            fan, float(ctx[-1]), history_df["timestamp"].iloc[-1]
         )
 
-    def _make_forecast(self, median: np.ndarray, last_price: float,
+    @staticmethod
+    def _prob_up(q_prices: np.ndarray, last_price: float) -> float:
+        # Tech: read the predictive CDF at last_price by inverse-interpolating the
+        #       (sorted quantile price -> level) ladder, then P(up) = 1 - F(last).
+        # Why:  the nine quantile prices are F^-1 at QUANTILE_LEVELS; interpolating
+        #       price->level gives F(last_price) = P(next price <= last). np.interp
+        #       clamps outside the [Q0.1, Q0.9] band, so prob_up lands in [0.1, 0.9]
+        #       — a deliberately conservative read of conviction from deciles alone.
+        cdf_at_last = float(np.interp(last_price, q_prices, QUANTILE_LEVELS))
+        return 1.0 - cdf_at_last
+
+    def _make_forecast(self, fan: np.ndarray, last_price: float,
                        timestamp: Any) -> Forecast:
-        # Tech: pick the predicted price from the chosen horizon step (last/first/
-        #       mean), convert it to a return vs. the last context price, and pack
-        #       the Forecast (stamped at `timestamp`, carrying the full median path).
+        # Tech: reduce each quantile row to the chosen horizon step (last/first/mean)
+        #       giving a 9-vector of quantile prices; the median row is the point
+        #       forecast and predicted_return is its return vs. the last context price.
         # Why:  signal_step lets the caller decide whether the trade thesis is the
-        #       end-of-horizon level, the next step, or the average; emitters key off
-        #       predicted_return, so we derive it once here. Stamping at the last
-        #       observed row keeps it look-ahead-clean; the median_path lets reports
-        #       inspect the whole forecast, not just the scalar the emitter uses.
-        if self.signal_step == "first":
-            predicted_price = float(median[0])
-        elif self.signal_step == "mean":
-            predicted_price = float(median.mean())
-        else:
-            predicted_price = float(median[-1])
+        #       end-of-horizon level, the next step, or the average; reducing every
+        #       quantile the same way keeps the fan internally consistent at that step.
+        def _reduce(path: np.ndarray) -> float:
+            if self.signal_step == "first":
+                return float(path[0])
+            if self.signal_step == "mean":
+                return float(path.mean())
+            return float(path[-1])
+
+        median = fan[MEDIAN_IDX]
+        predicted_price = _reduce(median)
         predicted_return = (predicted_price - last_price) / last_price
+
+        # Tech: build the 9 quantile prices/returns at the signal step, the upward
+        #       probability from the CDF, and the 80% predictive band width (Q0.9-Q0.1)
+        #       expressed as a return.
+        # Why:  these are the distributional handles the emitter consumes — prob_up
+        #       drives directional conviction (strength/gate, #1/#2) and band_return_80
+        #       is a ready-made uncertainty proxy for vol-aware extensions. They are
+        #       sorted because the model guarantees monotone quantiles along axis 0.
+        q_prices = np.array([_reduce(fan[i]) for i in range(fan.shape[0])])
+        q_returns = (q_prices - last_price) / last_price
+        prob_up = self._prob_up(q_prices, last_price)
+        band_return_80 = float(q_returns[-1] - q_returns[0])
+
         return Forecast(
             timestamp=timestamp,
             horizon_bars=self.forecast_horizon_bars,
@@ -224,6 +256,12 @@ class Toto2Forecaster(Forecaster):
                 "predicted_return": predicted_return,
                 "last_price": last_price,
                 "median_path": [float(x) for x in median],
+                # Distributional fields (new) — see _prob_up / docstring above.
+                "quantile_levels": list(QUANTILE_LEVELS),
+                "quantile_prices": [float(x) for x in q_prices],
+                "quantile_returns": [float(x) for x in q_returns],
+                "prob_up": float(prob_up),
+                "band_return_80": band_return_80,
             },
         )
 
@@ -294,26 +332,28 @@ class Toto2Forecaster(Forecaster):
         #       VRAM-aware batch size saturates the GPU without OOM, and
         #       _forecast_chunk recovers from an over-estimate by splitting.
         bs = self._auto_batch_size(T) if batch_size == "auto" else int(batch_size)
-        medians: List[np.ndarray] = []
+        fans: List[np.ndarray] = []
         for i in range(0, len(windows), bs):
-            medians.append(self._forecast_chunk(windows[i: i + bs], T))
-        med = np.concatenate(medians, axis=0)  # (num, H)
+            fans.append(self._forecast_chunk(windows[i: i + bs], T))
+        fan = np.concatenate(fans, axis=0)  # (num, Q=9, H)
 
-        # Tech: turn each row's median path into a Forecast stamped at its boundary.
+        # Tech: turn each window's quantile fan into a Forecast stamped at its boundary.
         # Why:  same _make_forecast as the single path → byte-identical payload
-        #       semantics; last_price is the window's final close.
+        #       semantics (median + distributional fields); last_price is the window's
+        #       final close.
         return [
-            self._make_forecast(med[j], float(windows[j][-1]), timestamps[b])
+            self._make_forecast(fan[j], float(windows[j][-1]), timestamps[b])
             for j, b in enumerate(boundaries)
         ]
 
     def _forecast_chunk(self, windows_chunk: np.ndarray, T: int) -> np.ndarray:
-        # Tech: run one (chunk, 1, T) batch through the model and return the median
-        #       quantile path as a (chunk, H) numpy array; on CUDA OOM, recursively
+        # Tech: run one (chunk, 1, T) batch through the model and return the full
+        #       quantile fan as a (chunk, Q=9, H) numpy array; on CUDA OOM, recursively
         #       split the chunk in half and retry until it fits (or a single row
         #       still OOMs, which re-raises).
         # Why:  the auto batch size is an estimate; halving-on-OOM makes an optimistic
-        #       guess self-correcting instead of crashing the whole run.
+        #       guess self-correcting instead of crashing the whole run. Keeping all
+        #       nine quantiles (not just the median) feeds the distributional payload.
         torch = self._torch
         dev = next(self._model.parameters()).device
         try:
@@ -327,8 +367,8 @@ class Toto2Forecaster(Forecaster):
                     {"target": t, "target_mask": m, "series_ids": sid},
                     horizon=self.forecast_horizon_bars,
                 )
-            # qs: (Q=9, chunk, C=1, H) -> median over Q, single channel.
-            return qs[MEDIAN_IDX, :, 0, :].detach().cpu().numpy()
+            # qs: (Q=9, chunk, C=1, H) -> (chunk, Q=9, H), single channel dropped.
+            return qs[:, :, 0, :].permute(1, 0, 2).detach().cpu().numpy()
         except torch.cuda.OutOfMemoryError:
             if len(windows_chunk) == 1:
                 raise

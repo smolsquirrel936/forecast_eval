@@ -113,6 +113,20 @@ def main(argv=None) -> int:
     ap.add_argument("--buy-threshold", type=float, default=0.0005)
     ap.add_argument("--sell-threshold", type=float, default=-0.0005)
     ap.add_argument("--aggression-ticks", type=int, default=0)
+    # Confidence-aware order placement (ORDER_PLACEMENT_IDEAS #1/#2/#7). All default
+    # to OFF so a plain run reproduces the prior behavior exactly.
+    ap.add_argument("--min-prob", type=float, default=None,
+                    help="#2: gate trades on Toto2 directional probability in "
+                         "[0.5,1); HOLD when below. Off by default.")
+    ap.add_argument("--full-confidence-prob", type=float, default=0.9,
+                    help="Directional probability at which conviction strength "
+                         "saturates to 1.0 (drives #1/#7).")
+    ap.add_argument("--max-aggression-ticks", type=int, default=None,
+                    help="#1: aggressive end of a confidence-scaled limit offset "
+                         "(base = --aggression-ticks). Off (no scaling) by default.")
+    ap.add_argument("--max-position", type=int, default=1,
+                    help="#7: max contracts for a full-conviction entry; size scales "
+                         "with strength up to this. 1 disables sizing.")
     ap.add_argument("--fee-rate", type=float, default=0.00015)
     ap.add_argument("--forced-close", action="store_true",
                     help="Force close at every DAY<->NIGHT session boundary")
@@ -196,6 +210,8 @@ def main(argv=None) -> int:
     em = ThresholdEmitter(
         buy_threshold=args.buy_threshold,
         sell_threshold=args.sell_threshold,
+        min_prob=args.min_prob,
+        full_confidence_prob=args.full_confidence_prob,
     )
 
     # Tech: print the expected forecast count over the eval window.
@@ -214,6 +230,8 @@ def main(argv=None) -> int:
         emitter=em,
         tick_size=1.0,
         aggression_ticks=args.aggression_ticks,
+        max_aggression_ticks=args.max_aggression_ticks,
+        max_position=args.max_position,
         fee_rate=args.fee_rate,
         contract_multiplier=200.0,
         forced_close_on_session_end=args.forced_close,
