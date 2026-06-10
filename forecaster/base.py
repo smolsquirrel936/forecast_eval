@@ -36,16 +36,26 @@ class Forecaster(ABC):
         boundaries: Sequence[int],
         *,
         batch_size: Union[int, str] = "auto",
+        progress: bool = False,
     ) -> List[Forecast]:
         # Tech: generic fallback — for each boundary b, rebuild the history-through-b
         #       frame and call forecast(); returns one Forecast per boundary in order.
+        #       When progress is set, iterate the boundaries under a lazily-imported
+        #       tqdm bar.
         # Why:  lets run.precompute_forecasts work with ANY forecaster (e.g. tests'
         #       baselines), so the batched-precompute plumbing is model-agnostic. This
         #       fallback is O(n) per boundary (it has no fixed context window to slice
         #       to), so it offers no speedup; Toto2 overrides it with a real GPU-batched
-        #       implementation. `batch_size` is ignored here (nothing to batch).
+        #       implementation. `batch_size` is ignored here (nothing to batch). The
+        #       `progress` flag matches Toto2's signature so the caller can forward it
+        #       uniformly, and the bar gives feedback during this slow sequential path.
+        it: Sequence[int] = boundaries
+        if progress:
+            from tqdm.auto import tqdm
+            it = tqdm(boundaries, total=len(boundaries),
+                      desc="precompute", unit="fcst")
         out: List[Forecast] = []
-        for b in boundaries:
+        for b in it:
             hist = pd.DataFrame({
                 "timestamp": list(timestamps[: b + 1]),
                 "price": list(prices[: b + 1]),

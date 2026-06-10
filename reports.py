@@ -14,9 +14,10 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -80,7 +81,38 @@ def _equity_series(trades: pd.DataFrame) -> pd.DataFrame:
     ]
 
 
-def plot_equity_drawdown_mpl(trades: pd.DataFrame, out_path: Path) -> None:
+def _buy_and_hold_curve(
+    eq: pd.DataFrame,
+    ticks: Optional[pd.DataFrame],
+    fee_rate: float,
+) -> pd.DataFrame:
+    # Tech: build a net mark-to-market buy-and-hold curve over the equity curve's
+    #       own [start, end] span — entry at the first price in that window, then
+    #       cum = (price − entry) − (entry + price)·fee_rate at each later tick.
+    # Why:  gives an apples-to-apples reference on the same x-axis as the strategy's
+    #       net equity (same points units, same per-side fee as buy_and_hold_pnl, so
+    #       the line's endpoint equals that floor over the *trading* window). Returns
+    #       empty whenever there's no price series or no trades, so the overlay just
+    #       vanishes rather than erroring.
+    if ticks is None or ticks.empty or eq.empty:
+        return pd.DataFrame(columns=["timestamp", "cum_bh_pnl_points"])
+    lo, hi = eq["timestamp"].min(), eq["timestamp"].max()
+    sl = ticks[(ticks["timestamp"] >= lo) & (ticks["timestamp"] <= hi)].sort_values("timestamp")
+    if sl.empty:
+        return pd.DataFrame(columns=["timestamp", "cum_bh_pnl_points"])
+    entry = float(sl["price"].iloc[0])
+    price = sl["price"].astype(float)
+    cum = (price - entry) - (entry + price) * fee_rate
+    return pd.DataFrame({"timestamp": sl["timestamp"].values, "cum_bh_pnl_points": cum.values})
+
+
+def plot_equity_drawdown_mpl(
+    trades: pd.DataFrame,
+    out_path: Path,
+    *,
+    ticks: Optional[pd.DataFrame] = None,
+    fee_rate: float = 0.00015,
+) -> None:
     # Tech: a 2-row figure (equity on top 3/4, drawdown below); when there are no
     #       trades, print a centered "no trades" placeholder instead of curves.
     # Why:  the shared-x stacked layout lets you read drawdown directly under the
@@ -100,13 +132,23 @@ def plot_equity_drawdown_mpl(trades: pd.DataFrame, out_path: Path) -> None:
         # Why:  shading drawdown on both panels makes losing stretches visually
         #       obvious; step="post" matches the discrete per-trade cadence (equity
         #       only changes at a close, not continuously).
-        ax1.plot(eq["timestamp"], eq["equity"], color="#1f77b4", lw=1.5)
+        ax1.plot(eq["timestamp"], eq["equity"], color="#1f77b4", lw=1.5,
+                 label="strategy")
         ax1.axhline(0, color="grey", lw=0.5, ls="--")
         ax1.fill_between(eq["timestamp"], 0, eq["drawdown"],
                          color="#d62728", alpha=0.3, step="post")
         ax2.fill_between(eq["timestamp"], 0, eq["drawdown"],
                          color="#d62728", alpha=0.6, step="post")
         ax2.axhline(0, color="grey", lw=0.5)
+        # Tech: overlay the net buy-and-hold mark-to-market curve over the same span,
+        #       when a price series is available, and show a legend to tell them apart.
+        # Why:  a passive-hold reference makes the strategy's edge (or lack of it) read
+        #       at a glance; it's omitted silently when there's no price file.
+        bh = _buy_and_hold_curve(eq, ticks, fee_rate)
+        if not bh.empty:
+            ax1.plot(bh["timestamp"], bh["cum_bh_pnl_points"],
+                     color="#7f7f7f", lw=1.2, ls="--", label="buy & hold")
+            ax1.legend(loc="best")
     # Tech: label axes/titles and apply a concise auto date formatter to the x-axis.
     # Why:  ConciseDateFormatter keeps tick labels readable across any run length
     #       (seconds to months) without manual locator tuning; tight_layout + a fixed
@@ -122,7 +164,12 @@ def plot_equity_drawdown_mpl(trades: pd.DataFrame, out_path: Path) -> None:
     plt.close(fig)
 
 
-def plot_equity_drawdown_plotly(trades: pd.DataFrame) -> "go.Figure":
+def plot_equity_drawdown_plotly(
+    trades: pd.DataFrame,
+    *,
+    ticks: Optional[pd.DataFrame] = None,
+    fee_rate: float = 0.00015,
+) -> "go.Figure":
     # Tech: the interactive twin of the equity/drawdown chart — same two stacked
     #       panels as scatter traces sharing the x-axis.
     # Why:  plotly gives hover/zoom that static PNGs can't; reusing _equity_series
@@ -133,25 +180,57 @@ def plot_equity_drawdown_plotly(trades: pd.DataFrame) -> "go.Figure":
         row_heights=[0.72, 0.28], vertical_spacing=0.04,
         subplot_titles=("Cumulative net PnL", "Drawdown"),
     )
+    bh = _buy_and_hold_curve(eq, ticks, fee_rate)
     if not eq.empty:
         # Tech: add the equity line to row 1 and the fill-to-zero drawdown to row 2.
         # Why:  guarding on non-empty avoids adding empty traces; fill="tozeroy"
         #       renders the underwater area the same way the PNG shades it.
         fig.add_trace(go.Scatter(
             x=eq["timestamp"], y=eq["equity"], mode="lines",
-            name="equity", line=dict(color="#1f77b4", width=2),
+            name="strategy", line=dict(color="#1f77b4", width=2),
         ), row=1, col=1)
+        # Tech: overlay the net buy-and-hold curve on row 1 when a price series exists.
+        # Why:  same passive-hold reference as the PNG, here with hover for exact values.
+        if not bh.empty:
+            fig.add_trace(go.Scatter(
+                x=bh["timestamp"], y=bh["cum_bh_pnl_points"], mode="lines",
+                name="buy & hold", line=dict(color="#7f7f7f", width=1.5, dash="dash"),
+            ), row=1, col=1)
         fig.add_trace(go.Scatter(
             x=eq["timestamp"], y=eq["drawdown"], mode="lines",
-            name="drawdown", fill="tozeroy",
+            name="drawdown", fill="tozeroy", showlegend=False,
             line=dict(color="#d62728", width=1),
         ), row=2, col=1)
-    # Tech: set axis titles and a compact layout with the legend hidden.
-    # Why:  two clearly-titled panels don't need a legend; fixed height/margins keep
+    # Tech: set axis titles and a compact layout; show the legend only when the
+    #       buy-and-hold line is present (to distinguish the two row-1 curves).
+    # Why:  with a single equity line a legend is noise, but once buy & hold is
+    #       overlaid the reader needs to tell the two apart; fixed height/margins keep
     #       the figure consistent when embedded alongside the other two in the HTML.
     fig.update_yaxes(title_text="points", row=1, col=1)
     fig.update_yaxes(title_text="points", row=2, col=1)
-    fig.update_layout(height=520, showlegend=False, margin=dict(t=40, l=60, r=20, b=40))
+    fig.update_layout(height=520, showlegend=not bh.empty,
+                      margin=dict(t=40, l=60, r=20, b=40))
+
+    # Tech: when buy & hold is present, add a button group that toggles its trace —
+    #       one view shows both curves, the other only the strategy. Trace order is
+    #       [strategy, buy & hold, drawdown], and drawdown stays visible in both.
+    # Why:  lets the reader switch between the standalone strategy curve and the
+    #       comparison-against-hold view in the interactive report, instead of having
+    #       both permanently overlaid; only added when there's a hold line to toggle.
+    if not bh.empty:
+        fig.update_layout(
+            updatemenus=[dict(
+                type="buttons", direction="right",
+                x=0, xanchor="left", y=1.12, yanchor="top",
+                showactive=True, active=0,
+                buttons=[
+                    dict(label="Strategy + Buy & Hold", method="update",
+                         args=[{"visible": [True, True, True]}  ]),
+                    dict(label="Strategy only", method="update",
+                         args=[{"visible": [True, False, True]}]),
+                ],
+            )],
+        )
     return fig
 
 
@@ -365,11 +444,91 @@ def _load_ticks(data_path: Optional[Path]) -> Optional[pd.DataFrame]:
     return df[["timestamp", "price"]]
 
 
+# ---------------------------------------------------------------------------
+# Settings + result-summary HTML sections (rendered above the charts).
+# ---------------------------------------------------------------------------
+
+def _fmt_value(v) -> str:
+    # Tech: format floats with a sign and 6 decimals, everything else via str().
+    # Why:  mirrors the exact terminal convention (real_data.py) so the report's
+    #       tables read identically to what was printed to the console.
+    return f"{v:+.6f}" if isinstance(v, float) else str(v)
+
+
+def _kv_table_html(mapping: Mapping) -> str:
+    # Tech: render any mapping as a two-column key/value HTML table.
+    # Why:  the Settings block and every metric block share the same shape (a flat
+    #       dict of scalars), so one renderer keeps them visually consistent.
+    rows = "".join(
+        f"<tr><td class='k'>{k}</td><td class='v'>{_fmt_value(v)}</td></tr>"
+        for k, v in mapping.items()
+    )
+    return f"<table class='kv'>{rows}</table>"
+
+
+def _summary_sections_html(
+    settings: Optional[Mapping],
+    metrics: Optional[Mapping],
+    buy_and_hold: Optional[Mapping],
+) -> str:
+    # Tech: build the Settings + Result-summary HTML, one labelled table per block,
+    #       omitting any section whose source is missing.
+    # Why:  this is the headline the user wants at the top of the report — the run's
+    #       parameters and the same metric blocks printed to the terminal; rendering
+    #       it here (not in the callers) keeps the HTML report self-contained.
+    parts: list[str] = []
+
+    if settings:
+        parts.append("<h2>Settings</h2>")
+        parts.append(_kv_table_html(settings))
+
+    if metrics or buy_and_hold:
+        parts.append("<h2>Result summary</h2>")
+        if metrics:
+            # Tech: emit each trading block (single 'trading', or day/night under
+            #       forced close), then forecast quality and attribution; skip the
+            #       'trades' record list which has no scalar table form.
+            # Why:  matches exactly the blocks the terminal prints (SPEC §7) and the
+            #       skip mirrors the console printers, which never tabulate trades.
+            for key in [k for k in metrics if k.startswith("trading")]:
+                parts.append(f"<h3>Trading metrics [{key}]</h3>")
+                parts.append(_kv_table_html(metrics[key]))
+            if "forecast" in metrics:
+                parts.append("<h3>Forecast quality</h3>")
+                parts.append(_kv_table_html(metrics["forecast"]))
+            if "attribution" in metrics:
+                parts.append("<h3>Attribution (signal vs. realized)</h3>")
+                parts.append(_kv_table_html(metrics["attribution"]))
+        if buy_and_hold:
+            parts.append("<h3>Buy-and-hold floor (full data, same fee)</h3>")
+            parts.append(_kv_table_html(buy_and_hold))
+
+    return "".join(parts)
+
+
+def _load_params(run_dir: Path) -> Optional[dict]:
+    # Tech: read params.json from the run dir, returning None if absent/unreadable.
+    # Why:  lets the standalone CLI re-render still show the Settings table from the
+    #       on-disk record when no settings are passed in-process; a bad/missing file
+    #       must never break the report, so failures degrade to None.
+    p = run_dir / "params.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def generate_report(
     run_dir: Path,
     *,
     data_path: Optional[Path] = None,
+    ticks: Optional[pd.DataFrame] = None,
     n_ticks_for_chart: int = 50_000,
+    settings: Optional[Mapping] = None,
+    metrics: Optional[Mapping] = None,
+    buy_and_hold: Optional[Mapping] = None,
 ) -> dict:
     """Render PNGs + a combined HTML report from a run directory.
 
@@ -384,6 +543,13 @@ def generate_report(
     if not run_dir.exists():
         raise FileNotFoundError(run_dir)
 
+    # Tech: fall back to the on-disk params.json for the Settings block when no
+    #       settings were passed in-process.
+    # Why:  the standalone CLI re-render has no live params, but params.json was
+    #       written next to the artifacts — reading it keeps Settings populated there.
+    if settings is None:
+        settings = _load_params(run_dir)
+
     fills = _read_artifact(run_dir, "fills")
     trades = _read_artifact(run_dir, "trades")
     signals = _read_artifact(run_dir, "signals")
@@ -395,12 +561,16 @@ def generate_report(
             "Run a backtest with logging_io.write_all first."
         )
 
-    # Tech: load the optional price background and, if it's large, clip it to the
-    #       fills' time span (plus 2% padding).
-    # Why:  a full 2.7M-row tick file would make the chart huge and slow; windowing
-    #       to where trades actually happened keeps the price overlay relevant and the
-    #       PNG/ HTML light, while the pad gives a little context on each side.
-    ticks = _load_ticks(data_path)
+    # Tech: prefer an in-memory price series passed by the caller; only re-read the
+    #       raw CSV (via _load_ticks) when none was given. Then, if it's large, clip
+    #       it to the fills' time span (plus 2% padding).
+    # Why:  the caller's loader already handles the dataset's real schema (datetime
+    #       rename, per-minute contract dedup), which the simple CSV reader can't —
+    #       so threading the df is what makes the price overlay and buy-and-hold line
+    #       actually appear for the RPT data. Windowing keeps a multi-million-row
+    #       series light, with a pad for a little context on each side.
+    if ticks is None:
+        ticks = _load_ticks(data_path)
     if ticks is not None and len(ticks) > n_ticks_for_chart and not fills.empty:
         lo, hi = fills["timestamp"].min(), fills["timestamp"].max()
         pad = (hi - lo) * 0.02 if hi > lo else pd.Timedelta(minutes=5)
@@ -413,9 +583,18 @@ def generate_report(
     out_dir = run_dir / "report"
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Tech: pull the per-side fee from settings (params.json) for the buy-and-hold
+    #       overlay, defaulting to the framework default when absent/unparseable.
+    # Why:  the reference line must be charged the same fee as the strategy to be a
+    #       fair comparison; reading it from the run's own params keeps it in sync.
+    try:
+        fee_rate = float(settings["fee_rate"]) if settings and "fee_rate" in settings else 0.00015
+    except (TypeError, ValueError):
+        fee_rate = 0.00015
+
     paths = {}
     paths["equity_png"] = out_dir / "equity_drawdown.png"
-    plot_equity_drawdown_mpl(trades, paths["equity_png"])
+    plot_equity_drawdown_mpl(trades, paths["equity_png"], ticks=ticks, fee_rate=fee_rate)
 
     paths["price_png"] = out_dir / "price_fills.png"
     plot_price_fills_mpl(fills, ticks, paths["price_png"])
@@ -431,7 +610,7 @@ def generate_report(
         #       once (then False) so the file isn't bloated with three copies of it.
         html_path = run_dir / "report.html"
         figs = [
-            plot_equity_drawdown_plotly(trades),
+            plot_equity_drawdown_plotly(trades, ticks=ticks, fee_rate=fee_rate),
             plot_price_fills_plotly(fills, ticks),
             plot_signal_vs_realized_plotly(signals, trades),
         ]
@@ -439,8 +618,18 @@ def generate_report(
             "<html><head><meta charset='utf-8'><title>forecast_eval report</title>",
             "<style>body{font-family:sans-serif;max-width:1200px;margin:20px auto;}"
             "h1{border-bottom:1px solid #ccc;padding-bottom:6px;}"
+            "h2{margin-top:28px;border-bottom:1px solid #eee;padding-bottom:4px;}"
+            "h3{margin-top:18px;color:#444;}"
+            "table.kv{border-collapse:collapse;margin:6px 0 18px;}"
+            "table.kv td{border:1px solid #ddd;padding:3px 10px;}"
+            "table.kv td.k{color:#555;}"
+            "table.kv td.v{font-family:monospace;text-align:right;}"
             ".fig{margin-bottom:30px;}</style></head><body>",
             f"<h1>forecast_eval report — {run_dir.name}</h1>",
+            # Tech: render the Settings + Result-summary tables at the very top.
+            # Why:  the user wants the run's parameters and headline metrics to open
+            #       the report, above the charts (returns "" when nothing was passed).
+            _summary_sections_html(settings, metrics, buy_and_hold),
         ]
         for i, fig in enumerate(figs):
             html_parts.append(

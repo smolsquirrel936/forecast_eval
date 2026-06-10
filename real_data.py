@@ -235,19 +235,26 @@ def main(argv=None) -> int:
           f"({res.n_forecasts} forecasts, {res.n_orders} orders, "
           f"{len(res.fills)} fills)")
 
+    # Tech: compute the metric pack and the buy-and-hold floor up front, before the
+    #       artifact/report write.
+    # Why:  write_all auto-generates the report, and the report now opens with these
+    #       numbers (Settings + Result summary) — so they must exist before it runs.
+    #       The same dicts are reused for the terminal blocks below (no recompute).
+    metrics = compute_metrics(res, ticks, forced_close=args.forced_close)
+    bh = buy_and_hold_pnl(ticks, fee_rate=args.fee_rate)
+
     # Tech: persist the artifact bundle (+ charts) and echo paths.
     # Why:  identical to the demo — full reproducibility via params.json and a price
-    #       overlay from the source data.
+    #       overlay from the source data; metrics/buy_and_hold feed the report tables.
     paths = write_all(res, args.output_dir, params=vars(args),
-                      report_data_path=args.data)
+                      report_data_path=args.data, report_ticks=ticks,
+                      metrics=metrics, buy_and_hold=bh)
     print(f"\nlogs written under {args.output_dir}/")
     for name, p in paths.items():
         print(f"  {name:10s} -> {p}")
 
-    # Tech: compute and print the three metric blocks (trading/forecast/attribution).
+    # Tech: print the three metric blocks (trading/forecast/attribution).
     # Why:  same SPEC §7 deliverable and formatting convention as the demo.
-    metrics = compute_metrics(res, ticks, forced_close=args.forced_close)
-
     print("\n=== Trading metrics ===")
     trading_keys = [k for k in metrics if k.startswith("trading")]
     for key in trading_keys:
@@ -263,14 +270,14 @@ def main(argv=None) -> int:
     for k, v in metrics["attribution"].items():
         print(f"  {k:38s} {v if not isinstance(v, float) else f'{v:+.6f}'}")
 
-    # Tech: compute buy-and-hold over the *full* loaded series (warmup + eval).
+    # Tech: print the buy-and-hold floor (computed above over the *full* loaded
+    #       series, warmup + eval).
     # Why:  this is the whole-dataset floor — what a passive holder would have earned
     #       over the entire window at the same fee. Note the strategy only trades the
     #       trailing eval region, so the warmup bars here are price drift the strategy
     #       never participated in; the delta below is therefore not a like-for-like
     #       window comparison (it spans more than the strategy traded).
     print("\n=== Buy-and-hold floor (full data, same fee) ===")
-    bh = buy_and_hold_pnl(ticks, fee_rate=args.fee_rate)
     for k, v in bh.items():
         print(f"  {k:38s} {v if not isinstance(v, float) else f'{v:+.6f}'}")
 

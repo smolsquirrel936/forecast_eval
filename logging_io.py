@@ -138,6 +138,9 @@ def write_all(
     params: Optional[Mapping[str, Any]] = None,
     auto_report: bool = True,
     report_data_path: Optional[PathLike] = None,
+    report_ticks: Optional[Any] = None,
+    metrics: Optional[Mapping[str, Any]] = None,
+    buy_and_hold: Optional[Mapping[str, Any]] = None,
 ) -> dict:
     """Convenience: dump every artifact under ``output_dir/<name>{ext}``.
 
@@ -147,7 +150,12 @@ def write_all(
     When ``auto_report`` is True (default), runs ``reports.generate_report``
     on the just-written bundle (SPEC §4.9). Set False to skip — useful in
     sweeps where only aggregate numbers matter. ``report_data_path`` is an
-    optional ticks CSV used as the price-chart background.
+    optional ticks CSV used as the price-chart background; ``report_ticks`` is the
+    already-loaded price DataFrame (timestamp + price) and, when given, is used
+    directly instead of re-reading the CSV (it handles the dataset's real schema,
+    so the price overlay and buy-and-hold line render correctly). ``metrics`` (the
+    ``compute_metrics`` pack) and ``buy_and_hold`` are forwarded to the report so
+    it can open with Settings + Result-summary tables; both are optional.
 
     Returns a dict mapping artifact name → written path (may be the CSV
     fallback if parquet libs are missing).
@@ -185,6 +193,8 @@ def write_all(
         try:
             report_paths = generate_report(
                 d, data_path=Path(report_data_path) if report_data_path else None,
+                ticks=report_ticks,
+                settings=params, metrics=metrics, buy_and_hold=buy_and_hold,
             )
             written.update({f"report_{k}": v for k, v in report_paths.items()})
         except Exception as exc:
