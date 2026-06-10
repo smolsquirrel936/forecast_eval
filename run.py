@@ -79,6 +79,7 @@ def precompute_forecasts(
     ticks: pd.DataFrame,
     *,
     batch_size: Any = "auto",
+    progress: bool = False,
 ) -> Dict[int, Forecast]:
     """Batch-compute every forecast the run loop will request, keyed by bar_idx.
 
@@ -105,7 +106,7 @@ def precompute_forecasts(
     timestamps = [r.timestamp for r in rows]
     prices = np.asarray([r.price for r in rows], dtype=float)
     fc_list = forecaster.forecast_series_batch(
-        timestamps, prices, boundaries, batch_size=batch_size,
+        timestamps, prices, boundaries, batch_size=batch_size, progress=progress,
     )
     return dict(zip(boundaries, fc_list))
 
@@ -173,7 +174,7 @@ def run_backtest(
     #       An explicit forecasts_cache (e.g. loaded from disk) wins over precompute.
     if use_forecaster and forecasts_cache is None and precompute:
         forecasts_cache = precompute_forecasts(
-            forecaster, ticks, batch_size=batch_size
+            forecaster, ticks, batch_size=batch_size, progress=progress
         )
 
     # Tech: rolling history buffers (parallel lists of ts/price/volume).
@@ -611,19 +612,25 @@ def demo_with_logs_and_metrics(output_dir: "str | Path | None" = None) -> Backte
         warmup_bars=params["warmup_bars"],
         exit_rule=FixedStopLoss(stop_loss_ticks=5, tick_size=1.0),
     )
+    # Tech: compute the metric pack before writing so the auto-generated report can
+    #       open with the Result-summary tables; the same dict is printed below.
+    # Why:  write_all triggers generate_report, which now renders these metrics, so
+    #       they must exist beforehand — computed once and reused (no recompute).
+    metrics = compute_metrics(res, ticks, forced_close=False)
+
     # Tech: dump the full artifact bundle (auto-generates charts) and print paths.
     # Why:  write_all is the single sink for fills/orders/forecasts/signals/trades
     #       plus params.json and the report, so Phase 4 is one call.
-    paths = write_all(res, output_dir, params=params)
+    paths = write_all(res, output_dir, params=params, metrics=metrics,
+                      report_ticks=ticks)
     print(f"Phase 4 — logs written to {output_dir}/")
     for name, p in paths.items():
         print(f"  {name:10s} -> {p}")
 
-    # Tech: compute the metric pack and pretty-print each section, special-casing
-    #       the trades block to show only a count.
+    # Tech: pretty-print each metric section, special-casing the trades block to
+    #       show only a count.
     # Why:  the demo's purpose is to eyeball the numbers; the trades list is long
     #       and uninteresting in console output, so it's collapsed to its size.
-    metrics = compute_metrics(res, ticks, forced_close=False)
     print("\nPhase 4 — metric pack (forced_close=False)")
     for section, body in metrics.items():
         if section == "trades":

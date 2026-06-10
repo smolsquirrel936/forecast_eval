@@ -201,6 +201,12 @@ def _run_backtest_for_checkpoint(
         f"({res.n_forecasts} forecasts, {res.n_orders} orders, {len(res.fills)} fills)"
     )
 
+    # Tech: compute the metric pack before writing, so the auto-generated report can
+    #       open with the Result-summary tables; the same dict feeds the bt_* flatten.
+    # Why:  write_all triggers generate_report, which now renders these metrics — they
+    #       must exist beforehand. Computing once here avoids any recompute.
+    metrics = compute_metrics(res, bars, forced_close=args.forced_close)
+
     # Tech: write the standard artifact bundle for this checkpoint (+ auto charts).
     # Why:  every checkpoint gets the same parquet bundle so results are diffable;
     #       passing the data path lets the per-checkpoint price chart show the real series.
@@ -209,17 +215,18 @@ def _run_backtest_for_checkpoint(
         ckpt_dir,
         params={**vars(args), "checkpoint": checkpoint},
         report_data_path=args.data,
+        report_ticks=bars,
+        metrics=metrics,
     )
     for name, p in paths.items():
         print(f"    {name:10s} -> {p}")
 
-    # Tech: compute metrics, then flatten the trading block(s) into bt_* fields —
-    #       a single 'trading' block normally, or DAY+NIGHT combined under forced close.
+    # Tech: flatten the trading block(s) into bt_* fields — a single 'trading' block
+    #       normally, or DAY+NIGHT combined under forced close.
     # Why:  summary.csv is one row per checkpoint, so the (possibly two) session
     #       blocks must collapse to scalar columns; net PnL sums and drawdown takes the
     #       worse of the two, while Sharpe is left NaN because it isn't additively
     #       combinable across sessions.
-    metrics = compute_metrics(res, bars, forced_close=args.forced_close)
     # When forced_close=True there are trading_day / trading_night blocks; otherwise
     # a single 'trading' block. Aggregate into one flat dict for the summary row.
     trading_blocks = {k: v for k, v in metrics.items() if k.startswith("trading")}

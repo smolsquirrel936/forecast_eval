@@ -272,6 +272,7 @@ class Toto2Forecaster(Forecaster):
         boundaries: Sequence[int],
         *,
         batch_size: Union[int, str] = "auto",
+        progress: bool = False,
     ) -> List[Forecast]:
         """Batch-forecast many boundaries at once (SPEC §6 speedup path).
 
@@ -333,8 +334,29 @@ class Toto2Forecaster(Forecaster):
         #       _forecast_chunk recovers from an over-estimate by splitting.
         bs = self._auto_batch_size(T) if batch_size == "auto" else int(batch_size)
         fans: List[np.ndarray] = []
+        # Tech: when progress is requested, print a one-line phase header and wrap the
+        #       chunk loop in a tqdm bar whose total is the forecast count, advancing by
+        #       each chunk's actual width; tqdm is imported lazily and the bar is left
+        #       None (a no-op pass-through) otherwise.
+        # Why:  with --precompute the whole GPU batch runs *before* the replay loop's
+        #       own bar, so without this the run looks frozen for minutes on a large
+        #       dataset; counting by window width keeps the bar honest even when
+        #       _forecast_chunk splits a chunk on OOM (the split is internal).
+        n_batches = (len(windows) + bs - 1) // bs
+        if progress:
+            from tqdm.auto import tqdm
+            print(f"precomputing {len(windows)} forecasts in {n_batches} batches "
+                  f"(batch_size={bs})")
+            bar = tqdm(total=len(windows), desc="precompute", unit="fcst")
+        else:
+            bar = None
         for i in range(0, len(windows), bs):
-            fans.append(self._forecast_chunk(windows[i: i + bs], T))
+            chunk = windows[i: i + bs]
+            fans.append(self._forecast_chunk(chunk, T))
+            if bar is not None:
+                bar.update(len(chunk))
+        if bar is not None:
+            bar.close()
         fan = np.concatenate(fans, axis=0)  # (num, Q=9, H)
 
         # Tech: turn each window's quantile fan into a Forecast stamped at its boundary.
