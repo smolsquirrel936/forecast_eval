@@ -21,6 +21,7 @@ class Trader:
         tick_size: float = 1.0,
         aggression_ticks: int = 3,
         max_position: int = 1,
+        max_aggression_ticks: Optional[int] = None,
     ):
         # Tech: hold the execution handle and order-placement parameters, and
         #       initialize position/entry tracking to flat.
@@ -28,19 +29,54 @@ class Trader:
         #       *fills*; aggression_ticks×tick_size is the price offset applied to
         #       every limit (§4.3). entry_* are mirrored here (separate from the
         #       Portfolio's) because ExitRules query the live position via this object.
+        # Tech: max_aggression_ticks (optional) is the aggressive end of a
+        #       confidence-scaled offset ramp whose base is aggression_ticks; None
+        #       disables scaling. max_position caps confidence-scaled entry size.
+        # Why:  with max_aggression_ticks=None and max_position=1 (the defaults) the
+        #       offset is always aggression_ticks and size is always 1 — every existing
+        #       run/test is byte-identical. Set them to opt into #1 (aggression) and
+        #       #7 (sizing) where a high-conviction forecast crosses more ticks and
+        #       trades more contracts.
         self.execution = execution
         self.tick_size = tick_size
         self.aggression_ticks = aggression_ticks
         self.max_position = max_position
+        self.max_aggression_ticks = max_aggression_ticks
         self.position = 0  # signed contracts; +long / -short
         self.entry_price: float = 0.0
         self.entry_bar_idx: int = -1
         self.entry_timestamp: Optional[datetime] = None
 
+    # ---- confidence-scaled placement helpers -----------------------------
+
+    def _entry_offset(self, strength: float) -> float:
+        # Tech: linearly interpolate the limit offset between aggression_ticks (base)
+        #       and max_aggression_ticks by strength∈[0,1], rounded to whole ticks;
+        #       when max_aggression_ticks is None, return the base offset unchanged.
+        # Why:  #1 — a strong signal crosses more ticks to all but guarantee a fill,
+        #       a weak one rests closer to the touch to save cost. Rounding keeps
+        #       limits on the tick grid. The None short-circuit preserves v1 behavior.
+        if self.max_aggression_ticks is None:
+            ticks = self.aggression_ticks
+        else:
+            span = self.max_aggression_ticks - self.aggression_ticks
+            ticks = self.aggression_ticks + int(round(strength * span))
+        return ticks * self.tick_size
+
+    def _entry_qty(self, strength: float) -> int:
+        # Tech: scale entry size by strength up to max_position, with a floor of 1
+        #       contract for any acted-on signal.
+        # Why:  #7 — size with conviction. The floor means a threshold-passing but
+        #       low-conviction signal still trades the minimum lot rather than 0;
+        #       max_position=1 collapses this to a constant 1 (v1 behavior).
+        if self.max_position <= 1:
+            return 1
+        return max(1, min(self.max_position, int(round(strength * self.max_position))))
+
     # ---- signal-driven entries / closes ----------------------------------
 
     def on_signal(
-        self, direction: Direction, market: MarketEvent
+        self, direction: Direction, market: MarketEvent, *, strength: float = 1.0
     ) -> Optional[OrderEvent]:
         # Tech: unconditionally cancel any resting order before acting.
         # Why:  §4.4 — a pending limit lives only until the next signal; cancelling
@@ -54,12 +90,14 @@ class Trader:
         if direction == "HOLD":
             return None
 
-        # Tech: compute the limit-price offset from current price.
-        # Why:  positive aggression makes the limit marketable (crosses the spread),
-        #       which is the configured default; capturing `cur` once keeps the
-        #       branch logic below symmetric.
+        # Tech: capture the reference price; entries use a confidence-scaled offset
+        #       and size, closes use the base offset and flatten the whole position.
+        # Why:  #1/#7 — conviction (strength) only shapes *entries*; a close is risk-
+        #       reducing and should fill reliably at base aggression, and must clear
+        #       the full position (abs(position)) so the no-flip machine returns to
+        #       flat. base_offset preserves v1 close behavior exactly.
         cur = market.price
-        offset = self.aggression_ticks * self.tick_size
+        base_offset = self.aggression_ticks * self.tick_size
 
         # Tech: the §4.2 state machine — from flat, open in the signal's direction;
         #       while long, only a SELL acts (closes, never flips); while short,
@@ -70,16 +108,28 @@ class Trader:
         #       no-op and an opposing signal closes only.
         order: Optional[OrderEvent] = None
         if self.position == 0:
+            offset = self._entry_offset(strength)
+            qty = self._entry_qty(strength)
             if direction == "BUY":
-                order = OrderEvent(market.timestamp, "BUY", cur + offset, "OPEN")
+                order = OrderEvent(
+                    market.timestamp, "BUY", cur + offset, "OPEN", quantity=qty
+                )
             else:
-                order = OrderEvent(market.timestamp, "SELL", cur - offset, "OPEN")
+                order = OrderEvent(
+                    market.timestamp, "SELL", cur - offset, "OPEN", quantity=qty
+                )
         elif self.position > 0:
             if direction == "SELL":
-                order = OrderEvent(market.timestamp, "SELL", cur - offset, "CLOSE")
+                order = OrderEvent(
+                    market.timestamp, "SELL", cur - base_offset, "CLOSE",
+                    quantity=abs(self.position),
+                )
         else:
             if direction == "BUY":
-                order = OrderEvent(market.timestamp, "BUY", cur + offset, "CLOSE")
+                order = OrderEvent(
+                    market.timestamp, "BUY", cur + base_offset, "CLOSE",
+                    quantity=abs(self.position),
+                )
 
         # Tech: hand any order we built to Execution, passing the price at placement.
         # Why:  Execution needs current_price to classify marketable vs passive
@@ -109,10 +159,15 @@ class Trader:
         self.execution.cancel()
         cur = market.price
         offset = self.aggression_ticks * self.tick_size
+        qty = abs(self.position)
         if self.position > 0:
-            order = OrderEvent(market.timestamp, "SELL", cur - offset, "CLOSE")
+            order = OrderEvent(
+                market.timestamp, "SELL", cur - offset, "CLOSE", quantity=qty
+            )
         else:
-            order = OrderEvent(market.timestamp, "BUY", cur + offset, "CLOSE")
+            order = OrderEvent(
+                market.timestamp, "BUY", cur + offset, "CLOSE", quantity=qty
+            )
         self.execution.submit(order, current_price=cur)
         return order
 

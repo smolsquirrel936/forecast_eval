@@ -101,5 +101,35 @@ and `trader.py`.
 
 **#14** is a cheap, important realism fix worth doing regardless.
 
-Before implementing any of these, check what Toto2's `forecast()` currently puts
-in `payload` — several of these depend on it.
+---
+
+## Status — #1, #2, #7 implemented
+
+Done in one pass; all default to OFF so existing runs/tests are byte-identical.
+
+- **#2** — `Toto2Forecaster` now surfaces the full quantile fan in `payload`:
+  `prob_up` (directional probability from the predictive CDF, interpolated over
+  the verified decile levels `[0.1..0.9]`), `quantile_prices`, `quantile_returns`,
+  and `band_return_80`. See [forecaster/toto2.py](forecaster/toto2.py)
+  (`_make_forecast`, `_prob_up`, `QUANTILE_LEVELS`).
+- **#1/#2 (emitter)** — `ThresholdEmitter` gained `min_prob` (optional probability
+  gate → HOLD when conviction is too low) and a conviction `strength` in [0,1]
+  carried via a new `Signal` (direction + strength). `full_confidence_prob` sets
+  where strength saturates. [strategy/threshold.py](strategy/threshold.py),
+  [strategy/base.py](strategy/base.py) (`emit_signal`), [events.py](events.py)
+  (`Signal`).
+- **#1 (trader)** — `Trader.max_aggression_ticks`: entry limit offset ramps from
+  `aggression_ticks` (base) to `max_aggression_ticks` by strength. Closes stay at
+  base aggression. [trader.py](trader.py) (`_entry_offset`).
+- **#7 (sizing)** — entry size scales with strength up to `max_position` (floor 1);
+  `OrderEvent.quantity` added, `Execution` fills the full quantity and scales fee
+  per contract. [trader.py](trader.py) (`_entry_qty`), [execution.py](execution.py).
+
+CLI knobs in [real_data.py](real_data.py): `--min-prob`, `--full-confidence-prob`,
+`--max-aggression-ticks`, `--max-position`. Tests:
+[tests/test_confidence_placement.py](tests/test_confidence_placement.py).
+
+### Remaining ideas
+
+#3–#6, #8–#15 above are still open. #3 (quantile-anchored limit prices) and #4
+(volatility-scaled offset) now have the payload data they need.
