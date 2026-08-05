@@ -1,0 +1,31 @@
+txt
+
+What's the menaing of each of these settings?
+
+Here's the meaning of each setting in the report's first section, grouped by what it controls.
+Data & windowing
+- data — path to the 1-min OHLC csv (RPT or tick schema). load_minute_bars keeps the front-month contract per minute (highest volume) and drops NaN closes (~17% session gaps).
+- n_bars — trailing rows to use. None = full dataset; a number takes the last N rows.
+- lookback_frac (0.30) — fraction of bars used as silent warmup. The first 30% of data builds Toto2's context (no trading); trading happens over the remaining 70%. Must be > 0 and < 1, and warmup must be ≥ context_length or the model can never fire.
+- output_dir — where the artifact bundle (fills/orders/forecasts/signals/trades parquet + params.json + report.html) is written. Defaults to <myPaper>/outputs/real_data_<timestamp>/.
+Forecast model (Toto2)
+- checkpoint (Datadog/Toto-2.0-313m) — the HuggingFace Toto2 checkpoint id. Toto2 produces a 9-quantile predictive distribution; the median gives the point forecast.
+- context_length (3008) — bars fed to the model per inference. Capped by the model's patch_size divisibility regardless of available history.
+- horizon_bars (30) — how far ahead each forecast predicts, in bars.
+- stride_bars (30) — re-forecast every N bars. With stride=horizon=30, forecasts tile edge-to-edge with no overlap.
+Entry signal (emitter — ThresholdEmitter)
+- buy_threshold (0.0005) / sell_threshold (-0.0005) — trade fires when predicted_return ≥ buy_threshold (BUY) or ≤ sell_threshold (SELL). Return is fractional (0.0005 = 5 bps).
+- min_prob (None) — policy #2: probability gate. Suppresses a trade to HOLD if the directional probability (prob_up for BUY, 1−prob_up for SELL) is below this floor. None = off; a value in [0.5, 1) filters weak-conviction trades.
+Confidence-scaled order placement (trader — policies #1 & #7)
+These are all OFF by default so a plain run is byte-identical to pre-feature behavior.
+- aggression_ticks (0) — base limit-order offset in ticks from the touch. 0 = place at the current price.
+- max_aggression_ticks (None) — policy #1: confidence-scaled aggression ceiling. The offset ramps from aggression_ticks (weak signal) → max_aggression_ticks (strong signal) as strength rises. None = no scaling, always use base.
+- full_confidence_prob (0.9) — the directional probability at which conviction strength saturates to 1.0 (drives the ramp of #1/#7). Lower = saturates faster.
+- max_position (1) — policy #7: confidence-scaled sizing ceiling. Entry quantity scales with strength up to this many contracts (floor of 1). 1 = always one contract, sizing disabled. Closes always flatten the whole position.
+Costs & session handling
+- fee_rate (0.00015) — per-side transaction fee as a fraction of notional (1.5 bps/side).
+- forced_close (False) — if True, force-close at every DAY↔NIGHT session boundary; metrics then split into trading_day / trading_night buckets.
+Execution engine
+- precompute (True in your command) — batch all forecasts on the GPU up front, then replay execution on CPU. Identical results to per-tick inference, much faster.
+- batch_size (auto) — forecast batch size for the precompute pass. auto probes free VRAM; an integer forces it.
+The last three (precompute/batch_size/forced_close) only affect how the run executes, not the strategy; everything from data through max_position defines what strategy runs.

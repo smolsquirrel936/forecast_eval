@@ -156,7 +156,7 @@ For each `MarketEvent` emitted by the Environment:
 
 - BUY limit price = `current_trade_price + aggression_ticks × tick_size`
 - SELL limit price = `current_trade_price − aggression_ticks × tick_size`
-- `aggression_ticks` defaults to 3; configurable per run.
+- `aggression_ticks` defaults to 0 (at-the-touch); configurable per run.
 - Positive values are aggressive (marketable); zero is at-the-touch; negative values are passive.
 
 ### 4.4 Pending order lifetime
@@ -217,8 +217,6 @@ python -m forecast_eval.reports <backtest_output_dir>
 
 `<backtest_output_dir>` is the directory containing the parquet log bundle (`fills`, `orders`, `forecasts`, `signals`, `trades`). The generator reads the bundle and writes three PNGs (`equity_drawdown.png`, `price_fills.png`, `signal_vs_realized.png`) under `<dir>/report/`, plus a combined interactive `report.html` at the bundle root (when `plotly` is installed).
 
-For `compare_models.py`, one report is produced per checkpoint subdirectory automatically via the same hook.
-
 **Why automatic:** the report is the actual product of a run — leaving it as a manual follow-up step means stale or missing charts whenever someone forgets. Coupling generation to backtest completion guarantees every log bundle has a matching report. Keeping the CLI form separate means the expensive backtest does not need to be re-run when the report format changes.
 
 Configuration knob: `reporting.auto = true` (default) runs the report after each backtest. Set to `false` to skip — useful when sweeping configs where only aggregate numbers (e.g. `summary.csv`) matter.
@@ -242,12 +240,15 @@ forecaster:
 
 signal_emitter:
   type: threshold
-  buy_threshold: 0.001
-  sell_threshold: -0.001
+  buy_threshold: 0.0005
+  sell_threshold: -0.0005
+  # min_prob: 0.61          # optional directional-probability gate (OFF by default)
+  # full_confidence_prob: 0.9
 
 trader:
-  aggression_ticks: 3
+  aggression_ticks: 0
   max_position: 1
+  # max_aggression_ticks: 5   # optional confidence-scaled aggression ceiling (OFF by default)
   fee_rate: 0.00015
   forced_close_on_session_end: false
 
@@ -295,7 +296,6 @@ reporting:
 - Integration test with trivial model on known data → expected PnL.
 - Buy-and-hold baseline as a floor.
 - Fee sensitivity sweep: `fee_rate ∈ {0, 0.00015, 0.0003}`.
-- **Model-size sweep** (`compare_models.py`): same data, same emitter, same fee schedule, vary the forecaster checkpoint (Toto-2.0 in 4m / 22m / 313m / 1B / 2.5B). Each checkpoint contributes (a) per-window forecast-quality numbers — direction hit rate, Spearman IC, latency — and (b) a full harness backtest with the standard log bundle (§7 / §8) under a per-checkpoint subdirectory, so trading metrics are produced on the same axis as forecast quality. Lets us see whether bigger checkpoints actually convert better IC into better realized PnL after execution drag.
 
 ## 7. Metrics
 
@@ -338,6 +338,7 @@ forecast_eval/
     base.py
     dummy.py                 # Phase 1 alternating emitter
     threshold.py
+    wiring.py                # emitter factories wired from CLI flags
   trader.py
   execution.py
   portfolio.py
@@ -349,8 +350,7 @@ forecast_eval/
   metrics.py
   reports.py
   run.py                     # demos + run_backtest()
-  real_data_demo.py          # entry point — Toto2 on real TXF 1-min bars
-  compare_models.py          # entry point — model-size sweep (Phase 5)
+  real_data.py               # entry point — Toto2 on the full real TXF 1-min file
   test_toto2.py              # smoke test — load checkpoint + one forecast
 tests/
   conftest.py                # sys.path shim so absolute imports work from any CWD
@@ -359,6 +359,8 @@ tests/
   test_metrics.py
   test_integration.py
   test_lookahead.py
+  test_confidence_placement.py   # Signal.strength / min_prob gate / scaled aggression & sizing
+  test_reports.py               # fmt_value, currency axes, renderers, HTML summary, generate_report
 ```
 
 ## 9. Validation Milestones

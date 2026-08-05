@@ -13,8 +13,9 @@ the no-flip rule. Also mirrors the open position's entry price/bar/timestamp so
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
-| `Trader(execution, tick_size, aggression_ticks, max_position)` | class | the state machine |
+| `Trader(execution, tick_size, aggression_ticks, max_position=1, max_aggression_ticks=None)` | class | the state machine |
 | `on_signal(direction, market)` | method | apply §4.2 rule; submit/cancel orders |
+| `on_signal(signal, market)` | method | conviction-aware: scales entry offset & size by `signal.strength` |
 | `submit_exit(market)` | method | cancel-then-submit a closing limit (exits + forced close) |
 | `on_fill(side, qty, …)` | method | update position + entry tracking |
 | `position_state()` | method | immutable `PositionState` snapshot, or `None` if flat |
@@ -35,6 +36,13 @@ the no-flip rule. Also mirrors the open position's entry price/bar/timestamp so
   a forced close.
 - Order price = `current ± aggression_ticks × tick_size`; positive aggression makes
   the limit marketable (the default).
+- **Confidence-scaled entries** (`max_aggression_ticks`, `max_position`, from
+  ORDER_PLACEMENT_IDEAS #1/#7): `_entry_offset(strength)` ramps the entry limit
+  offset from `aggression_ticks` (base) to `max_aggression_ticks` by `strength`;
+  `_entry_qty(strength)` scales the entry size up to `max_position` (floor 1).
+  Closes always use base aggression and flatten the whole position, so the no-flip
+  state machine returns cleanly to flat. With the defaults (`max_aggression_ticks
+  = None`, `max_position = 1`) every order is byte-identical to v1.
 - The Trader keeps its *own* position mirror, separate from [portfolio.py](portfolio.md),
   because it drives order logic and ExitRule queries.
 

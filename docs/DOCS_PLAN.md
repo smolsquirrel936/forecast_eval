@@ -124,6 +124,8 @@ print('BROKEN:', bad if bad else 'none')
 
 ## Current coverage
 
-25 markdown files: the hub, this plan, 22 module pages, `test_toto2.md`, and the
+26 markdown files: the hub, this plan, 22 module pages, `test_toto2.md`, and the
 consolidated `tests.md`. Every internal link is verified to resolve. Empty
-`__init__.py` package markers are intentionally undocumented.
+`__init__.py` package markers are intentionally undocumented. (`main.py`, a
+91-byte print stub that the reference tree `Z:\test-autoresearch` does not
+carry, was deleted; it is no longer a coverage gap.)

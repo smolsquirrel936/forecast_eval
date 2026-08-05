@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Mapping, Optional
@@ -112,6 +113,7 @@ def plot_equity_drawdown_mpl(
     *,
     ticks: Optional[pd.DataFrame] = None,
     fee_rate: float = 0.00015,
+    point_value: float = 200.0,
 ) -> None:
     # Tech: a 2-row figure (equity on top 3/4, drawdown below); when there are no
     #       trades, print a centered "no trades" placeholder instead of curves.
@@ -119,6 +121,7 @@ def plot_equity_drawdown_mpl(
     #       equity that caused it; the placeholder keeps the report well-formed even
     #       for a run that never traded (so downstream HTML embedding doesn't break).
     eq = _equity_series(trades)
+    bh = _buy_and_hold_curve(eq, ticks, fee_rate)
     fig, (ax1, ax2) = plt.subplots(
         2, 1, figsize=(11, 6), sharex=True,
         gridspec_kw={"height_ratios": [3, 1]},
@@ -144,11 +147,22 @@ def plot_equity_drawdown_mpl(
         #       when a price series is available, and show a legend to tell them apart.
         # Why:  a passive-hold reference makes the strategy's edge (or lack of it) read
         #       at a glance; it's omitted silently when there's no price file.
-        bh = _buy_and_hold_curve(eq, ticks, fee_rate)
         if not bh.empty:
             ax1.plot(bh["timestamp"], bh["cum_bh_pnl_points"],
                      color="#7f7f7f", lw=1.2, ls="--", label="buy & hold")
             ax1.legend(loc="best")
+        # Tech: pin the equity y-axis to a span that fits the strategy (and buy &
+        #       hold) and add a right-hand currency axis that is the exact point_value
+        #       rescale of it, so the two axes stay linked like the interactive chart.
+        # Why:  matching the plotly pin keeps the PNG and HTML reading the same; without
+        #       a pinned currency twin the NT$ scale would drift independently.
+        eq_span = _currency_axis_range([eq["equity"], bh["cum_bh_pnl_points"] if not bh.empty else None], point_value)
+        if eq_span is not None:
+            (lo, hi), (clo, chi) = eq_span
+            ax1.set_ylim(lo, hi)
+            ax_cur = ax1.twinx()
+            ax_cur.set_ylim(clo, chi)
+            ax_cur.set_ylabel(f"currency @ {point_value:g}")
     # Tech: label axes/titles and apply a concise auto date formatter to the x-axis.
     # Why:  ConciseDateFormatter keeps tick labels readable across any run length
     #       (seconds to months) without manual locator tuning; tight_layout + a fixed
@@ -169,55 +183,111 @@ def plot_equity_drawdown_plotly(
     *,
     ticks: Optional[pd.DataFrame] = None,
     fee_rate: float = 0.00015,
+    point_value: float = 200.0,
 ) -> "go.Figure":
-    # Tech: the interactive twin of the equity/drawdown chart — same two stacked
-    #       panels as scatter traces sharing the x-axis.
+    # Tech: the interactive twin of the equity/drawdown chart — two stacked panels,
+    #       each with a left points axis and a right currency axis that is the exact
+    #       point_value rescale of it, kept linked by pinning both ranges together.
     # Why:  plotly gives hover/zoom that static PNGs can't; reusing _equity_series
     #       guarantees the interactive and static versions show identical numbers.
+    #       The right-hand currency axis is the regression this whole chart guards:
+    #       nothing in plotly links two axes automatically, so an edit could silently
+    #       unlink them — pinning the ranges as a pair and binding a carrier trace to
+    #       each currency axis (otherwise plotly won't render an axis with no trace)
+    #       is what keeps them visible and in lock-step.
     eq = _equity_series(trades)
+    bh = _buy_and_hold_curve(eq, ticks, fee_rate)
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True,
+        specs=[[{"secondary_y": True}], [{"secondary_y": True}]],
         row_heights=[0.72, 0.28], vertical_spacing=0.04,
         subplot_titles=("Cumulative net PnL", "Drawdown"),
     )
-    bh = _buy_and_hold_curve(eq, ticks, fee_rate)
     if not eq.empty:
-        # Tech: add the equity line to row 1 and the fill-to-zero drawdown to row 2.
-        # Why:  guarding on non-empty avoids adding empty traces; fill="tozeroy"
-        #       renders the underwater area the same way the PNG shades it.
+        # Tech: strategy equity and the optional buy-and-hold overlay go on the row-1
+        #       points axis (primary); a transparent, hover-less carrier trace bound
+        #       to the row-1 currency axis (secondary) carries the equity × point_value
+        #       series so that axis actually renders.
+        # Why:  the carrier is the only thing keeping the currency axis on screen —
+        #       plotly hides an axis with no bound trace; keeping it invisible means
+        #       it contributes the axis but not a visible line.
         fig.add_trace(go.Scatter(
             x=eq["timestamp"], y=eq["equity"], mode="lines",
             name="strategy", line=dict(color="#1f77b4", width=2),
-        ), row=1, col=1)
-        # Tech: overlay the net buy-and-hold curve on row 1 when a price series exists.
-        # Why:  same passive-hold reference as the PNG, here with hover for exact values.
+        ), row=1, col=1, secondary_y=False)
         if not bh.empty:
             fig.add_trace(go.Scatter(
                 x=bh["timestamp"], y=bh["cum_bh_pnl_points"], mode="lines",
                 name="buy & hold", line=dict(color="#7f7f7f", width=1.5, dash="dash"),
-            ), row=1, col=1)
+            ), row=1, col=1, secondary_y=False)
+        fig.add_trace(go.Scatter(
+            x=eq["timestamp"], y=eq["equity"] * point_value, mode="lines",
+            name="strategy (currency)", showlegend=False, hoverinfo="skip",
+            line=dict(color="rgba(0,0,0,0)"),
+        ), row=1, col=1, secondary_y=True)
+        # Tech: row-2 drawdown on its points axis plus a matching currency carrier on
+        #       its secondary axis; the drawdown span always includes zero so the
+        #       fill-to-zero baseline sits inside the pinned range.
+        # Why:  the underwater panel fills to zero, so a range that omits zero would
+        #       clip the fill; the carrier again only exists to make the currency
+        #       axis render.
         fig.add_trace(go.Scatter(
             x=eq["timestamp"], y=eq["drawdown"], mode="lines",
             name="drawdown", fill="tozeroy", showlegend=False,
             line=dict(color="#d62728", width=1),
-        ), row=2, col=1)
-    # Tech: set axis titles and a compact layout; show the legend only when the
-    #       buy-and-hold line is present (to distinguish the two row-1 curves).
-    # Why:  with a single equity line a legend is noise, but once buy & hold is
-    #       overlaid the reader needs to tell the two apart; fixed height/margins keep
-    #       the figure consistent when embedded alongside the other two in the HTML.
-    fig.update_yaxes(title_text="points", row=1, col=1)
-    fig.update_yaxes(title_text="points", row=2, col=1)
+        ), row=2, col=1, secondary_y=False)
+        fig.add_trace(go.Scatter(
+            x=eq["timestamp"], y=eq["drawdown"] * point_value, mode="lines",
+            name="drawdown (currency)", showlegend=False, hoverinfo="skip",
+            line=dict(color="rgba(0,0,0,0)"),
+        ), row=2, col=1, secondary_y=True)
+
+        # Tech: pin both panels' point/currency ranges as exact rescale pairs, derived
+        #       from the curves they display (equity span over strategy + buy & hold;
+        #       drawdown span extended to zero).
+        # Why:  this is the link between the axes — the currency range must equal the
+        #       points range × point_value or the two scales drift apart; deriving it
+        #       from the displayed data also guarantees the curves fit inside.
+        eq_span = _currency_axis_range(
+            [eq["equity"], bh["cum_bh_pnl_points"] if not bh.empty else None],
+            point_value,
+        )
+        if eq_span is not None:
+            (lo, hi), (clo, chi) = eq_span
+            fig.update_yaxes(range=[lo, hi], row=1, col=1, secondary_y=False)
+            fig.update_yaxes(range=[clo, chi], row=1, col=1, secondary_y=True)
+        dd_span = _currency_axis_range([eq["drawdown"]], point_value, include_zero=True)
+        if dd_span is not None:
+            (lo, hi), (clo, chi) = dd_span
+            fig.update_yaxes(range=[lo, hi], row=2, col=1, secondary_y=False)
+            fig.update_yaxes(range=[clo, chi], row=2, col=1, secondary_y=True)
+
+    # Tech: label the four axes; the currency side carries the point_value so the
+    #       reader knows the rescale factor.
+    # Why:  without titles the two right-hand axes read as unlabeled numbers; fixed
+    #       height/margins keep the figure consistent when embedded alongside the
+    #       other two in the HTML.
+    fig.update_yaxes(title_text="points", row=1, col=1, secondary_y=False)
+    fig.update_yaxes(title_text=f"currency @ {point_value:g}", row=1, col=1, secondary_y=True)
+    fig.update_yaxes(title_text="points", row=2, col=1, secondary_y=False)
+    fig.update_yaxes(title_text=f"currency @ {point_value:g}", row=2, col=1, secondary_y=True)
     fig.update_layout(height=520, showlegend=not bh.empty,
-                      margin=dict(t=40, l=60, r=20, b=40))
+                      margin=dict(t=40, l=60, r=70, b=40))
 
     # Tech: when buy & hold is present, add a button group that toggles its trace —
-    #       one view shows both curves, the other only the strategy. Trace order is
-    #       [strategy, buy & hold, drawdown], and drawdown stays visible in both.
+    #       the masks must cover *every* trace (incl. the two invisible currency
+    #       carriers), so they are built from the live fig.data, not a hard-coded
+    #       length; "Strategy only" hides only the buy-&-hold trace.
     # Why:  lets the reader switch between the standalone strategy curve and the
-    #       comparison-against-hold view in the interactive report, instead of having
-    #       both permanently overlaid; only added when there's a hold line to toggle.
+    #       comparison-against-hold view; a stale mask shorter than len(fig.data)
+    #       would blank a carrier (killing a currency axis) or the drawdown, so the
+    #       masks are recomputed from the actual trace list and the buy-&-hold index.
     if not bh.empty:
+        names = [t.name for t in fig.data]
+        bh_idx = names.index("buy & hold")
+        n = len(fig.data)
+        both = [True] * n
+        strategy_only = [i != bh_idx for i in range(n)]
         fig.update_layout(
             updatemenus=[dict(
                 type="buttons", direction="right",
@@ -225,9 +295,9 @@ def plot_equity_drawdown_plotly(
                 showactive=True, active=0,
                 buttons=[
                     dict(label="Strategy + Buy & Hold", method="update",
-                         args=[{"visible": [True, True, True]}  ]),
+                         args=[{"visible": both}]),
                     dict(label="Strategy only", method="update",
-                         args=[{"visible": [True, False, True]}]),
+                         args=[{"visible": strategy_only}]),
                 ],
             )],
         )
@@ -448,22 +518,124 @@ def _load_ticks(data_path: Optional[Path]) -> Optional[pd.DataFrame]:
 # Settings + result-summary HTML sections (rendered above the charts).
 # ---------------------------------------------------------------------------
 
-def _fmt_value(v) -> str:
-    # Tech: format floats with a sign and 6 decimals, everything else via str().
-    # Why:  mirrors the exact terminal convention (real_data.py) so the report's
-    #       tables read identically to what was printed to the console.
-    return f"{v:+.6f}" if isinstance(v, float) else str(v)
+# Tech: the metric keys whose value is a *fraction in [0,1]* that the report must
+#       render as a percentage — multiplying by 100 and suffixing `%`.
+# Why:  the terminal print and the HTML report must agree, and a bare 0.4857 reads
+#       as "0.49" not "48.57%"; listing the keys keeps the scaling in one place so a
+#       new fraction field only needs a row here rather than a renderer change.
+_FRACTION_PERCENT_KEYS = frozenset({
+    "hit_rate", "direction_hit_rate", "annual_rate_of_return",
+    "ratio_avg_win_avg_loss", "fee_drag",
+})
+
+# Tech: keys whose value is *already scaled to a percentage* (e.g. percent_profitable
+#       is computed ×100 upstream) — must NOT be rescaled, only suffixed.
+# Why:  double-scaling would turn 48.57 into 4857%; keeping this set separate from the
+#       fraction set is what prevents that.
+_ALREADY_PERCENT_KEYS = frozenset({"percent_profitable"})
+
+
+def fmt_value(v, key: Optional[str] = None) -> str:
+    # Tech: format a scalar for the report — ints/None/str pass through unchanged,
+    #       floats get a sign; for the fraction/percent keys the float is scaled to a
+    #       2-decimal percentage, every other float keeps the 6-decimal terminal form.
+    # Why:  the report's tables must mirror the terminal output exactly, but a handful
+    #       of fields are shares/proportions that only read well as percentages; doing
+    #       the dispatch here (instead of at every call site) keeps the two renderers
+    #       (terminal-style 6-decimals vs. percent) consistent and keyed by field name.
+    if not isinstance(v, float):
+        return str(v)
+    if math.isinf(v) or math.isnan(v):
+        return f"{v:+}"
+    if key in _FRACTION_PERCENT_KEYS:
+        return f"{v * 100:+.2f}%"
+    if key in _ALREADY_PERCENT_KEYS:
+        return f"{v:+.2f}%"
+    return f"{v:+.6f}"
+
+
+def _currency_axis_range(
+    series_iter,
+    point_value: float,
+    *,
+    include_zero: bool = False,
+):
+    # Tech: from an iterable of point-valued Series, compute a (lo, hi) span that fits
+    #       every finite value, optionally extended to contain zero, with a minimum
+    #       width for flat data; return None when there's nothing to plot. The currency
+    #       span is the exact point_value rescale of the points span.
+    # Why:  the report pins matching points/currency axes on both equity panels so the
+    #       right-hand NT$ axis stays an exact rescale of the left-hand points axis —
+    #       nothing links them automatically, so computing the pair together is what
+    #       keeps an edit from silently unlinking them; include_zero lets the drawdown
+    #       panel pull its fill-to-zero baseline inside the range.
+    finite = []
+    for s in series_iter:
+        if s is None:
+            continue
+        if not isinstance(s, pd.Series):
+            continue
+        if s.empty:
+            continue
+        finite.extend(float(x) for x in s if isinstance(x, (int, float)) and math.isfinite(x))
+    if not finite:
+        return None
+    lo, hi = min(finite), max(finite)
+    if include_zero:
+        lo = min(lo, 0.0)
+        hi = max(hi, 0.0)
+    if lo == hi:  # flat data still needs a visible width
+        lo -= 1.0
+        hi += 1.0
+    return (lo, hi), (lo * point_value, hi * point_value)
+
+
+def _fmt_annual_value(v, col: str) -> str:
+    # Tech: the annual-returns table's own convention — rate_of_return as a 3-decimal
+    #       percentage, net_pnl_currency as a 3-decimal comma-grouped signed number,
+    #       the year literal (never comma-grouped into "2,022").
+    # Why:  this table mixes a fraction, a currency amount, and an integer year, so a
+    #       single formatter would mis-render at least one column; the per-column
+    #       dispatch keeps each value legible and the year a clean integer.
+    if col == "rate_of_return" and isinstance(v, (int, float)) and math.isfinite(v):
+        return f"{v * 100:+.3f}%"
+    if col == "net_pnl_currency" and isinstance(v, (int, float)) and math.isfinite(v):
+        return f"{v:+,.3f}"
+    if col == "year":
+        return str(int(v))
+    return fmt_value(v, col)
 
 
 def _kv_table_html(mapping: Mapping) -> str:
-    # Tech: render any mapping as a two-column key/value HTML table.
+    # Tech: render any mapping as a two-column key/value HTML table, formatting each
+    #       value with fmt_value keyed by its own field name.
     # Why:  the Settings block and every metric block share the same shape (a flat
-    #       dict of scalars), so one renderer keeps them visually consistent.
+    #       dict of scalars), so one renderer keeps them visually consistent; passing
+    #       the key to fmt_value is what makes fraction fields render as percentages.
     rows = "".join(
-        f"<tr><td class='k'>{k}</td><td class='v'>{_fmt_value(v)}</td></tr>"
+        f"<tr><td class='k'>{k}</td><td class='v'>{fmt_value(v, k)}</td></tr>"
         for k, v in mapping.items()
     )
     return f"<table class='kv'>{rows}</table>"
+
+
+def _annual_returns_html(rows) -> str:
+    # Tech: render the annual-returns table — one <th> per column, one <tr> per year,
+    #       each cell formatted via _fmt_annual_value keyed by its column name.
+    # Why:  this table mixes a fraction (rate_of_return), a currency amount
+    #       (net_pnl_currency), and an integer year, so it needs per-column formatting
+    #       rather than the uniform _kv_table_html; the year must stay literal so it
+    #       isn't comma-grouped into "2,022".
+    cols = ["year", "rate_of_return", "net_pnl_currency", "partial_year"]
+    head = "".join(f"<th>{c}</th>" for c in cols)
+    body = []
+    for r in rows:
+        cells = "".join(f"<td>{_fmt_annual_value(r.get(c), c)}</td>" for c in cols)
+        body.append(f"<tr>{cells}</tr>")
+    return (
+        "<h3>Annual returns (by calendar year of exit)</h3>"
+        f"<table class='kv'><thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table>"
+    )
 
 
 def _summary_sections_html(
@@ -472,7 +644,7 @@ def _summary_sections_html(
     buy_and_hold: Optional[Mapping],
 ) -> str:
     # Tech: build the Settings + Result-summary HTML, one labelled table per block,
-    #       omitting any section whose source is missing.
+    #       omitting any section whose source is missing or empty.
     # Why:  this is the headline the user wants at the top of the report — the run's
     #       parameters and the same metric blocks printed to the terminal; rendering
     #       it here (not in the callers) keeps the HTML report self-contained.
@@ -486,13 +658,22 @@ def _summary_sections_html(
         parts.append("<h2>Result summary</h2>")
         if metrics:
             # Tech: emit each trading block (single 'trading', or day/night under
-            #       forced close), then forecast quality and attribution; skip the
+            #       forced close), then the trade-analysis and annual-returns
+            #       breakdowns, then forecast quality and attribution; skip the
             #       'trades' record list which has no scalar table form.
-            # Why:  matches exactly the blocks the terminal prints (SPEC §7) and the
-            #       skip mirrors the console printers, which never tabulate trades.
+            # Why:  matches exactly the blocks the terminal prints (SPEC §7); the
+            #       skip mirrors the console printers, which never tabulate trades,
+            #       and the trade-analysis/annual-returns blocks only render when the
+            #       metrics pack actually carried them.
             for key in [k for k in metrics if k.startswith("trading")]:
                 parts.append(f"<h3>Trading metrics [{key}]</h3>")
                 parts.append(_kv_table_html(metrics[key]))
+            if metrics.get("trade_analysis"):
+                parts.append("<h3>Trade analysis</h3>")
+                parts.append(_kv_table_html(metrics["trade_analysis"]))
+            ar = metrics.get("annual_returns")
+            if ar and ar.get("rows"):
+                parts.append(_annual_returns_html(ar["rows"]))
             if "forecast" in metrics:
                 parts.append("<h3>Forecast quality</h3>")
                 parts.append(_kv_table_html(metrics["forecast"]))
@@ -583,18 +764,26 @@ def generate_report(
     out_dir = run_dir / "report"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Tech: pull the per-side fee from settings (params.json) for the buy-and-hold
-    #       overlay, defaulting to the framework default when absent/unparseable.
+    # Tech: pull the per-side fee and the contract point_value from settings
+    #       (params.json), defaulting to the framework defaults (0.00015 / 200 for
+    #       TXF) when absent or unparseable.
     # Why:  the reference line must be charged the same fee as the strategy to be a
-    #       fair comparison; reading it from the run's own params keeps it in sync.
+    #       fair comparison, and the currency axis must rescale by the run's own
+    #       point_value; reading both from the run's params keeps them in sync, while
+    #       older bundles written before point_value existed fall back to the TXF value.
     try:
         fee_rate = float(settings["fee_rate"]) if settings and "fee_rate" in settings else 0.00015
     except (TypeError, ValueError):
         fee_rate = 0.00015
+    try:
+        point_value = float(settings["point_value"]) if settings and "point_value" in settings else 200.0
+    except (TypeError, ValueError):
+        point_value = 200.0
 
     paths = {}
     paths["equity_png"] = out_dir / "equity_drawdown.png"
-    plot_equity_drawdown_mpl(trades, paths["equity_png"], ticks=ticks, fee_rate=fee_rate)
+    plot_equity_drawdown_mpl(trades, paths["equity_png"], ticks=ticks,
+                             fee_rate=fee_rate, point_value=point_value)
 
     paths["price_png"] = out_dir / "price_fills.png"
     plot_price_fills_mpl(fills, ticks, paths["price_png"])
@@ -610,7 +799,8 @@ def generate_report(
         #       once (then False) so the file isn't bloated with three copies of it.
         html_path = run_dir / "report.html"
         figs = [
-            plot_equity_drawdown_plotly(trades, ticks=ticks, fee_rate=fee_rate),
+            plot_equity_drawdown_plotly(trades, ticks=ticks, fee_rate=fee_rate,
+                                        point_value=point_value),
             plot_price_fills_plotly(fills, ticks),
             plot_signal_vs_realized_plotly(signals, trades),
         ]
@@ -626,6 +816,7 @@ def generate_report(
             "table.kv td.v{font-family:monospace;text-align:right;}"
             ".fig{margin-bottom:30px;}</style></head><body>",
             f"<h1>forecast_eval report — {run_dir.name}</h1>",
+            f"<p>currency @ {point_value:g}</p>",
             # Tech: render the Settings + Result-summary tables at the very top.
             # Why:  the user wants the run's parameters and headline metrics to open
             #       the report, above the charts (returns "" when nothing was passed).

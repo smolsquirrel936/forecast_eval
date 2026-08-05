@@ -24,7 +24,7 @@ it's a manual sanity check before the slow real-data runs.
 - Distinguishes `[IMPORT ERROR]` (install torch + toto2) from `[RUNTIME ERROR]`.
 
 Use this whenever you change [forecaster/toto2.py](forecaster/toto2.md) before
-running [real_data_demo.py](real_data_demo.md).
+running [real_data.py](real_data.md).
 
 ## Related
 [forecaster/toto2.py](forecaster/toto2.md) · [usage.md §4](../usage.md)

@@ -86,14 +86,14 @@ Three invariants make this honest (all enforced in code + tests):
 | [strategy/base.py](strategy/base.md) | SignalEmitter ABC | the forecast→signal contract |
 | [strategy/dummy.py](strategy/dummy.md) | Alternating emitter | the model-less Phase-1 sanity signal |
 | [strategy/threshold.py](strategy/threshold.md) | Threshold emitter | how predicted return becomes BUY/SELL/HOLD |
+| [strategy/volmultitf.py](strategy/volmultitf.md) | Volatility + multi-timeframe emitter | the autoresearch exp227 winner's 6-filter cascade |
+| [strategy/wiring.py](strategy/wiring.md) | Strategy wiring seam | the `make_strategy()` contract the autoresearch loop edits |
 | [exits/base.py](exits/base.md) | ExitRule ABC + PositionState | the risk-exit contract |
 | [exits/stop_loss.py](exits/stop_loss.md) | Fixed stop-loss | the N-tick adverse-excursion exit |
 | [exits/time_stop.py](exits/time_stop.md) | Time stop | the max-bars-in-trade exit |
 | [data/loader.py](data/loader.md) | Tick CSV loaders | the RPT and generic tick file formats |
 | [run.py](run.md) — `python -m forecast_eval.run` | Phase 1–4 synthetic demos | a no-model, seconds-long smoke run |
-| [real_data_demo.py](real_data_demo.md) | Toto2 on real 1-min bars | the standard real-data backtest |
-| [real_data.py](real_data.md) | Full-dataset run with warmup split | the whole-history variant |
-| [compare_models.py](compare_models.md) | Model-size sweep | forecast-quality + backtest across checkpoints |
+| [real_data.py](real_data.md) | Full-dataset run with warmup split | the whole-history real-data backtest |
 | [test_toto2.py](test_toto2.md) | Toto2 smoke test | the smallest "is the model wired up" check |
 | [tests/](tests.md) | Unit + integration suite | what's covered and how to run it |
 
@@ -114,7 +114,7 @@ For a newcomer grasping the codebase from scratch:
 5. **[run.py](run.md)** — how steps 1–4 are wired into the per-tick loop.
 6. **[forecaster/base.py](forecaster/base.md)** → **[strategy/base.py](strategy/base.md)** → **[exits/base.py](exits/base.md)** — the three pluggable contracts.
 7. **[metrics.py](metrics.md)** — how a finished run is scored.
-8. The concrete implementations ([forecaster/toto2.py](forecaster/toto2.md), [strategy/threshold.py](strategy/threshold.md)) and entry points ([real_data_demo.py](real_data_demo.md), [compare_models.py](compare_models.md)).
+8. The concrete implementations ([forecaster/toto2.py](forecaster/toto2.md), [strategy/threshold.py](strategy/threshold.md)) and the entry point ([real_data.py](real_data.md)).
 
 ## Entry points (runnable)
 
@@ -122,7 +122,5 @@ For a newcomer grasping the codebase from scratch:
 |---|---|---|---|
 | `python -m forecast_eval.run` | [run.py](run.md) | Phases 1–4 demos | No |
 | `python -m forecast_eval.test_toto2` | [test_toto2.py](test_toto2.md) | model smoke test | Yes |
-| `python -m forecast_eval.real_data_demo` | [real_data_demo.md](real_data_demo.md) | real-data backtest | Yes |
 | `python -m forecast_eval.real_data` | [real_data.md](real_data.md) | full-dataset backtest | Yes |
-| `python -m forecast_eval.compare_models` | [compare_models.md](compare_models.md) | Phase 5 sweep | Yes |
 | `python -m pytest forecast_eval/tests/` | [tests/](tests.md) | validation | No |

@@ -34,7 +34,9 @@ Worked examples are mirrored verbatim from SPEC §4.5 in the golden tests.
 - The marketable/passive classification is **frozen at placement** (it reads
   `current_at_placement`), never re-evaluated as the market moves.
 - A fill clears `_pending` before returning, preventing a double fill next tick.
-- Fee = `fill_price * fee_rate`, charged on *every* leg (open and close).
+- Fee = `fill_price × fee_rate × order.quantity`, charged on *every* leg (open
+  and close). `quantity` defaults to 1, so legacy orders are unchanged;
+  confidence-scaled sizing scales the fee per-contract.
 
 ## Related
 [trader.py](trader.md) · [events.py](events.md) · [portfolio.py](portfolio.md) · [tests/test_execution.py](tests.md) · [SPEC §4.5](../SPEC.md)

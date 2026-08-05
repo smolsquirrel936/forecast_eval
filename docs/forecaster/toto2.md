@@ -3,18 +3,20 @@
 **Role:** Adapter wrapping the Datadog Toto-2.0 time-series model as a [Forecaster](base.md).
 **Pipeline:** the concrete real-world model.
 **Depends on:** [events.py](../events.md), [forecaster/base.py](base.md), `torch` + `toto2` (lazy)
-**Used by:** [real_data_demo.py](../real_data_demo.md), [real_data.py](../real_data.md), [compare_models.py](../compare_models.md), [test_toto2.py](../test_toto2.md)
+**Used by:** [real_data.py](../real_data.md), [test_toto2.py](../test_toto2.md)
 
 ## Responsibility
 Feeds the framework's close-price history into Toto-2.0 (univariate) and reads the
-median forecast back as a `predicted_return`. A thin adapter — all the trading
-logic lives elsewhere.
+predictive distribution back into a `Forecast`. The median path becomes
+`predicted_return`; the full quantile fan is surfaced in the payload so downstream
+emitters can gate and size on confidence. A thin adapter — all the trading logic
+lives elsewhere.
 
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
 | `Toto2Forecaster(warmup_bars, …, context_length, checkpoint, device, bar_freq, signal_step)` | class | the model adapter |
-| `forecast(history_df)` | method | run inference; return a `Forecast` with the median path |
+| `forecast(history_df)` | method | run inference; return a `Forecast` with median path + quantile fan |
 | `_load_model` / `_prepare_context` | private | lazy load; build the ≤context_length series |
 
 ## Key points / gotchas
@@ -30,7 +32,13 @@ logic lives elsewhere.
   notebook convention of context=3008 minute-bars); `None` feeds raw history.
 - `signal_step` (`last`/`first`/`mean`) chooses which horizon step becomes
   `predicted_price`.
+- **Distributional payload** (ORDER_PLACEMENT_IDEAS #2): the forecast carries the
+  full quantile fan — `prob_up` (directional probability from the predictive CDF,
+  interpolated over `QUANTILE_LEVELS`), `quantile_prices`, `quantile_returns`,
+  `band_return_80` (the Q0.9−Q0.1 return spread). These are what
+  [strategy/threshold.py](../strategy/threshold.md) reads for the `min_prob` gate
+  and `strength`. `QUANTILE_LEVELS = [0.1…0.9]`.
 - Checkpoints: `Datadog/Toto-2.0-{4m, 22m, 313m, 1B, 2.5B}`.
 
 ## Related
-[forecaster/base.py](base.md) · [naive.py](naive.md) · [compare_models.py](../compare_models.md) · [SPEC §6 Phase 2](../../SPEC.md)
+[forecaster/base.py](base.md) · [naive.py](naive.md) · [real_data.py](../real_data.md) · [SPEC §6 Phase 2](../../SPEC.md)

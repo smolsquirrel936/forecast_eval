@@ -35,10 +35,7 @@ from forecast_eval.metrics import buy_and_hold_pnl, compute_metrics
 from forecast_eval.run import run_backtest
 from forecast_eval.strategy.threshold import ThresholdEmitter
 
-DEFAULT_DATA = (
-    Path(__file__).resolve().parent.parent
-    / "dataset" / "RPT" / "TXF_RPT_minute.csv"
-)
+DEFAULT_DATA = Path(r"\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_day.csv")
 
 
 def load_minute_bars(path: Path, n_bars: int | None) -> pd.DataFrame:

@@ -12,7 +12,7 @@ Writes the five-file artifact bundle (parquet, with transparent CSV fallback), t
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
-| `DEFAULT_OUTPUT_ROOT` | const | `<myPaper>/outputs/`, anchored to the source tree |
+| `DEFAULT_OUTPUT_ROOT` | const | `<repo-root>/outputs/`, anchored to the source tree |
 | `timestamped_run_dir(name, root=None)` | function | `<root>/<name>_<YYYYMMDD_HHMMSS>/` |
 | `write_params(params, path)` | function | pretty JSON dump (str() fallback) |
 | `write_fills` / `write_orders` / `write_forecasts` / `write_signals` / `write_trades` | functions | per-artifact writers |

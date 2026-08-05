@@ -25,4 +25,4 @@ Reads two on-disk tick formats and normalizes both to the single schema the
   by the user's preprocessing (not part of this folder); see [CLAUDE.md](../../CLAUDE.md).
 
 ## Related
-[environment.py](../environment.md) · [real_data_demo.py](../real_data_demo.md) · [SPEC §8](../../SPEC.md)
+[environment.py](../environment.md) · [real_data.py](../real_data.md) · [SPEC §8](../../SPEC.md)
