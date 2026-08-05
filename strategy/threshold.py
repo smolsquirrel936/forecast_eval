@@ -33,6 +33,7 @@ class ThresholdEmitter(SignalEmitter):
         full_confidence_prob: float = 0.9,
         short_window: int = 3,
         min_trend_ticks: float = 3.0,
+        path_momentum: bool = True,
         trend_filter: bool = True,
     ):
         # Tech: reject configs where sell_threshold isn't strictly below
@@ -74,6 +75,7 @@ class ThresholdEmitter(SignalEmitter):
         self.short_window = short_window
         self.min_trend_ticks = min_trend_ticks
         self.trend_filter = trend_filter
+        self.path_momentum = path_momentum
         self._short_prices: deque = deque(maxlen=short_window + 1)
 
     def _trend_confirms(self, direction: Direction, payload: dict) -> bool:
@@ -99,6 +101,25 @@ class ThresholdEmitter(SignalEmitter):
         if direction == "BUY":
             return trend_change >= self.min_trend_ticks
         return trend_change <= -self.min_trend_ticks
+
+    def _path_confirms(self, direction: Direction, payload: dict) -> bool:
+        # Tech: read the median forecast path (a list of horizon-step prices Toto2
+        #       surfaces) and require its midpoint to sit on the same side of last_price
+        #       as the endpoint — i.e. the move is sustained through mid-horizon, not a
+        #       reverse-then-recover or spike-then-revert shape.
+        # Why:  predicted_return is computed from the endpoint alone, so a forecast that
+        #       dips hard then recovers clears the threshold yet is a poor entry; this
+        #       gate uses the path shape (a field the forecaster already provides) to
+        #       veto those. Returns True when median_path/last_price are absent so it is
+        #       inert on non-Toto2 forecasters and during the first forecast.
+        path = payload.get("median_path")
+        last_price = payload.get("last_price")
+        if not path or last_price is None or len(path) < 2:
+            return True
+        mid = path[len(path) // 2]
+        if direction == "BUY":
+            return mid >= last_price
+        return mid <= last_price
 
     def _decide(self, forecast: Optional[Forecast]) -> Tuple[Direction, float]:
         # Tech: the shared decision core returning (direction, strength); emit() and
@@ -137,6 +158,8 @@ class ThresholdEmitter(SignalEmitter):
             #       forecasters, and the baseline (trend_filter=False) is untouched.
             if self.trend_filter and not self._trend_confirms(direction, payload):
                 return "HOLD", 0.0
+            if self.path_momentum and not self._path_confirms(direction, payload):
+                return "HOLD", 0.0
             return direction, 1.0
 
         # Tech: directional probability = P(move in the signal's direction); optionally
@@ -159,6 +182,8 @@ class ThresholdEmitter(SignalEmitter):
         #       reversed); this veto cuts those counter-trend entries without touching
         #       the threshold/prob logic, so it composes cleanly on top of --min-prob.
         if self.trend_filter and not self._trend_confirms(direction, payload):
+            return "HOLD", 0.0
+        if self.path_momentum and not self._path_confirms(direction, payload):
             return "HOLD", 0.0
 
         span = self.full_confidence_prob - 0.5
