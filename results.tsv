@@ -5,3 +5,4 @@ a42f5f7	3.1494	20099.5647	-6380.5594	keep	+short-window non-opposing trend filte
 39692ba	3.5239	21699.1692	-6157.4498	keep	+tighten trend filter min_trend_ticks=2.0 (require real momentum); 146 trades; PnL +20099->+21699, dd -6380->-6157; command: --min-prob 0.6
 4b1c91a	3.8087	21672.2388	-5690.2260	keep	+min_trend_ticks=4.0; 142 trades; PnL flat, dd -6157->-5690; command: --min-prob 0.6
 e253957	5.7340	26583.9563	-4636.0671	keep	+loosen prob gate to --min-prob 0.55 with trend=4.0; 168 trades; trend filter is real quality gate so looser prob adds winners (PnL +21672->+26584, dd -5690->-4636); command: --min-prob 0.55
+60629da	5.9904	27769.3653	-4636.0671	keep	+--min-prob 0.5 with trend=4.0; 173 trades; +5 trades, PnL +26584->+27769, dd unchanged; command: --min-prob 0.5
