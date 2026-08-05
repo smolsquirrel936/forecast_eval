@@ -112,7 +112,7 @@ Key CLI flags (see `--help` for the full list):
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--data` | `\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_day.csv` | Source 1-min CSV |
+| `--data` | `\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_day.csv` | Source 1-min CSV (night session: `TXF_RPT_minute_night.csv`) |
 | `--n-bars` | None (full) | Trailing rows to use |
 | `--lookback-frac` | 0.30 | Silent-warmup fraction |
 | `--checkpoint` | `Datadog/Toto-2.0-313m` | HuggingFace checkpoint id |

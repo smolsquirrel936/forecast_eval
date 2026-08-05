@@ -1,0 +1,3 @@
+﻿commit	calmar	net_pnl	max_drawdown	status	description
+dbaf165	1.3078	+11526.714400	-8812.289900	baseline	night-session ThresholdEmitter baseline (541 trades, 1B ckpt, lookback 0.30)
+uncommitted	0.9857	+7685.009050	-7796.884650	discard	IQR uncertainty gate ratio=0.30 in ThresholdEmitter (391 trades; Calmar 0.986 < baseline 1.308; reset)
