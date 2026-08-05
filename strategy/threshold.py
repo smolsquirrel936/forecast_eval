@@ -32,7 +32,7 @@ class ThresholdEmitter(SignalEmitter):
         min_prob: Optional[float] = None,
         full_confidence_prob: float = 0.9,
         short_window: int = 3,
-        min_trend_ticks: float = 0.0,
+        min_trend_ticks: float = 2.0,
         trend_filter: bool = True,
     ):
         # Tech: reject configs where sell_threshold isn't strictly below

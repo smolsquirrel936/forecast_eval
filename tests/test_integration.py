@@ -151,7 +151,7 @@ def test_precompute_matches_sequential():
             forecaster=_MomentumForecaster(warmup_bars=2,
                                            forecast_stride_bars=1,
                                            forecast_horizon_bars=1),
-            emitter=ThresholdEmitter(buy_threshold=0.005, sell_threshold=-0.005),
+            emitter=ThresholdEmitter(buy_threshold=0.005, sell_threshold=-0.005, trend_filter=False),
             tick_size=1.0,
             aggression_ticks=0,
             fee_rate=0.00015,

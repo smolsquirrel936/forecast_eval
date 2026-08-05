@@ -89,7 +89,7 @@ def test_prob_up_monotone_and_clamped():
 # -------- ThresholdEmitter: gate + strength ----------------------------------
 
 def test_emitter_backward_compat_without_prob():
-    em = ThresholdEmitter(buy_threshold=0.001, sell_threshold=-0.001)
+    em = ThresholdEmitter(buy_threshold=0.001, sell_threshold=-0.001, trend_filter=False)
     # No prob_up in payload -> direction from thresholds, full strength.
     sig = em.emit_signal(_fc(0.002))
     assert sig.direction == "BUY" and sig.strength == 1.0
@@ -99,7 +99,7 @@ def test_emitter_backward_compat_without_prob():
 
 def test_emitter_strength_from_prob_up():
     em = ThresholdEmitter(buy_threshold=0.001, sell_threshold=-0.001,
-                          full_confidence_prob=0.9)
+                          full_confidence_prob=0.9, trend_filter=False)
     # BUY clears the return threshold; prob_up=0.7 -> strength=(0.7-0.5)/0.4=0.5.
     sig = em.emit_signal(_fc(0.002, prob_up=0.7))
     assert sig.direction == "BUY"
@@ -114,7 +114,7 @@ def test_emitter_strength_from_prob_up():
 
 def test_emitter_min_prob_gate():
     em = ThresholdEmitter(buy_threshold=0.001, sell_threshold=-0.001,
-                          min_prob=0.65)
+                          min_prob=0.65, trend_filter=False)
     # Return passes, but directional prob 0.6 < 0.65 -> gated to HOLD.
     sig = em.emit_signal(_fc(0.002, prob_up=0.6))
     assert sig.direction == "HOLD"
