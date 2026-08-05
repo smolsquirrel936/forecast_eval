@@ -14,6 +14,7 @@ With ``min_prob=None`` and a payload that has no ``prob_up`` (any non-Toto2
 forecaster), behavior is identical to the original return-threshold emitter and
 strength is 1.0.
 """
+from collections import deque
 from typing import Literal, Optional, Tuple
 
 from ..events import Forecast, Signal
@@ -30,6 +31,9 @@ class ThresholdEmitter(SignalEmitter):
         sell_threshold: float = -0.001,
         min_prob: Optional[float] = None,
         full_confidence_prob: float = 0.9,
+        short_window: int = 3,
+        min_trend_ticks: float = 0.0,
+        trend_filter: bool = True,
     ):
         # Tech: reject configs where sell_threshold isn't strictly below
         #       buy_threshold, then store both plus the probability knobs.
@@ -59,6 +63,42 @@ class ThresholdEmitter(SignalEmitter):
         self.sell_threshold = sell_threshold
         self.min_prob = min_prob
         self.full_confidence_prob = full_confidence_prob
+        # Tech: short-window trend-filter state — a rolling deque of recent last_price
+        #       samples (+1 slot so an early/late half split is defined at full window).
+        # Why:  the trend filter (autoresearch exp227-style) only enters when recent tape
+        #       does not oppose the signal direction, neutralizing counter-trend entries
+        #       that bleed drawdown. On by default (trend_filter=True) with
+        #       min_trend_ticks=0.0 — a "non-opposing" veto that still confirms a flat
+        #       tape (trend_change==0), so unit tests with a constant last_price are
+        #       unaffected; tightening min_trend_ticks makes it demand real momentum.
+        self.short_window = short_window
+        self.min_trend_ticks = min_trend_ticks
+        self.trend_filter = trend_filter
+        self._short_prices: deque = deque(maxlen=short_window + 1)
+
+    def _trend_confirms(self, direction: Direction, payload: dict) -> bool:
+        # Tech: append this bar's last_price to the rolling window, then require the
+        #       late-half mean minus early-half mean to move >= min_trend_ticks in the
+        #       signal's direction (>= +min_trend_ticks for BUY, <= -min_trend_ticks for
+        #       SELL). Need >=3 samples for the early/late split.
+        # Why:  this is the short-window momentum confirmation from the exp227 winner —
+        #       only act when the very recent tape agrees with the forecast direction.
+        #       Returns True (no veto) when there isn't enough history yet, so the first
+        #       few forecasts after warmup still trade rather than starving the book.
+        last_price = payload.get("last_price")
+        if last_price is None:
+            return True
+        self._short_prices.append(last_price)
+        if len(self._short_prices) < 3:
+            return True
+        prices = list(self._short_prices)
+        half = len(prices) // 2
+        early_avg = sum(prices[:half]) / half
+        late_avg = sum(prices[half:]) / (len(prices) - half)
+        trend_change = late_avg - early_avg
+        if direction == "BUY":
+            return trend_change >= self.min_trend_ticks
+        return trend_change <= -self.min_trend_ticks
 
     def _decide(self, forecast: Optional[Forecast]) -> Tuple[Direction, float]:
         # Tech: the shared decision core returning (direction, strength); emit() and
@@ -90,6 +130,13 @@ class ThresholdEmitter(SignalEmitter):
         #       gate, so we preserve the pre-distribution behavior exactly.
         prob_up = payload.get("prob_up")
         if prob_up is None:
+            # Tech: no distributional field — but still run the trend filter if enabled,
+            #       because it only needs last_price (a non-distributional payload field).
+            # Why:  the trend confirmation is independent of prob_up; gating it behind
+            #       prob_up would silently disable a useful risk filter on non-Toto2
+            #       forecasters, and the baseline (trend_filter=False) is untouched.
+            if self.trend_filter and not self._trend_confirms(direction, payload):
+                return "HOLD", 0.0
             return direction, 1.0
 
         # Tech: directional probability = P(move in the signal's direction); optionally
@@ -103,6 +150,17 @@ class ThresholdEmitter(SignalEmitter):
         dir_prob = prob_up if direction == "BUY" else 1.0 - prob_up
         if self.min_prob is not None and dir_prob < self.min_prob:
             return "HOLD", 0.0
+
+        # Tech: short-window trend confirmation — require the recent early->late mean
+        #       move to support the signal by at least min_trend_ticks (autoresearch
+        #       exp227-style); only active when trend_filter=True.
+        # Why:  a threshold+prob-confirmed signal that recent tape already contradicts is
+        #       the dominant drawdown source (the model is confident but the move has
+        #       reversed); this veto cuts those counter-trend entries without touching
+        #       the threshold/prob logic, so it composes cleanly on top of --min-prob.
+        if self.trend_filter and not self._trend_confirms(direction, payload):
+            return "HOLD", 0.0
+
         span = self.full_confidence_prob - 0.5
         strength = (dir_prob - 0.5) / span
         strength = max(0.0, min(1.0, strength))
