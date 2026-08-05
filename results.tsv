@@ -1,3 +1,2 @@
-﻿commit	calmar	net_pnl	max_drawdown	status	description
-dbaf165	1.3078	+11526.714400	-8812.289900	baseline	night-session ThresholdEmitter baseline (541 trades, 1B ckpt, lookback 0.30)
-uncommitted	0.9857	+7685.009050	-7796.884650	discard	IQR uncertainty gate ratio=0.30 in ThresholdEmitter (391 trades; Calmar 0.986 < baseline 1.308; reset)
+commit	calmar	net_pnl	max_drawdown	status	description
+4f53283	1.3078	11526.7144	-8812.2899	keep	night-session ThresholdEmitter baseline (541 trades, 1B ckpt, lookback 0.30, buy=0.0005 sell=-0.0005 agg=0 min_prob=None); command: uv run python -m forecast_eval.real_data --precompute --data <night.csv> --checkpoint Datadog/Toto-2.0-1B --output-dir outputs/real_data_night_<ts>
