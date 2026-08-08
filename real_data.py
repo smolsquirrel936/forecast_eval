@@ -263,7 +263,7 @@ def main(argv=None) -> int:
     #       overlay from the source data; metrics/buy_and_hold feed the report tables.
     paths = write_all(res, args.output_dir, params=vars(args),
                       report_data_path=args.data, report_ticks=ticks,
-                      metrics=metrics, buy_and_hold=bh)
+                      metrics=metrics, buy_and_hold=bh, ext=".csv")
     print(f"\nlogs written under {args.output_dir}/")
     for name, p in paths.items():
         print(f"  {name:10s} -> {p}")
