@@ -39,6 +39,8 @@ docs/
   forecaster/{base,naive,toto2}.md
   strategy/{base,dummy,threshold}.md
   exits/{base,stop_loss,time_stop}.md
+  live/{cli,runtime,config,sessions,loop,bars,backfill,state,startup,recorder,capture,contracts,prod_audit,v1_check,v1c_check,v4_probe,v72_probe}.md
+  live/broker/{base,sim,dryrun,shioaji,shadow}.md
   tests.md           ← consolidated suite overview
 ```
 
@@ -124,8 +126,59 @@ print('BROKEN:', bad if bad else 'none')
 
 ## Current coverage
 
-26 markdown files: the hub, this plan, 22 module pages, `test_toto2.md`, and the
-consolidated `tests.md`. Every internal link is verified to resolve. Empty
+48 markdown files: the hub, this plan, 44 module pages, `test_toto2.md`, and the
+consolidated `tests.md`. All internal links resolve except one pre-existing
+breakage in `strategy/wiring.md` (`../../autoresearch_trading_plan.md` — the file
+sits at the repo root, so the link needs one more `../`); left as found. Empty
 `__init__.py` package markers are intentionally undocumented. (`main.py`, a
 91-byte print stub that the reference tree `Z:\test-autoresearch` does not
 carry, was deleted; it is no longer a coverage gap.)
+
+The `live/` package (22 pages under `docs/live/`) follows the same strict 1:1
+rule, including the five one-shot validation scripts — `v1_check.py`,
+`v1c_check.py`, `v4_probe.py`, `v72_probe.py` and `prod_audit.py` each got a page rather than being consolidated
+the way `tests.md` was, since each documents a distinct measured result rather
+than a set of cases. (`v1_check.py` shipped with its page in the same change,
+which is the rule the coverage-debt note below exists to enforce.)
+
+**Coverage debt closed 2026-08-11.** Four live modules had shipped without pages,
+which the 1:1 rule makes a gap rather than a judgement call: `runtime.py`,
+`cli.py`, `capture.py` and `broker/dryrun.py`. All four now have pages, the hub's
+file-map and entry-point tables list them, and `tests.md` gained the matching
+rows for `test_live_runtime.py`, `test_live_cli.py` and `test_live_capture.py`.
+Worth noting how it happened: the pages were written module-by-module as the live
+package grew, and the four that landed last — the entry point and the assembly
+around it — were the ones nobody circled back to. **The 1:1 rule only holds if a
+new `.py` and its `.md` land in the same change.**
+
+### Known gap: no porting guide yet — unblocked, scheduled after V5
+
+`live/sessions.py` makes the traded session a parameter specifically so this
+strategy can be ported to the day session. A **task-oriented porting guide** ("run
+this on the day session") was deferred because the task centred on an entry point
+that did not exist: nothing forced the tick aggregator and the backfill to receive
+the **same** `SessionPolicy`, so a guide written then would have documented an
+aspiration and handed the reader a procedure with a hole in it.
+
+**That precondition is now met.** [live/cli.py](live/cli.md) exists and
+[live/runtime.py](live/runtime.md) closes the hole structurally — it derives the
+one policy from the pinned config and refuses to accept another, so the
+aggregator and the backfill cannot disagree. The guide is therefore writable.
+
+**Decision (2026-08-11): write it after V5**, as part of Phase INT. Two reasons
+it is better placed there than here:
+
+- V4 and V5 can still change the procedure. V4 decides `aggression_ticks` from a
+  measured fill rate, and V5 is where restart, recovery and boundary-crossing
+  behaviour is actually exercised. A guide written now would describe steps that
+  have never been run end to end.
+- After V5 the guide can say "this has been soaked for five days" instead of
+  "this should work" — which is the difference between a procedure and a claim.
+
+Distinct from the coverage debt above, because this is a *task* page rather than
+a 1:1 module page — it belongs next to [usage.md](../usage.md), not in the mirror
+tree, so the strict 1:1 rule does not cover it and nothing will flag its absence.
+
+Until it exists the rationale lives in [live/sessions.md](live/sessions.md) and
+[SHIOAJI_PLAN.md §2.12](../SHIOAJI_PLAN.md); recorded debt with an owner and a
+date, not an oversight.

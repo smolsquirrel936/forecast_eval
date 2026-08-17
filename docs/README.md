@@ -92,14 +92,80 @@ Three invariants make this honest (all enforced in code + tests):
 | [exits/stop_loss.py](exits/stop_loss.md) | Fixed stop-loss | the N-tick adverse-excursion exit |
 | [exits/time_stop.py](exits/time_stop.md) | Time stop | the max-bars-in-trade exit |
 | [data/loader.py](data/loader.md) | Tick CSV loaders | the RPT and generic tick file formats |
+| [live/cli.py](live/cli.md) — `python -m forecast_eval.live.cli` | The live entry point | how a session starts, and why no order can be sent |
+| [live/runtime.py](live/runtime.md) | `LiveRuntime` | the whole assembly minus the network — one policy, and a warm-up that leaves nothing cold |
+| [live/config.py](live/config.md) | `LiveConfig` / `PINNED` | the tuned configuration a live run trades, and where it came from |
+| [live/sessions.py](live/sessions.md) | `SessionPolicy` | which sessions a deployment trades, and where its trading day begins |
+| [live/loop.py](live/loop.md) | `LiveLoop` | the §4.1 loop restructured from pull to push |
+| [live/bars.py](live/bars.md) | `TickAggregator` | how live ticks become the 1-min bars the model expects |
+| [live/backfill.py](live/backfill.md) | `kbars` → bars | warm-up history, and the three corrections `kbars` needs |
+| [live/state.py](live/state.md) | `SafetyRails` | what stops a running loop, and why STOP ≠ FLATTEN |
+| [live/feedwatch.py](live/feedwatch.md) | `FeedWatch` | telling a quiet market from a broken feed — by asking the venue, not by waiting |
+| [live/relogin.py](live/relogin.md) | `ReloginScheduler` | replacing the token before its 24 h wall, in the pre-open quiet |
+| [live/relogin_probe.py](live/relogin_probe.md) | §2.24 probe | what a second `login()` actually does — the seven questions the SDK cannot be read for |
+| [live/alerts.py](live/alerts.md) | `Alerter` | the one door everything needing a human goes through; where a Telegram sink attaches |
+| [live/startup.py](live/startup.md) | `RestartGuard` | the rails that survive the process dying |
+| [live/recorder.py](live/recorder.md) | JSONL audit trail | what a live session writes down, and why per-line flush |
+| [live/capture.py](live/capture.md) | `TickCapture` | the raw feed, written before any filter can touch it |
+| [live/contracts.py](live/contracts.md) | contract resolution | reaching a TXF contract, and what counts as "the same" one |
+| [live/broker/base.py](live/broker/base.md) | `Broker` ABC | the seam that lets `Trader` drive a real venue unchanged |
+| [live/broker/sim.py](live/broker/sim.md) | `SimBroker` | the offline fill model behind the `Broker` API |
+| [live/broker/dryrun.py](live/broker/dryrun.md) | `DryRunBroker` | real decisions, real bookkeeping, nothing sent |
+| [live/broker/shioaji.py](live/broker/shioaji.md) | `ShioajiBroker` | async fills, cancel races, and contract-code resolution |
+| [live/broker/shadow.py](live/broker/shadow.md) | `ShadowBroker` | V4's fill-model gap: the sim model run beside the real one |
+| [live/v4_probe.py](live/v4_probe.md) | forced-order probe | drives one order through the real V4 stack on demand |
+| [live/v1_check.py](live/v1_check.md) | ticks ⟷ `kbars` diff | V1's live half: do our bars match the venue's? |
+| [live/v1c_check.py](live/v1c_check.md) | `kbars` convention probe | how the right-labelling was discovered |
+| [live/v72_probe.py](live/v72_probe.md) | simulation-ordering probe | how "can we even place a futures order?" was answered |
 | [run.py](run.md) — `python -m forecast_eval.run` | Phase 1–4 synthetic demos | a no-model, seconds-long smoke run |
 | [real_data.py](real_data.md) | Full-dataset run with warmup split | the whole-history real-data backtest |
 | [test_toto2.py](test_toto2.md) | Toto2 smoke test | the smallest "is the model wired up" check |
 | [tests/](tests.md) | Unit + integration suite | what's covered and how to run it |
 
 > `__init__.py` files (`forecast_eval/__init__.py`, and the package `__init__.py`
-> under `data/`, `forecaster/`, `strategy/`, `exits/`, `tests/`) are empty or
-> near-empty package markers — nothing to document.
+> under `data/`, `forecaster/`, `strategy/`, `exits/`, `tests/`, `live/`,
+> `live/broker/`) are empty or near-empty package markers — nothing to document.
+
+## The live path
+
+`live/` is the **additive** live-trading layer: the same strategy stack driven by
+a real feed instead of a replayed file. `run.py`, `execution.py`, `trader.py` and
+`portfolio.py` are **unmodified** — the seam is duck-typed.
+
+```mermaid
+flowchart LR
+    Tick[Shioaji tick callback] --> Agg[TickAggregator]
+    KB[api.kbars<br/>warm-up] --> BF[backfill]
+    Agg -- MarketEvent --> LL[LiveLoop.on_bar]
+    BF -- history --> LL
+    LL --> Trader
+    Trader -- OrderEvent --> Br[Broker]
+    Br -. offline .-> Sim[SimBroker → Execution]
+    Br -. live .-> SJ[ShioajiBroker → place_order]
+    SJ -- deal callback --> LL
+    Pol[SessionPolicy] --> Agg
+    Pol --> BF
+    Pol --> Rails[SafetyRails]
+    Rails --> LL
+    LL --> Rec[Recorder]
+
+    classDef opt fill:#f6f6f6,stroke:#bbb,stroke-dasharray:4 3;
+    class Sim,SJ opt;
+```
+
+Three things to know before reading the code:
+
+- **`SimBroker` exists so the live loop can be diffed against `run_backtest`**
+  over the same ticks. That parity gate is what proves the pull→push
+  restructuring changed no decision logic.
+- **The session is a parameter, never a default.** One
+  [SessionPolicy](live/sessions.md) is passed to the aggregator, the backfill and
+  the rails; no module names a session.
+- **Every safety rail defaults to halting**, and `STOP` (send nothing) is
+  distinct from `FLATTEN` (close, then stop) — see [live/state.py](live/state.md).
+
+Design, phase status and measured findings live in
+[SHIOAJI_PLAN.md](../SHIOAJI_PLAN.md).
 
 ---
 
@@ -124,3 +190,9 @@ For a newcomer grasping the codebase from scratch:
 | `python -m forecast_eval.test_toto2` | [test_toto2.py](test_toto2.md) | model smoke test | Yes |
 | `python -m forecast_eval.real_data` | [real_data.md](real_data.md) | full-dataset backtest | Yes |
 | `python -m pytest forecast_eval/tests/` | [tests/](tests.md) | validation | No |
+| `python -m forecast_eval.live.cli [--duration-minutes N]` | [live/cli.py](live/cli.md) | V3 live dry run (**sends no orders**) | Yes — and Shioaji credentials |
+| `python -m forecast_eval.live.v4_probe [--allow-fill]` | [live/v4_probe.py](live/v4_probe.md) | V4 order path (**places 1 sim order**) | No — needs Shioaji credentials |
+| `python -m forecast_eval.live.prod_audit --i-am-querying-production` | [live/prod_audit.py](live/prod_audit.md) | production leak audit (read-only) | No — needs Shioaji credentials |
+| `python -m forecast_eval.live.v1_check --capture <ticks.csv>` | [live/v1_check.py](live/v1_check.md) | V1 live half (read-only) | No — needs Shioaji credentials |
+| `python -m forecast_eval.live.v1c_check --date <d>` | [live/v1c_check.py](live/v1c_check.md) | live-path validation (read-only) | No — needs Shioaji credentials |
+| `python -m forecast_eval.live.v72_probe [--dry-run]` | [live/v72_probe.py](live/v72_probe.md) | live-path validation (**places 1 sim order**) | No — needs Shioaji credentials |

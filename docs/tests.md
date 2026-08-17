@@ -2,11 +2,26 @@
 
 **Role:** Validation of every invariant the harness depends on (SPEC §6 Phase 5, §9).
 **Run:** `uv run python -m pytest forecast_eval/tests/ -v` (use the local `uv` venv — see [CLAUDE.md](../CLAUDE.md)).
-**98 tests, ~7 s.**
+**436 passed, ~23 s** (2026-08-12).
 
 > Per-file docs are intentionally consolidated here: each test already carries a
-> docstring explaining its case, so this page is a coverage map rather than 6 thin
-> pages.
+> docstring explaining its case, so this page is a coverage map rather than one
+> thin page per file.
+
+> **On mutation checks.** Several live-path invariants were verified by
+> deliberately reverting the fix and confirming the tests fail — the right-label
+> shift, the deal-dedup key, the flatten-storm gate, the session-aware watchdog,
+> the trading-day anchor, the alias contract-code match, and (2026-08-11) the
+> §2.14 seam fix (in-progress-bar truncation, `bar_anomaly` detector), the §2.16
+> clock-flush race (`_last_emitted` guard, flush grace) and §2.17's ISO-8601
+> parse. Two of those checks caught tests that had been passing *for the wrong
+> reason*. Worth repeating when touching this code.
+>
+> **§2.18's two contract bugs are pinned differently** — by regression tests that
+> reproduce the exact live failures (an `api` whose `contracts.Futures` raises;
+> an alias whose `code` differs from the captured stamp) rather than by mutation.
+> Both were found in production, so the failure shape is known precisely and a
+> fake built to it is stronger evidence than reverting the fix would be.
 
 ## What each file covers
 
@@ -21,6 +36,40 @@
 | [test_reports.py](../tests/test_reports.py) | `fmt_value` percent semantics, `_currency_axis_range`, equity / buy-and-hold curves, mpl + plotly renderers (currency-axis linking, carrier traces, toggle masks), HTML summary sections, `generate_report` | [reports.py](reports.md) |
 | [test_volmultitf.py](../tests/test_volmultitf.py) | `VolMultiTfEmitter` (autoresearch exp227 winner) filter cascade: none / empty payload hold, all-filters-agree BUY, low-probability / counter-trend / low-vol / no-breakout gates, dead-zone hold | [strategy/volmultitf.py](strategy/volmultitf.md) |
 | [conftest.py](../tests/conftest.py) | `sys.path` shim so absolute imports work from any CWD | — |
+
+### The live path
+
+| File | Covers | Mirrors |
+|---|---|---|
+| [test_live_parity.py](../tests/test_live_parity.py) | **the V0 gate** — `LiveLoop` + `SimBroker` over the same ticks must produce bit-identical fills / signals / PnL to `run_backtest`, across 4 configs × ~39 700 bars; plus parity with a recorder attached | [live/loop.py](live/loop.md) · [run.py](run.md) |
+| [test_live_broker_sim.py](../tests/test_live_broker_sim.py) | `Broker` conformance: the §4.5 fill rules and same-tick guard survive the wrapper; `poll_fills` drains rather than peeks | [live/broker/sim.md](live/broker/sim.md) |
+| [test_shioaji_adapter.py](../tests/test_shioaji_adapter.py) | deal-before-order, duplicate deals, partial fills, cancel races, rejections, overfills, alias-vs-resolved contract code, enum dispatch; and the V4 urgent path — a FLATTEN close priced through the touch and still resting, directional, not leaking past its scope even on an exception — all against a scripted fake, no network | [live/broker/shioaji.md](live/broker/shioaji.md) |
+| [test_live_bars.py](../tests/test_live_bars.py) | left-labelling, close-only, empty minutes omitted, simtrade + late-print drops, `flush`; the §2.16 clock-flush race — a straggler must not reopen an emitted minute, and the 2 s grace lets it reach its own bar; plus event-for-event equality with `Environment` on 3 000 real RPT bars | [live/bars.md](live/bars.md) |
+| [test_live_backfill.py](../tests/test_live_backfill.py) | `kbars` conversion mechanics and the right-label shift; the in-progress trailing bar dropped, on both sides of the minute boundary; reproduces `load_minute_bars` exactly on real data | [live/backfill.md](live/backfill.md) |
+| [test_live_runtime.py](../tests/test_live_runtime.py) | warm-up assembly: policy mismatch between backfill and aggregator, emitter priming and the refuse-to-start check, off-session drops, tick capture, and the `bar_anomaly` seam detector | [live/loop.md](live/loop.md) · [live/backfill.md](live/backfill.md) |
+| [test_live_backfill_sessions.py](../tests/test_live_backfill_sessions.py) | session filtering, symmetric for night and day; `fetch_bars` refuses to guess; shift-before-filter ordering for both sessions | [live/backfill.md](live/backfill.md) · [live/sessions.md](live/sessions.md) |
+| [test_live_config.py](../tests/test_live_config.py) | **drift guard** — the pinned live config must match the `results.tsv` row it claims (thresholds, `min_prob`, Calmar), the checkpoint must be the tuned 1B, and the factories must reproduce every declared field. One test fails deliberately when research finds a better config | [live/config.md](live/config.md) |
+| [test_live_sessions.py](../tests/test_live_sessions.py) | `SessionPolicy` construction/validation, trading-day boundary, session instances, and the aggregator honouring the policy | [live/sessions.md](live/sessions.md) |
+| [test_live_state.py](../tests/test_live_state.py) | every rail and its `STOP`/`FLATTEN` action; session-aware staleness; trading-day loss anchoring; halt latching; loop-level flatten-then-stop; and that the flatten close reaches the broker inside the `urgent()` scope while ordinary strategy orders never do | [live/state.md](live/state.md) |
+| [test_live_startup.py](../tests/test_live_startup.py) | restart backoff (incl. the scored-once latch), backfill cap, trading-day roll, usage headroom, corrupt-state handling | [live/startup.md](live/startup.md) |
+| [test_live_recorder.py](../tests/test_live_recorder.py) | per-line flush survivability, `meta` header + simulation flag, serialization of timestamps/numpy, append-on-restart | [live/recorder.md](live/recorder.md) |
+| [test_live_shadow.py](../tests/test_live_shadow.py) | V4's gap measurement: only venue fills escaping `poll_fills`, pending/position answered from the venue, an episode scored even when neither side filled, slippage signed so positive always means live did worse, and statistics covering matched episodes only | [live/broker/shadow.md](live/broker/shadow.md) |
+| [test_live_capture.py](../tests/test_live_capture.py) | filtered ticks captured too (so the filters can be audited), lossless type round-trip with `simtrade` restored as `bool` not `int`, mixed whole-second/sub-second stamps parsed, the `received` clock stamped independently of the tick's, pre-schema captures still readable, periodic + on-close flush; **and that replaying a capture reproduces the live bars** | [live/capture.md](live/capture.md) |
+| [test_live_alerts.py](../tests/test_live_alerts.py) | **§2.23 the human-intervention seam**: sinks receiving only the severities they subscribed to (and defaulting to fatals only), a throwing sink swallowed + counted without starving other sinks, a broken journal path not turning a halt into a crash, fatals-only reaching the standalone journal and accumulating across runs, every rails halt raising exactly one fatal while `alerter=None` leaves the rails unchanged; and the **trade** alerts — entries named by side, exits carrying *this* round trip's PnL rather than the running total (mutation-checked against a second trade inheriting the first's result) | [live/alerts.md](live/alerts.md) · [live/state.md](live/state.md) · [live/loop.md](live/loop.md) |
+| [test_live_feedwatch.py](../tests/test_live_feedwatch.py) | **§2.22 quiet market vs. broken feed**: the exact 151 s gap that ended the soak now reading as QUIET with no resubscribe, a venue that traded without us repaired, sub-second jitter not a miss, a failed query and a `ts`-less snapshot both UNREACHABLE rather than either extreme, one query per interval not per clock tick, the repair capped per silence and refilled by a print, and a throwing resubscribe not killing the loop | [live/feedwatch.md](live/feedwatch.md) |
+| [test_live_relogin.py](../tests/test_live_relogin.py) | **§2.24 the 24 h token wall**: anchors derived as 08:40/14:55 from the session opens rather than written down, firing once per anchor per day and never twice inside a window, the window closing exactly at the open so nothing chases a login onto a live bar; backoff spacing measured at +0/+60/+180 s with the *window* — not a counter — bounding attempts to three; an unresolved window abandoning its anchor so retry state cannot leak into the next day (the first draft's bug); and the invariant, replayed over a week from **all 24 start hours**, that token age never reaches 24 h — the same test that caught a token-age floor pushing the ceiling to 18 h 36 m. Then the **verify window**: the health check running once a minute before each open, `verify=None` disabling it rather than inventing a check, a failed check taking exactly *one* recovery re-login (not a ladder), a failed check with a failed recovery reporting `VERIFY_FAILED`, and the case it exists for — every re-login attempt failing and 08:44 recovering it anyway. Plus the remaining gap, asserted rather than hidden: a lost window *does* reach the wall, but only when the check fails too | [live/relogin.md](live/relogin.md) |
+| [test_relogin_probe.py](../tests/test_relogin_probe.py) | the §2.24 instrument's own correctness, offline: the Q3 verdicts naming the dangerous case (a **duplicated** order callback) and admitting when there is no baseline to compare, a raising venue call recorded as an *answer* rather than propagating, and — against a fake that raises if `place_order` is reached — that **off-hours mode never subscribes, snapshots or orders**. Plus the sequencing that is load-bearing: Q7 probing only *after* the logout that kills the token, every live-token question answered before it, a refused login ending cleanly because that is Q6's answer, and `simulation=False` aborting before any login | [live/relogin_probe.md](live/relogin_probe.md) |
+| [test_live_resume.py](../tests/test_live_resume.py) | **§2.20 restart into an open position**: both mirrors seeded from the venue's size *and* entry price, the sign kept, the inherited entry surviving into realized PnL; a flat or unanswerable account adopting nothing; refusals above `max_position`, with an ExitRule configured, and on a second call; the adapter reading size and average entry, filtering other products, and reading a failed query as unknown rather than flat — plus the paired proof that the reconciliation rail halts the same restart when it does *not* adopt | [live/runtime.md](live/runtime.md) · [live/broker/shioaji.md](live/broker/shioaji.md) |
+| [test_live_cli.py](../tests/test_live_cli.py) | the guard rails testable without a feed: `--broker shioaji` refused without its acknowledgement flag, `--staleness-seconds` defaulting to the rails' own 120 s and actually *reaching* them through `_rails_config` (§2.21, mutation-checked), the banner stating the consequence, the VRAM floor (refuses below it, needs a GPU), `flatten_incomplete` raised only for an open position after a **FLATTEN** halt — not a STOP — and the defaults for capture and the warm-up window | [live/cli.md](live/cli.md) |
+| [test_live_contracts.py](../tests/test_live_contracts.py) | contract resolution: the `ContractsApi`-without-`Futures` start-up failure falling through to a working route, the proven route tried first, an all-routes failure naming each; and the alias rule — `TXFR1` matching a capture stamped `TXFH6` while a real rollover still fails | [live/contracts.md](live/contracts.md) |
+| [test_v4_probe.py](../tests/test_v4_probe.py) | the probe's pricing safety: the passive limit strictly below the market with a snap that can only move it further away, the offset inside the ±10 % daily band, the marketable limit crossing but still bounded, and `--allow-fill` opt-in | [live/v4_probe.md](live/v4_probe.md) |
+| [test_live_prod_audit.py](../tests/test_live_prod_audit.py) | the production audit: a permission refusal recognised as the strongest verdict while other login failures are not, one failing query never reading as 'unchanged', an open-and-closed trade still caught | [live/prod_audit.md](live/prod_audit.md) |
+| [test_live_account_fingerprint.py](../tests/test_live_account_fingerprint.py) | the national ID never appearing in any form, the account id masked, and change detection across runs on digests alone | [live/cli.md](live/cli.md) |
+| [test_live_simulation_guard.py](../tests/test_live_simulation_guard.py) | **every** Shioaji session constructed with a literal mode, only the audit module permitted `simulation=False`, and that module unable to reach any order API | [live/prod_audit.md](live/prod_audit.md) |
+| [test_v1_check_helpers.py](../tests/test_v1_check_helpers.py) | the V1 live-half diff without credentials: union-not-intersection scoring, an unmatched minute failing however good the ratio, kbars clipped to the tick window, volume reported but non-gating; and on the replay side — no fabricated trailing bar, simtrade dropped, file order preserved, policy filtering | [live/v1_check.md](live/v1_check.md) |
+| [test_v1c_check_helpers.py](../tests/test_v1c_check_helpers.py) | contract resolution surviving a container whose `__getattr__` raises `KeyError` | [live/v1c_check.md](live/v1c_check.md) |
+| [test_v72_probe.py](../tests/test_v72_probe.py) | the probe's limit price is strictly below the market, snaps away from it, and stays inside the ±10 % daily band | [live/v72_probe.md](live/v72_probe.md) |
+| [fakes/fake_shioaji.py](../tests/fakes/fake_shioaji.py) | scriptable API double — fires callbacks on command rather than simulating a matching engine | — |
 
 ## How the golden cases stay honest
 - The **SPEC §4.5 worked examples** (marketable BUY at 17501, passive BUY filling at
