@@ -28,6 +28,7 @@ tests) run with the package absent.
 from __future__ import annotations
 
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
@@ -35,6 +36,20 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from ...events import FillEvent, MarketEvent, OrderEvent
 from ..contracts import contract_codes
 from .base import Broker, HeldPosition
+
+
+# Tech: how long an IOC may stay unresolved before this broker stops counting
+#       it as pending, in seconds.
+# Why:  an IOC either fills or expires *immediately* — there is nothing for it to
+#       rest on. Whether the venue then reports that expiry is **UNMEASURED**:
+#       §2.19 saw an expired IOC leave `has_pending()` True, and the probe that
+#       would settle it needs a live session. So the ladder cannot depend on the
+#       report arriving. Three seconds is far longer than an immediate-or-cancel
+#       decision can honestly take and far shorter than the ladder's retry
+#       interval, which is what keeps the two from racing. If the probe later
+#       shows the venue does report, this becomes a backstop rather than the
+#       mechanism — and nothing about the ladder changes.
+IOC_TTL_SECONDS = 3.0
 
 
 def _load_sj() -> Any:
@@ -120,6 +135,17 @@ class ShioajiBroker(Broker):
         self.tick_size = tick_size
         self.flatten_aggression_ticks = flatten_aggression_ticks
         self._urgent = False
+        # Tech: how many ticks through the touch a roll leg is priced, `None`
+        #       when no roll leg is being submitted; and the moment after which an
+        #       unresolved IOC stops counting as pending.
+        # Why:  §2.6's roll ladder is the only path that sends IOC. It is kept
+        #       separate from `_urgent` because the two want opposite things: a
+        #       FLATTEN wants to *rest* until the next print (ROD, measured
+        #       §2.19), while a roll leg wants to expire so the ladder can
+        #       re-price it. `_ioc_deadline` exists because whether the venue
+        #       reports that expiry is **unmeasured** — see `has_pending`.
+        self._rolling_ticks = None
+        self._ioc_deadline = None
 
         # Tech: lock guarding every mutable field below, a queue of fills awaiting
         #       collection, the current order, the orders being retired, and the
@@ -154,6 +180,27 @@ class ShioajiBroker(Broker):
 
         self.attach()
 
+    def switch_contract(self, contract: Any) -> None:
+        """Point this broker at a new contract after a roll (§2.6)."""
+        # Tech: replace the contract and **rebuild** the accepted-code set from
+        #       it, discarding the codes learned for the old month.
+        # Why:  `_codes` is what `_held_lots` filters the venue's positions with.
+        #       Carrying the expired month's code forward would let a stale
+        #       position on a settled contract keep counting toward
+        #       `broker_position()`, so the reconciliation rail would compare a
+        #       mirror that holds one month against a venue sum across two — a
+        #       false desync, and one that resolves itself hours later when the
+        #       venue drops the settled leg, which is the worst kind. The roll is
+        #       the one moment where forgetting is the correct behaviour.
+        self.contract = contract
+        self._codes = set(contract_codes(contract))
+        if self.recorder is not None:
+            self.recorder.record("broker_contract_switched",
+                                 code=str(getattr(contract, "code", "?")),
+                                 delivery_month=str(
+                                     getattr(contract, "delivery_month", "?")),
+                                 codes=sorted(self._codes))
+
     def attach(self) -> None:
         # Tech: clear any existing order callback, then register ours.
         # Why:  MEASURED 2026-08-17 — `login(force_refresh=True)` replaces the
@@ -186,18 +233,39 @@ class ShioajiBroker(Broker):
         #       semantics; §4.4's cancel-on-every-signal is what bounds its life.
         sj = self._sj or _load_sj()
         urgent = self._urgent
-        price = (self.urgent_price(order.side, order.limit_price) if urgent
-                 else order.limit_price)
+        rolling = self._rolling_ticks
+        # Tech: three pricings, one order type each — ordinary, FLATTEN, roll leg.
+        # Why:  a roll leg is LMT+**IOC** and everything else is LMT+ROD (§2.6).
+        #       IOC is right *only* because the ladder retries: §2.19 measured that
+        #       an IOC alone expires into nothing, and ROD was chosen for the
+        #       flatten precisely because nothing retried it. With a retry the
+        #       trade-off inverts — IOC leaves nothing resting, so re-pricing needs
+        #       no cancel and §2.2's asynchronous cancel/replace race never
+        #       happens. It stays a **bounded limit** either way: the worst fill is
+        #       knowable before the order is sent, which is what MKT gives up.
+        if rolling is not None:
+            price = self.through_price(order.side, order.limit_price, rolling)
+        elif urgent:
+            price = self.urgent_price(order.side, order.limit_price)
+        else:
+            price = order.limit_price
         fo = sj.FuturesOrder(
             action=(sj.Action.Buy if order.side == "BUY" else sj.Action.Sell),
             price=price,
             quantity=order.quantity,
             price_type=sj.FuturesPriceType.LMT,
-            order_type=sj.OrderType.ROD,
+            order_type=(sj.OrderType.IOC if rolling is not None
+                        else sj.OrderType.ROD),
             octype=(sj.FuturesOCType.New if order.intent == "OPEN"
                     else sj.FuturesOCType.Cover),
             account=self.account,
         )
+        # Tech: an IOC gets a local deadline at submit time.
+        # Why:  see `IOC_TTL_SECONDS` — the venue's expiry report is unmeasured,
+        #       and a ladder blocked by a pending order that no longer exists is
+        #       inert while logging beautifully.
+        if rolling is not None:
+            self._ioc_deadline = time.monotonic() + IOC_TTL_SECONDS
         trade = self.api.place_order(self.contract, fo)
         with self._lock:
             self._live = _Live(
@@ -219,6 +287,7 @@ class ShioajiBroker(Broker):
                 #       no trail: it is the input to every later diagnosis, and it
                 #       cost one here before being caught.
                 urgent=urgent,
+                rolling_ticks=rolling,
                 order_type=str(getattr(fo.order_type, "value", fo.order_type)),
                 current_at_placement=current_price,
                 order_id=self._live.order_id if self._live else None,
@@ -238,6 +307,33 @@ class ShioajiBroker(Broker):
         finally:
             self._urgent = previous
 
+    @contextmanager
+    def rolling(self, aggression_ticks: int):
+        # Tech: mark submits inside this block as roll legs priced
+        #       `aggression_ticks` through the touch, and sent IOC.
+        # Why:  the same seam as `urgent()`, for the same reason — set and read on
+        #       the loop thread only, restored rather than cleared so nesting
+        #       cannot strand the flag. The ladder passes a *different* number on
+        #       every attempt, which is what makes escalation possible without the
+        #       broker holding ladder state it has no way to reason about.
+        previous, self._rolling_ticks = self._rolling_ticks, int(aggression_ticks)
+        try:
+            yield
+        finally:
+            self._rolling_ticks = previous
+
+    def through_price(self, side: str, limit_price: float,
+                      ticks: float) -> float:
+        # Tech: move the limit `ticks` through the touch — up for a BUY, down for
+        #       a SELL — snapped to the tick grid.
+        # Why:  factored out of `urgent_price` so the FLATTEN and the roll ladder
+        #       cannot drift apart on the one thing that actually fills an order.
+        #       The direction is what makes it aggressive: a BUY closing a short
+        #       must be willing to pay *more*, not less.
+        offset = ticks * self.tick_size
+        raw = limit_price + offset if side == "BUY" else limit_price - offset
+        return round(raw / self.tick_size) * self.tick_size
+
     def urgent_price(self, side: str, limit_price: float) -> float:
         # Tech: move the limit `flatten_aggression_ticks` through the touch — up
         #       for a BUY, down for a SELL — snapped to the tick grid.
@@ -247,9 +343,8 @@ class ShioajiBroker(Broker):
         #       back on the passive side, and the result is still a bounded limit —
         #       the worst fill is knowable before the order is sent, which is what
         #       an unbounded MKT gives up.
-        offset = self.flatten_aggression_ticks * self.tick_size
-        raw = limit_price + offset if side == "BUY" else limit_price - offset
-        return round(raw / self.tick_size) * self.tick_size
+        return self.through_price(side, limit_price,
+                                  self.flatten_aggression_ticks)
 
     def cancel(self) -> None:
         # Tech: ask the venue to cancel the live order and move it to the retiring
@@ -273,12 +368,43 @@ class ShioajiBroker(Broker):
             self._anomaly(f"cancel_order raised: {exc!r}")
 
     def has_pending(self) -> bool:
-        # Tech: True only while an order is live and not yet fully resolved.
-        # Why:  retiring orders deliberately do not count — the loop has already
+        # Tech: True only while an order is live and not yet fully resolved —
+        #       and an IOC past its local deadline is treated as resolved.
+        # Why:  retiring orders deliberately do not count: the loop has already
         #       disowned them, and treating them as pending would block the
-        #       replacement order §4.4 expects to place immediately.
+        #       replacement order §4.4 expects to place immediately. The IOC
+        #       deadline is the same argument against a different cause — an IOC
+        #       that expired without a report would otherwise block the roll
+        #       ladder for the whole window (§2.6). The order is *not* forgotten,
+        #       only un-pended: it stays tracked so a fill arriving in the race
+        #       window is still booked, exactly as `cancel()` does.
         with self._lock:
-            return self._live is not None and not self._live.dead
+            live = self._live
+            if live is None or live.dead:
+                return False
+            if (self._ioc_deadline is not None
+                    and time.monotonic() > self._ioc_deadline):
+                self._ioc_expired()
+                return False
+            return True
+
+    def _ioc_expired(self) -> None:
+        # Tech: move the timed-out IOC to `_retiring` and record it. Caller holds
+        #       the lock.
+        # Why:  retiring rather than dropping is what keeps a late fill bookable —
+        #       the venue's answer may simply be slower than our deadline, and a
+        #       fill we asked for and then forgot would be a position nobody owns.
+        live = self._live
+        self._live = None
+        self._ioc_deadline = None
+        if live is not None:
+            self._retiring.append(live)
+            if self.recorder is not None:
+                self.recorder.record(
+                    "ioc_timed_out", ttl_seconds=IOC_TTL_SECONDS,
+                    order_id=getattr(live, "order_id", None),
+                    note="no venue report within the local deadline; "
+                         "un-pended so the roll ladder can re-price")
 
     def pending_order(self) -> Optional[OrderEvent]:
         with self._lock:

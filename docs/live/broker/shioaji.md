@@ -20,7 +20,41 @@ module and its tests run with the package absent.
 | `submit` / `cancel` / `has_pending` / `pending_order` / `poll_fills` | method | the `Broker` interface |
 | `broker_position()` | method | signed position for this contract, `None` on query failure |
 | `broker_position_detail()` | method | the same, plus the size-weighted entry price (§2.20 resume) |
+| `switch_contract(contract)` | method | re-point at a new month after a roll, **rebuilding** the accepted-code set |
+| `rolling(aggression_ticks)` | context manager | submits inside are roll legs: **LMT+IOC**, priced that many ticks through |
+| `through_price(side, limit, ticks)` | method | the shared aggression pricing — FLATTEN and the roll ladder cannot drift apart |
+| `IOC_TTL_SECONDS` | constant | 3 s, after which an unresolved IOC stops counting as pending |
 | `anomalies` | attribute | every message it could not account for |
+
+## Rolling to a new month
+`switch_contract` replaces the contract *and* rebuilds `_codes` from it, rather
+than adding to it. That asymmetry is the point: `_codes` is what `_held_lots`
+filters the venue's positions with, so carrying the expired month's code forward
+would let a settled leg keep counting toward `broker_position()`. The
+reconciliation rail would then compare a mirror holding one month against a venue
+sum across two — a false desync that resolves itself hours later when the venue
+drops the settled leg, which is the worst kind. The roll is the one moment where
+forgetting is correct. See [live/roll.py](../roll.md).
+
+## Three pricings, two time-in-forces
+| path | price | order type |
+|---|---|---|
+| ordinary signal | the limit as given | LMT + **ROD** |
+| FLATTEN (`urgent()`) | `flatten_aggression_ticks` through | LMT + **ROD** |
+| roll leg (`rolling(n)`) | `n` ticks through | LMT + **IOC** |
+
+ROD everywhere except the roll, because §2.19 measured that neither
+time-in-force fills a stationary market — but ROD *rests* and fills on the next
+print, while IOC expires with nothing. That reasoning inverts only where a retry
+exists: the [roll ladder](../roll.md) re-prices every 10 s, so IOC's expiry is
+the feature (nothing to cancel, no cancel/replace race) rather than the defect.
+
+**`IOC_TTL_SECONDS` is a defence against an unmeasured behaviour.** §2.19 saw an
+expired IOC leave `has_pending()` **True**. If the venue never reports the expiry,
+the ladder's pending gate would block every rung. So an IOC unresolved for 3 s
+stops counting as pending here — retired into `_retiring`, not dropped, so a
+late fill is still booked. [ioc_probe.py](../ioc_probe.md) is what will replace
+this assumption with a measurement.
 
 ## Order translation
 `OPEN → FuturesOCType.New`, `CLOSE → FuturesOCType.Cover` — **explicitly, never

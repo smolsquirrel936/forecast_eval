@@ -1,5 +1,6 @@
 """Trade construction + metric pack (SPEC §7)."""
 import math
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -146,3 +147,82 @@ def test_signal_attribution_no_flip_rule():
     a = signal_attribution(signals, realized_net_pnl_points=0.0)
     assert a["signal_pnl_points"] == 2.0  # (100 - 98)
     assert a["signal_round_trips"] == 1
+
+
+# ---- one logical trade across a contract roll (§2.6) ------------------------
+#
+# Rolling closes one contract and opens another: two fills for one economic
+# position. Booked as two trades it would split a median 4.5-day hold in half and
+# inflate the trade count, so per-trade metrics would stop being comparable with
+# the backtest, where a held position simply crosses a splice.
+
+def _f(minute, side, price, fee=1.0):
+    return FillEvent(timestamp=datetime(2026, 9, 15, 20, minute), side=side,
+                     fill_price=price, quantity=1, fee=fee)
+
+
+ROLLED = [_f(0, "BUY", 100.0), _f(10, "SELL", 110.0),
+          _f(11, "BUY", 105.0), _f(20, "SELL", 115.0)]
+ROLL_TS = {ROLLED[1].timestamp, ROLLED[2].timestamp}
+
+
+def test_without_roll_fills_nothing_changes():
+    """The parameter is opt-in; every existing caller must be unaffected."""
+    assert len(build_trades(ROLLED)) == 2
+
+
+def test_a_roll_keeps_one_round_trip():
+    trades = build_trades(ROLLED, roll_fills=ROLL_TS)
+    assert len(trades) == 1
+    assert trades[0].rolled == 1
+
+
+def test_the_rolled_trade_keeps_the_original_entry_and_sums_both_legs():
+    t = build_trades(ROLLED, roll_fills=ROLL_TS)[0]
+    assert t.entry_ts == ROLLED[0].timestamp      # the hold began when it began
+    assert t.exit_ts == ROLLED[-1].timestamp
+    assert t.pnl_points == 20.0                   # 110-100 banked, then 115-105
+    assert t.fees_points == 3.0                   # entry + roll close + exit
+    assert t.net_pnl_points == 17.0
+
+
+def test_a_short_rolls_as_one_trade_too():
+    fills = [_f(0, "SELL", 100.0), _f(10, "BUY", 95.0),
+             _f(11, "SELL", 90.0), _f(20, "BUY", 85.0)]
+    t = build_trades(fills, roll_fills={fills[1].timestamp,
+                                        fills[2].timestamp})[0]
+    assert t.side == "SHORT"
+    assert t.pnl_points == 10.0
+    assert t.rolled == 1
+
+
+def test_a_roll_whose_re_entry_never_arrives_is_still_booked():
+    """A soak stopped inside the roll window, or a re-entry that never filled —
+    the position did end, and losing it from the metrics would hide the trade in
+    the one place it would be noticed."""
+    trades = build_trades(ROLLED[:2], roll_fills=ROLL_TS)
+    assert len(trades) == 1
+    assert trades[0].exit_price == 110.0
+    assert trades[0].pnl_points == 10.0
+    assert trades[0].rolled == 1
+
+
+def test_a_fresh_entry_after_an_unresumed_roll_does_not_inherit_its_pnl():
+    fills = [_f(0, "BUY", 100.0), _f(10, "SELL", 110.0),      # roll close
+             _f(30, "BUY", 200.0), _f(40, "SELL", 210.0)]     # a new decision
+    trades = build_trades(fills, roll_fills={fills[1].timestamp})
+    assert len(trades) == 2
+    assert [t.pnl_points for t in trades] == [10.0, 10.0]
+    assert [t.rolled for t in trades] == [1, 0]
+
+
+def test_two_rolls_in_one_trade_are_counted():
+    fills = [_f(0, "BUY", 100.0),
+             _f(5, "SELL", 105.0), _f(6, "BUY", 100.0),
+             _f(10, "SELL", 104.0), _f(11, "BUY", 99.0),
+             _f(20, "SELL", 109.0)]
+    rolls = {fills[1].timestamp, fills[2].timestamp,
+             fills[3].timestamp, fills[4].timestamp}
+    t = build_trades(fills, roll_fills=rolls)[0]
+    assert t.rolled == 2
+    assert t.pnl_points == 5.0 + 4.0 + 10.0

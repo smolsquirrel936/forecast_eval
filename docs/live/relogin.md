@@ -31,7 +31,7 @@ open − 5 min ............ open − 1 min ...... open
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
-| `ReloginScheduler(relogin, verify=None, anchors=…, base_backoff_seconds=60.0, max_backoff_seconds=900.0, recorder=None)` | class | both actions injected as callables |
+| `ReloginScheduler(relogin, verify=None, anchors=…, recheck_grace=20s, base_backoff_seconds=60.0, max_backoff_seconds=900.0, recorder=None)` | class | both actions injected as callables |
 | `note_login(now)` | method | record when a token was issued; the CLI's startup login must call it |
 | `token_age(now)` | method | how old the current token is, or `None` before the first login |
 | `check(now)` | method | act if a window is live; returns an `Outcome` or `None` |
@@ -47,12 +47,28 @@ would have passed: prints were still arriving five seconds before the halt.
 | Check | Then |
 |---|---|
 | answers | `VERIFIED`, token age recorded |
-| raises | **one** recovery re-login right there → `RELOGGED`, or `VERIFY_FAILED` |
+| raises | **one** recovery re-login → `RELOGGED`, then **one re-check** 20 s later → `VERIFIED` or `VERIFY_FAILED` |
 
 It gets one shot at each, not a backoff ladder: a check still retrying when the
 session opens has failed at its only job. The recovery attempt is worth taking
 because we are still in the quiet, and the alternative is trading on a session
 we have just proven is broken.
+
+**The re-check exists because the recovery used to settle the window on its own
+— and that hid the exact failure this window was built to catch.** MEASURED
+2026-08-19 (§2.6): a soak whose contract had rolled had a live token and a dead
+feed. The check caught it at 14:59, the recovery re-login succeeded, and the
+window settled on *that* — reporting `RELOGGED`/INFO for a session that was
+unusable. The run bled to a staleness halt sixteen minutes later and the FATAL
+never fired. **A login proves a login; only the check proves the session.**
+
+The 20 s grace is not padding. The check's tick half asserts a print has arrived
+*since* the last re-login, and the recovery re-login resets that baseline — so
+re-checking immediately would fail by construction, every time, turning every
+recovery into a FATAL. 20 s is long enough for a subscription to deliver on a
+tape that is printing, and leaves the verdict ~40 s ahead of the open. A re-check
+still owed when the window closes is itself a `VERIFY_FAILED`: nothing may leave
+the window unsettled.
 
 **This replaced an age-based backstop** ("re-login anywhere if age > 20 h"),
 which was designed and then rejected. A backstop fires on a clock reading,
@@ -112,6 +128,27 @@ is the only time of day when that costs nothing.
   maps that to INFO/WARN. Same seam as [FeedWatch](feedwatch.md), and it is what
   keeps every branch testable with no transport.
 
+## Proven in the soak — 2026-08-18
+`outputs/live_20260817_134515` crossed the wall and kept going: started
+2026-08-17 13:45:15, past 24 h at 2026-08-18 13:45:15, still running at
+2026-08-19 01:29 (35 h 44 m). The §2.24 soak died at 24 h 0 m 36 s.
+
+| | |
+|---|---|
+| Windows fired | 14:55/14:59, 08:40/08:44, 14:55/14:59 — all six |
+| Re-logins / verifies | 3 / 3, `attempts=1` each |
+| Failed / abandoned / verify-failed | 0 / 0 / 0 |
+| Peak token age | **17 h 45 m 00 s** — the designed ceiling, to the second |
+| Alerts | the three INFO re-logins, nothing else at any severity |
+
+**The evidence is the REST calls made after the wall, not the uptime.**
+`api.usage()` answered at 2026-08-18 14:59:00, 25 h 13 m 45 s after the login
+that issued the first token, and the feed check's `api.snapshots()` answered a
+minute later. `usage()` is the call that raised `TokenError` in the soak, so a
+run that crosses 24 h *and* still answers it is what separates "`force_refresh`
+resets the clock" from "`force_refresh` looked like it worked" — the distinction
+this module was built around.
+
 ## The remaining gap
 **A wholly lost window still reaches the wall — but it now takes two independent
 failures.** All three re-login attempts must fail *and* the health check a minute
@@ -123,11 +160,11 @@ left implicit.
 **The 24 h lifetime rests on one data point.** The 6 h 15 m margin absorbs a real
 lifetime as short as ~18 h; below that the anchors alone fail.
 
-**Both injected bodies are now decided, from three off-hours probe runs
-(2026-08-16) — but neither is wired yet**, because two questions still need a
-session. The SDK **cannot be read**: `Shioaji` comes from a compiled
-`_core.pyd`, and `login` / `logout` / `subscribe` carry no source and no
-docstrings, so all of this is measurement.
+**Both injected bodies are decided and wired** (`cli.py:586-626`), from three
+off-hours probe runs (2026-08-16) and then proven by the soak above. The SDK
+**cannot be read**: `Shioaji` comes from a compiled `_core.pyd`, and `login` /
+`logout` / `subscribe` carry no source and no docstrings, so all of this is
+measurement.
 
 ### `relogin` = `api.login(..., force_refresh=True)`
 
@@ -148,9 +185,9 @@ The connection spike is transient: it returns to 1 within ~30 s and stays there
 (30 samples over 15 min). §2.8b caps connections at 5 per `person_id`, and two
 re-logins a day six hours apart never approach it.
 
-*Still circumstantial:* a new connection with the old one torn down is strong
-evidence of a genuinely fresh session, but "the token's 24 h clock reset" is
-proven only by a soak crossing 24 h. That is Step 5.
+*No longer circumstantial:* a new connection with the old one torn down was only
+strong evidence of a fresh session — "the token's 24 h clock reset" needed a soak
+crossing 24 h, and the 2026-08-18 run above is it.
 
 ### `verify` = `api.usage()`
 
@@ -210,12 +247,19 @@ api.set_order_callback(...)            # re-register  <- broker/shioaji.py:155
   its subscription-only `_resubscribe` cannot fix a dropped callback however
   many times it retries.
 
-### Open: `usage()` proves the token, not the feed
-A silently failed re-subscribe would still pass verification at open−1 min, and
-the first evidence would be [FeedWatch](feedwatch.md) ~60 s into the session —
-it is gated on `policy.includes()`, and 14:59 is outside. The session would open
-blind for about a minute before healing. The anchors sit inside the measured
-simtrade window, so prints *are* available to confirm against. Not yet decided.
+### `usage()` proves the token, not the feed — so the check does both
+A silently failed re-subscribe would still pass a token-only verification at
+open−1 min, and the first evidence would be [FeedWatch](feedwatch.md) ~60 s into
+the session — it is gated on `policy.includes()`, and 14:59 is outside. The
+session would open blind for about a minute before healing.
+
+Decided by taking the second half the anchors already make available: `_verify`
+asserts a tick has arrived *since* the re-login (`cli.py:623`), counting trial
+prints deliberately, because the windows sit inside the measured simtrade
+sessions precisely so there is something to confirm against. It measures the
+transport, not the market — which is why it is skipped on non-trading days
+(§2.25), where a wall-clock anchor fires onto a tape that was never going to
+print.
 
 ## Related
 [live/cli.py](cli.md) · [live/feedwatch.py](feedwatch.md) · [live/sessions.py](sessions.md) · [live/startup.py](startup.md) · [SHIOAJI_PLAN.md §2.24](../../SHIOAJI_PLAN.md)

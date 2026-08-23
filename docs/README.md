@@ -103,6 +103,8 @@ Three invariants make this honest (all enforced in code + tests):
 | [live/feedwatch.py](live/feedwatch.md) | `FeedWatch` | telling a quiet market from a broken feed — by asking the venue, not by waiting |
 | [live/relogin.py](live/relogin.md) | `ReloginScheduler` | replacing the token before its 24 h wall, in the pre-open quiet |
 | [live/relogin_probe.py](live/relogin_probe.md) | §2.24 probe | what a second `login()` actually does — the seven questions the SDK cannot be read for |
+| [live/roll.py](live/roll.md) | `RollSchedule` / `RollWatch` | crossing a contract expiry: the plan that trades the position, and the net that catches a missed one |
+| [live/ioc_probe.py](live/ioc_probe.md) | IOC-expiry probe | does an expired IOC report anything? the question that blocks the roll's retry ladder |
 | [live/alerts.py](live/alerts.md) | `Alerter` | the one door everything needing a human goes through; where a Telegram sink attaches |
 | [live/startup.py](live/startup.md) | `RestartGuard` | the rails that survive the process dying |
 | [live/recorder.py](live/recorder.md) | JSONL audit trail | what a live session writes down, and why per-line flush |

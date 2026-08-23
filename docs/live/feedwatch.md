@@ -86,5 +86,14 @@ transient gap terminal.
   the consumer thread; the default would stall tick processing for half a minute
   exactly when the feed is already suspect.
 
+## `MISSED` is also what a roll looks like
+A retired contract produces exactly this verdict — the venue trades, we receive
+nothing — and the repair here cannot fix it: re-subscribing an expired object is
+inert (measured, 15 attempts for 0 ticks, §2.6). So `MISSED` is also the reactive
+trigger for [RollWatch](roll.md), which re-reads the alias and hands back the
+month that replaced it. The repair and the roll check are complementary: one
+fixes a dropped subscription, the other fixes a subscription to something that no
+longer exists.
+
 ## Related
 [live/cli.py](cli.md) · [live/state.py](state.md) · [live/bars.py](bars.md) · [SHIOAJI_PLAN.md §2.21–§2.22](../../SHIOAJI_PLAN.md)

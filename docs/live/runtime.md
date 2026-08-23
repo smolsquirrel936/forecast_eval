@@ -26,7 +26,14 @@ first live decision, and only the first is obvious.
 |---|---|---|
 | `LiveRuntime(config, *, broker=None, recorder=None, rails=None, rails_config=None, simulation=True, emitter_prime_boundaries=500, tick_capture=None)` | class | builds the whole stack; defaults to [DryRunBroker](broker/dryrun.md) |
 | `adopt_position(*, timestamp)` | method | seed both mirrors from the venue's held position, or `None` when flat; raises when the state cannot be adopted |
-| `fetch_warmup_bars(api, contract, start, end)` | method | [fetch_bars](backfill.md) with *this* runtime's policy — the caller never picks one |
+| `fetch_warmup_bars(api, contract, start, end, *, cache_path=None, front_month_at=None)` | method | [fetch_bars_continuous](backfill.md) with *this* runtime's policy — the caller never picks one; `contract` may be a list, spliced on volume |
+| `settle_rolled_leg(*, price, timestamp, session="NIGHT")` | method | close the expiring month in both mirrors and arm the same exposure for re-entry (§2.6) |
+| `request_roll(now=None)` / `resume_roll(now=None)` | methods | the scheduled roll's two halves — close on the old month, then re-open on the new once the caller has switched |
+| `roll_state` | property | `None` / `requested` / `closing` / `switch` / `reopening` |
+| `advance_roll_ladder(now=None)` | method | re-price an unfilled roll leg one rung higher — **clock-driven**, 10 s apart |
+| `ladder_ticks(attempt)` | function | 5 / 10 / 15 / 20 / 25, then capped |
+| `ROLL_LADDER_*` | constants | start 5, step 5, max 25, interval 10 s |
+| `roll_fills` | attribute | timestamps of fills that were roll legs — `build_trades(roll_fills=…)` reads this |
 | `warm_up(bars)` | method | validate → prime emitter → pre-warm model → seed context |
 | `on_tick(ts, price, volume, *, simtrade, code)` | method | capture → filter → aggregate → `loop.on_bar` per completed bar |
 | `on_clock(now)` | method | flush a quiet bar, then run the staleness watchdog |

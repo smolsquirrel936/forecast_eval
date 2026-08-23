@@ -14,7 +14,7 @@ per-trade and unannualized.**
 | Symbol | Kind | One-liner |
 |---|---|---|
 | `TradeRecord` | dataclass | one closed round-trip (entry+exit, gross/fees/net) |
-| `build_trades(fills, …)` | function | pair opening fills with closing fills |
+| `build_trades(fills, *, roll_fills=None, …)` | function | pair opening fills with closing fills; `roll_fills` spans a contract roll |
 | `trading_metrics(trades)` | function | PnL, hit rate, drawdown, Sharpe/Sortino, fee drag |
 | `forecast_quality(forecasts, tick_df)` | function | direction hit rate + Spearman IC |
 | `signal_attribution(signals, realized)` | function | frictionless signal PnL vs realized → drag |
@@ -38,6 +38,15 @@ per-trade and unannualized.**
 - The forecast-quality realized window is in **ticks**, not the model's bar unit —
   approximate if the horizon is expressed in aggregated bars (e.g. Toto2 `1min`).
 - `build_trades` assumes `max_position == 1` (the v1 invariant).
+- **`roll_fills` keeps a contract roll one trade.** Pass the timestamps of the
+  fills that were roll legs and a closing leg listed there does not end the
+  round-trip: its PnL and fees are banked and the trade continues at the
+  re-entry's price, with `TradeRecord.rolled` counting the boundaries crossed.
+  Without it a roll splits a median 4.5-day hold into two shorter trades and
+  inflates the trade count, so per-trade metrics stop being comparable with the
+  backtest, where a held position simply crosses a splice (§2.6). The parameter
+  is opt-in — omit it and behaviour is unchanged. A roll whose re-entry never
+  arrives is still booked, at the price the position actually left at.
 
 ## Related
 [run.py](run.md) · [portfolio.py](portfolio.md) · [reports.py](reports.md) · [tests/test_metrics.py](tests.md) · [SPEC §7](../SPEC.md)

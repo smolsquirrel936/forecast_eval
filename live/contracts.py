@@ -28,7 +28,14 @@ route actually used is reported so a live run tells us which of them work.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Callable, List, Tuple
+
+# Tech: the shape of a continuous-alias code — `TXFR1`, `TXFR2`.
+# Why:  an alias carries a `delivery_month` copied from the dated contract it
+#       points at, so it is indistinguishable from a real month by that field
+#       alone. Matching the code is the only way to tell a pointer from a thing.
+_ALIAS = re.compile(r"^[A-Z]{3}R\d+$")
 
 # Tech: candidate ways to reach the TXF futures root, most-trusted first.
 # Why:  the first entry is PROVEN (four live runs). The rest are unverified
@@ -130,3 +137,43 @@ def resolve_txf(api: Any, name: str = "TXFR1") -> Tuple[Any, str]:
     code = getattr(contract, "code", "?")
     month = getattr(contract, "delivery_month", "?")
     return contract, f"{name} -> code={code} delivery_month={month} (via {route})"
+
+
+def contract_month(contract: Any) -> str:
+    """The contract's delivery month, e.g. `'202608'`; `''` when it has none."""
+    # Tech: read `delivery_month` and stringify it, mapping a missing attribute
+    #       and an explicit None onto the same empty string.
+    # Why:  the roll is decided by comparing this value across two reads of the
+    #       same alias, so it has to be a plain comparable scalar rather than
+    #       whatever the SDK happens to box it in. Empty-on-missing keeps a
+    #       duck-typed fake or a future shape change from raising inside a
+    #       liveness check whose whole job is to keep the run alive.
+    month = getattr(contract, "delivery_month", None)
+    return "" if month is None else str(month)
+
+
+def dated_months(root: Any) -> List[Any]:
+    """Every dated month contract under a futures root, nearest delivery first."""
+    # Tech: enumerate the container (falling back to attribute access when it is
+    #       not iterable), drop the `R`-aliases, and sort by delivery month.
+    # Why:  the backfill needs the month *behind* the front one to splice a
+    #       continuous series across a roll, and the alias cannot express "the
+    #       previous one". Aliases are excluded because `TXFR1` duplicates a
+    #       dated month it merely points at — counting it would make the same
+    #       contract appear twice and could sort a pointer ahead of its target.
+    #       Duck-typed enumeration for the reason `v1c_check` uses it: the
+    #       concrete container type is unverified and must not be guessed (§2.18).
+    try:
+        items = list(root)
+    except TypeError:
+        items = [getattr(root, k) for k in dir(root) if not k.startswith("_")]
+    out = []
+    for c in items:
+        code = getattr(c, "code", None)
+        month = contract_month(c)
+        if code is None or not month:
+            continue
+        if _ALIAS.match(str(code)):
+            continue
+        out.append(c)
+    return sorted(out, key=contract_month)

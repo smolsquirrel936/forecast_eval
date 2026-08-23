@@ -74,6 +74,16 @@ RELOGIN_LEAD = timedelta(minutes=5)
 #       badly degraded call finishes before the open.
 VERIFY_LEAD = timedelta(minutes=1)
 
+# Tech: how long the recovery re-login is given before the check is re-run.
+# Why:  MEASURED THE HARD WAY (§2.6). The check's tick half asserts a print has
+#       arrived *since* the last re-login, and the recovery re-login resets that
+#       baseline — so re-checking immediately would fail by construction, every
+#       time, and turn every recovery into a FATAL. 20 s is long enough for a
+#       subscription to deliver on a tape that is printing (the pre-open windows
+#       carry trial prints continuously) and short enough that the verdict still
+#       lands ~40 s before the open, which is the whole point of checking here.
+RECHECK_GRACE = timedelta(seconds=20)
+
 # Tech: a window key — a date plus the window's start time of day.
 # Why:  each window must fire once per day, so "which window" alone is not
 #       enough to remember what has been settled. Re-login and verify have
@@ -135,6 +145,7 @@ class ReloginScheduler:
     verify: Optional[Callable[[], Any]] = None
     anchors: Tuple[Tuple[time, time, time], ...] = field(
         default_factory=session_open_anchors)
+    recheck_grace: timedelta = RECHECK_GRACE
     base_backoff_seconds: float = 60.0
     max_backoff_seconds: float = 900.0
     recorder: Any = None
@@ -145,6 +156,14 @@ class ReloginScheduler:
         self._pending: Optional[WindowKey] = None   # re-login being retried
         self._attempts = 0
         self._next_attempt: Optional[datetime] = None
+        # Tech: a verify window whose recovery re-login has happened and whose
+        #       re-check is still owed, with the moment it becomes due.
+        # Why:  the window is no longer settled by the recovery itself (§2.6) —
+        #       a login that succeeds says nothing about the feed it was supposed
+        #       to repair. Holding the key here is what keeps the window open for
+        #       the one thing that does say something.
+        self._recheck: Optional[WindowKey] = None
+        self._recheck_at: Optional[datetime] = None
         self.n_relogins = 0
         self.n_failures = 0
         self.n_abandoned = 0
@@ -190,6 +209,17 @@ class ReloginScheduler:
             self.n_abandoned += 1
             self._settle(key, "relogin_abandoned", now, attempts=attempts)
             return Outcome.ABANDONED
+
+        # Tech: a re-check still owed when its window closes is a failure.
+        # Why:  the session is about to open and the last thing we know about it
+        #       is that its health check failed. Letting the window lapse quietly
+        #       would restore exactly the silence this fix removes.
+        if self._recheck is not None and (
+                window is None or window[1] != self._recheck):
+            key = self._recheck
+            self.n_verify_failures += 1
+            self._settle(key, "verify_recheck_lapsed", now)
+            return Outcome.VERIFY_FAILED
 
         if window is None:
             return None
@@ -240,6 +270,29 @@ class ReloginScheduler:
         #       session we have just proven is broken.
         if self.verify is None:
             return None
+
+        # Tech: a re-check owed from an earlier tick in this window waits out its
+        #       grace, then decides the window by itself.
+        # Why:  MEASURED (§2.6). The old code settled on the *recovery re-login*
+        #       succeeding, so a session with a live token and a dead feed
+        #       reported RELOGGED/INFO and the run bled to a staleness halt
+        #       sixteen minutes later — the FATAL this window exists to raise
+        #       never fired. A login proves a login; only the check proves the
+        #       session.
+        if self._recheck == key:
+            if self._recheck_at is not None and now < self._recheck_at:
+                return None
+            try:
+                self.verify()
+            except Exception as exc:                  # noqa: BLE001
+                self.n_verify_failures += 1
+                self._settle(key, "verify_failed_after_recovery", now,
+                             error=repr(exc))
+                return Outcome.VERIFY_FAILED
+            self.n_verified += 1
+            self._settle(key, "verified_after_recovery", now)
+            return Outcome.VERIFIED
+
         try:
             self.verify()
         except Exception as exc:                      # noqa: BLE001 — see Why
@@ -257,9 +310,18 @@ class ReloginScheduler:
                 self._settle(key, "verify_recovery_failed", now,
                              error=repr(exc2))
                 return Outcome.VERIFY_FAILED
+            # Tech: count the login, re-anchor token age, and arm the re-check
+            #       — deliberately *without* settling the window.
+            # Why:  the token really is fresh, so the counters and the age clock
+            #       must reflect it. What is not established is that the session
+            #       works, and the window stays open until the re-check says so.
             self.n_relogins += 1
             self.note_login(now)
-            self._settle(key, "relogin_after_failed_verify", now)
+            self._recheck = key
+            self._recheck_at = now + self.recheck_grace
+            self._record("relogin_after_failed_verify", when=now.isoformat(),
+                         anchor=key[1].isoformat(),
+                         recheck_at=self._recheck_at.isoformat())
             return Outcome.RELOGGED
 
         self.n_verified += 1
@@ -316,6 +378,8 @@ class ReloginScheduler:
         self._pending = None
         self._next_attempt = None
         self._attempts = 0
+        self._recheck = None
+        self._recheck_at = None
         self._record(event, when=now.isoformat(), anchor=key[1].isoformat(),
                      **fields)
 

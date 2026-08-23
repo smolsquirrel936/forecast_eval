@@ -32,5 +32,29 @@ and prints the metric pack plus a buy-and-hold floor.
 - Refuses to run if `warmup < context_length` (the model could never fire).
 - `--lookback-frac` must be strictly in (0, 1).
 
+## The contract collapse is a no-op — measured
+`load_minute_bars` keeps the highest-volume row per minute when a `contract`
+column is present, on the assumption that several months print the same minute.
+**They do not.** All three RPT files carry exactly one contract per minute (2026-08-23):
+
+| file | rows | minutes with >1 contract |
+|---|---|---|
+| `TXF_RPT_minute_night.csv` | 1 733 348 | **0** |
+| `TXF_RPT_minute_day.csv` | 1 124 790 | **0** |
+| `TXF_RPT_minute.csv` | 2 858 138 | **0** |
+
+So the files arrive already front-month-continuous, spliced by **calendar** — 106
+of 108 seams land exactly one day after the expiring month's last trading day.
+The rule stays as a guard against a future file that does mix months; it is not
+the convention the model was evaluated on, and [live/roll.py](live/roll.md)
+therefore splices live bars on the calendar rather than on volume
+(SHIOAJI_PLAN §2.6).
+
+The seam is worth knowing when reading model behaviour around a roll: its median
+jump is **0.70 %** (95 points) against a median ordinary minute of 0.0095 %, and
+95 % of seams exceed the strategy's ±0.00045 band. That is basis *plus* a whole
+day session's move, because the last trading day's 15:00–23:59 block is absent
+from the file.
+
 ## Related
 [run.py](run.md) · [forecaster/toto2.py](forecaster/toto2.md) · [SPEC §4.8](../SPEC.md)

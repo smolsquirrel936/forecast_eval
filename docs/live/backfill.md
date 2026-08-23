@@ -18,6 +18,51 @@ Output is schema-identical to `real_data.load_minute_bars`.
 |---|---|---|
 | `kbars_to_bars(kbars, *, drop_zero_volume=True, policy=None, source_label="right")` | function | pure conversion; `policy=None` keeps every bar |
 | `fetch_bars(api, contract, start, end, *, policy, now=None)` | function | one `kbars` call + conversion + in-progress-bar truncation; **`policy` is required** |
+| `fetch_bars_continuous(api, contracts, start, end, *, policy, cache_path=None, now=None)` | function | every listed month + the cache, spliced into one front-month series |
+| `collapse_front_month(frames, *, front_month_at=None)` | function | one row per minute, from the **calendar's** front month; volume breaks the tie |
+| `load_bar_cache(path)` / `save_bar_cache(path, bars, keep=30 000)` | functions | the local tail that survives a delisting |
+| `CACHE_KEEP_BARS` | constant | 30 000 — ten contexts' worth |
+
+## Splicing across a roll (§2.6)
+`kbars` is fetched **per contract**, and `TXFR1` names only the front month. The
+month *behind* it matters at exactly one moment — a warm-up that spans a roll:
+
+- the new front month's own history, before it became front, is thin back-month
+  trading, so 3 008 of those bars span far more calendar time than the ~2 days
+  the model expects;
+- **expired contracts are delisted** (§2.8 Finding D), so the month that just
+  settled cannot be fetched from the venue at all.
+
+**The splice rule is a calendar, and that was measured** (2026-08-23). All three
+RPT files — including `TXF_RPT_minute_night.csv`, the file the pinned config was
+evaluated on — carry **exactly one contract per minute**, so the highest-volume
+collapse never chose anything: the evaluated series is spliced by calendar,
+switching one day after each expiry. Volume was therefore never the convention.
+It stays as the *tie-break*, because a minute the front month did not print is
+better filled from the other month than dropped.
+
+The rule passed in is [roll](roll.md)`.front_month_at`, deliberately the same
+instant the live stream switches on. At the roll moment the expiring month
+usually still has the larger volume, so a volume rule would keep feeding the
+cache a contract we had already stopped trading — the warm-up context and the
+tape would disagree for a day and a half every month, and nothing would detect it.
+
+`fetch_bars_continuous` answers both: it merges the local cache, fetches every
+contract it is given (a delisted one raises and is skipped, which is expected),
+and collapses the result to one row per minute by **highest volume** — which is
+`real_data.load_minute_bars`'s own rule, so the spliced warm-up is the same
+front-month-continuous series the model was evaluated on, roll gaps and all. The
+cache is the only reason the pre-roll side of the splice still exists after the
+venue drops it; it is written on every backfill and capped to its tail.
+
+The cache carries a **`contract`** column so the identity of each minute survives
+— without it the collapsed output could never be re-derived under a different
+rule, and live NIGHT data is the only place the real roll behaviour will ever show
+up. A cache written before that column existed still loads, with the column blank.
+
+The cache is an optimisation and never a dependency: a missing, truncated or
+malformed file degrades to "what the venue can still serve" rather than stopping
+a start-up. It is written by a process that can be killed at any moment.
 
 ## Three corrections `kbars` needs (all measured against the live API)
 - **It is RIGHT-labelled** (2026-08-10). A day session returns `08:46 … 13:45`

@@ -28,175 +28,118 @@ This is a correction of a real habit: a 45-minute shakedown was proposed for the
 §2.20 resume fix when every line it touches runs before the first bar. Ten
 minutes covered it.
 
-## ▶ NEXT SESSION — START HERE (written 2026-08-17, V5 unblocked)
+## ▶ NEXT SESSION — START HERE (written 2026-08-23)
 
-**653 tests green (37 s). Both V5 blockers are fixed, wired and tested, and the
-start-up has been shaken down live. Nothing offline is left — what V5 needs now
-is a soak, and only duration produces it.**
+**744 tests green. §2.24 is PROVEN LIVE. §2.6 — the contract roll — was found by
+a dead soak and is now built, tested and undemonstrated.** Nothing offline is
+blocking. What is left needs a market: one probe, one shakedown, one soak.
 
-### 0. Start the soak — but shake the start-up down first
+### 0. Do these three things, in this order
 
-**Step 1 — DONE 2026-08-17 13:08** (`outputs/live_20260817_130842`), and it
-earned its keep: it found §2.26, a national ID about to be written into the trail
-twice a day. Re-run it after any change to the start-up path:
+**1 — run the IOC probe (any open session, ~45 s).** It answers the one
+assumption inside the roll ladder that is still ours rather than the venue's.
+
+```powershell
+uv run python -m forecast_eval.live.ioc_probe --i-understand-this-places-orders --control-rod
+```
+
+Unfillable orders by construction (a BUY 200 points below the market, one lot,
+`simulation=True` asserted). It must run **inside a session** — off-hours the
+venue rejects rather than expires, which is a different answer. ⚠️ The SDK's own
+banner lines carry the national ID; only the redacted paste-back block is safe to
+copy (§2.26).
+
+*What it decides:* §2.19 saw an expired IOC leave `has_pending()` **True**. The
+ladder submits only when nothing is pending, so if the venue never reports an IOC
+expiry the ladder would be inert while logging beautifully. Today
+`IOC_TTL_SECONDS = 3` covers that from our side. A clean report, or a report
+shaped like a cancel, changes nothing; a **rejection** would change the order type.
+
+**2 — shake the start-up down (5 minutes, any time).**
 
 ```powershell
 uv run python -m forecast_eval.live.cli --broker dryrun --duration-minutes 5
 ```
 
-Clean on that run: 287 ticks, the anchors banner, `token_age_at_close 0:05:17`,
-and `bars 0` / `off_session_dropped 4` / `feed_checks 0` — all correct for a
-NIGHT policy inside the day session.
+The start-up path, the warm-up, the clock block and the order path have all
+changed since the last live run. On this project the *first* live run of new code
+is where things are found — §2.22b crashed a soak 42 bars in with green tests
+behind it.
 
-None of the §2.24/§2.25 wiring has ever run live. The start-up path was
-restructured — four `@api.on_*` decorators became named functions behind
-`_register_callbacks` — and on this project the *first* live run of new code is
-where things are found: §2.22b crashed a soak 42 bars in with 14 green tests
-behind it, §2.18 killed a start-up on an object that merely shared a name. Five
-minutes proves login, callback registration, subscription, scheduler
-construction, tick flow and teardown. A crash discovered here costs nothing; the
-same crash at 14:45 costs the open.
-
-**Step 2, start at ~14:45 on a weekday:**
+**3 — restart the soak** (weekday, ~14:45 so the 14:55/14:59 anchors fire inside
+15 minutes):
 
 ```powershell
 uv run python -m forecast_eval.live.cli --broker shioaji --i-understand-this-places-orders
 ```
 
-**The shakedown and the soak are the same run.** Starting at 14:45 means the
-14:55 re-login window opens ten minutes later and fires immediately — there is no
-token-age floor — and the 14:59 verify then checks against the pre-open trial
-prints. So the whole §2.24 path is exercised **within 15 minutes of starting**,
-at exactly the moment it was designed for, and the run then rolls into the night
-session and keeps going. Nothing is spent on a rehearsal.
+The front month is now **202610** (`TXFI6` expired 2026-09-16 — check the banner).
+The bar cache starts empty and fills from this run forward.
 
-Only the user can run it (credentials live in their shell), and it is a
-foreground process — it dies with the terminal. Success is a run that crosses
-**24 h** (the §2.24 wall, ~14:45 the next day) and then a **weekend** (the §2.25
-one, Saturday 15:16).
+### 1. What the last soak proved, and what killed it
 
-At shutdown the counters that decide whether the fixes worked:
+`outputs/live_20260817_134515`, 2026-08-17 13:45 → 2026-08-19 15:15 — **49 h**.
 
-| Counter | Reading |
-|---|---|
-| **`relogins`** | should be ~2/day. **Zero across a 24 h run disproves the token lifetime rather than proving the fix**; a 401 halt *despite* them means `force_refresh` does not reset the clock |
-| `session_verified` | ~2/day, one per pre-open check |
-| `session_verify_failures` | 0. Non-zero means a session opened on a token or feed we could not confirm |
-| `relogin_abandoned` | 0. Each one is a window that closed with no fresh token |
-| `token_age_at_close` | must never approach 24 h; the design ceiling is 17 h 45 m |
-| `feed_quiet` | expect a handful per night, as before (§2.21) |
+**§2.24 is settled.** It crossed the 24 h wall at 2026-08-18 13:45 and kept
+answering REST afterwards: `api.usage()` at 14:59 (25 h 13 m after the first
+token) and `snapshots()` a minute later. 3 re-logins, 3 verifies, 0 failures,
+peak token age **17 h 45 m 00 s** — the designed ceiling to the second.
+`force_refresh=True` resets the clock; it is not a cosmetic session swap.
 
-### 1. The soak is finished — read the result, do not look for a process
+**It died on the contract roll (§2.6), and the manner matters.** TXFH6 expired on
+2026-08-19; the run held the object `TXFR1` resolved to at start-up. FeedWatch
+read it right — "the venue traded without us", 15 times — and its repair
+re-subscribed the same retired object: **15 attempts, 0 ticks**, then a staleness
+halt at 15:15. Nothing was at risk (flat, simulation), but a soak cannot outlive
+a roll without the fix below.
 
-Ran **2026-08-13 19:13:26 → 2026-08-14 19:14:02**, artifacts in
-`outputs/live_20260813_191326/`. It halted at **24 h 0 m 36 s** on an expired
-session token and shut down clean — nothing is open at the venue, nothing needs
-doing about it.
+Also found: the verify window **caught it and talked itself out of it** — the
+recovery re-login succeeded, so the window settled `RELOGGED`/INFO for a session
+that was already dead. Fixed: the window now re-checks 20 s after the recovery.
 
-What it bought:
+### 2. Built since (2026-08-19 → 08-23), all offline-tested, none demonstrated
 
 | | |
 |---|---|
-| **`feed_quiet` = 36** | thirty-six runs the old 120 s rail would have killed. §2.21 is now a measured number, not an argument |
-| `feed_missed` / `unreachable` / `resubscribes` | 0 / 0 / 0 |
-| Trading | 826 bars, 28 forecasts, 28 signals, **0 orders** — so V4's fill gap is still uncollected |
-| `off_session_dropped` = 300 | exactly the day session's 300 minutes — **this falsifies §2.15**, now corrected |
+| `live/roll.py` | `RollSchedule` (the **plan** — 15:30 the day before the last trading day) and `RollWatch` (the **net** — the alias flip, which can only settle a position, never trade it) |
+| the ladder | roll legs go out **LMT+IOC**, priced 5/10/15/20/25 ticks through, 10 s apart, clock-driven; capped because §2.19 says the venue matches on prints |
+| the splice | `collapse_front_month` follows the **roll calendar**, not volume — measured: all three RPT files carry one contract per minute, so the evaluated series was always calendar-spliced |
+| the cache | `outputs/bars_cache.csv`, with a `contract` column, because expired months are delisted and only a local copy holds the pre-roll side |
+| accounting | `build_trades(roll_fills=…)` books a rolled position as **one** round-trip; `TradeRecord.rolled` counts boundaries |
+| `live/ioc_probe.py` | written, never run — see step 0 |
 
-### 2. The two blockers — both fixed and wired 2026-08-17
+**The next roll is 2026-09-16; the roll fires 2026-09-15 15:30.** That is the
+first time any of this executes for real.
 
-**§2.24 — the 24 h token wall.** `ReloginScheduler` (`live/relogin.py`) re-logs
-in at **08:40 / 14:55** and health-checks at **08:44 / 14:59**, one minute before
-each open. Max token age 17 h 45 m against the wall; anchor windows confirmed on
-two independent days. Wired into `cli.py`: `relogin` =
-`login(force_refresh=True)` + re-assert all five registrations + subscribe;
-`verify` = `api.usage()` called directly, plus a tick check gated on
-`is_trading_day`.
-
-**§2.25 — the weekend.** `SessionPolicy.is_trading_day()`, tested inside
-`includes()`, which fixes the staleness rail, FeedWatch's polling and the bar
-filter at one site. The instrument that found the Saturday 15:16 halt now reports
-no halt and zero polls.
-
-**Also changed:** FeedWatch's repair is now the *same* re-assertion closure, not
-a subscription-only one — so a dropped callback from an SDK reconnect heals
-through the same path. Its budget is `staleness / interval` = **15**, derived
-rather than picked; the old 3 covered only the first 3 of 15 minutes.
-
-#### What the probe measured — seven questions, five runs
-
-| | |
-|---|---|
-| **Q6** | a non-trading-day login is **GRANTED** — weekend anchors need no special case |
-| **Q7** | `usage()` **raises** on a dead token (`AuthError`) — the verify window is live, not inert |
-| **Q8** | **plain `login()` is a NO-OP** (+0 connections). The closure **must** use `login(force_refresh=True)` (+1), or the fix is hollow — it would log, count and print healthy while the token expired on schedule |
-| **Q9** | the connection spike **clears in ~30 s** back to 1, flat for 15 min. §2.8b's cap of 5 is never approached. **Safe** |
-| Q4/Q5 | positions readable either side; account fingerprint unchanged |
-
-**So `relogin` = `api.login(..., force_refresh=True)` and `verify` =
-`api.usage()`** — both decided on measurements, not inference.
-
-**Q2/Q3 are answered too** (run 4, DAY session 2026-08-17): a re-login **tears
-the client down**. Ticks went 172 → **0** across it and order callbacks 2 → **0**,
-against a re-login confirmed real by the connection delta. So the closure must
-re-assert **five** things — subscription, tick callback, order callback,
-`on_session_down`, `on_event` — and must *not* reuse `cli.py`'s `_resubscribe`,
-whose unsubscribe-first step exists for repairing a live subscription, not for
-one that no longer exists.
-
-**A control run (run 5) then confirmed the mechanism:** a `plain` login — +0
-connections — leaves ticks and callbacks **untouched**, so callbacks are bound
-to the **connection object**. Re-assert after session-replacing logins and only
-those; and there is no cheap safe re-login, because the plain form is harmless
-*and* useless.
-
-**That promotes one risk.** Any replacement of the connection drops handlers,
-including a reconnect the SDK performs itself after a dropped socket — which
-would leave the process alive, subscribed and **deaf**, with FeedWatch's
-subscription-only repair unable to fix it. So the re-assertion closure belongs
-in FeedWatch's repair path as well as after our own re-login. Whether the SDK
-re-attaches on its own reconnect is still unmeasured; it needs a real socket drop
-and the 24 h soak never produced one.
-
-**The probe is finished and everything it found is wired.** The one design
-choice it exposed — that `usage()` proves the token but not the feed — is closed
-too: `verify` also asserts a tick has arrived since the re-login, using the
-pre-open trial prints the anchors deliberately sit inside.
-
-**§2.25 — the weekend — is FIXED.** `SessionPolicy.is_trading_day()` (Mon–Fri
-minus an optional holiday set), tested inside `includes()`, which fixes the
-staleness rail, FeedWatch's polling and the bar filter in one place. The
-instrument that found it now reports no halt and zero polls across the same
-weekend sweep. Residual: a **weekday market holiday** still halts a soak
-(~10–15 days a year); `SessionPolicy.holidays` carries them as data, empty by
-default, so that is a list rather than a redesign.
-
-### 3. Offline work on §2.24/§2.25 is complete
-
-`live/relogin.py` (48 tests), `live/relogin_probe.py` (25), the `cli.py` wiring,
-`SessionPolicy.is_trading_day()`, and `ShioajiBroker.attach()` — all done and
-documented. **653 tests, 37 s.** Nothing here is waiting on anything but market
-time.
-
-Two facts worth keeping to hand:
+**Two facts worth keeping to hand** (they cost a session each to learn):
 
 - `TokenError → AuthError → ShioajiError`; import from `sj`, since
-  `shioaji.error.TokenError` is deprecated (the sixth wrong form the docs have
-  offered). A logged-out session raises `AuthError: Not authenticated`; an
-  expired token raises `TokenError: Token is expired`.
-- The SDK **cannot be read** — `Shioaji` is a compiled `_core.pyd` with no source
-  and no docstrings on `login` / `logout` / `subscribe`. Every behaviour above
-  came from the probe.
+  `shioaji.error.TokenError` is deprecated — the sixth wrong form the docs have
+  offered. A logged-out session raises `AuthError: Not authenticated`; an expired
+  token raises `TokenError: Token is expired`.
+- The SDK **cannot be read.** `Shioaji` is a compiled `_core.pyd` with no source
+  and no docstrings on `login` / `logout` / `subscribe`. Introspection is
+  exhausted; a probe is the only remaining instrument, which is why there are
+  four of them in `live/`.
 
-**The SDK cannot be read.** `Shioaji` comes from a compiled `_core.pyd`;
-`login` / `logout` / `subscribe` carry no source and no docstrings. Introspection
-is exhausted here — the probe is the only remaining instrument.
+### 3. Everything since `402c179` is uncommitted
 
-### 4. Everything is still uncommitted
+26 modified files, 6 new (`live/roll.py`, `live/ioc_probe.py`, their docs and
+tests) — ~2 000 lines. The same standing risk as before, back again.
 
-`live/` (29 modules), `SHIOAJI_PLAN.md`, `docs/live/`, `tests/fakes/` and 29 live
-test files are **untracked** — roughly 7 000 lines and 653 tests with no commit
-behind any of it. This is the largest standing risk in the project and it is not
-a technical one.
+### 4. What is still open, in rough priority
+
+1. **V4's fill-gap number is still zero.** 49 h of soak produced 56 forecasts,
+   56 signals, **0 orders** — every forecast fell inside the ±0.00045 band. At the
+   pinned stride the rate is 0.18–0.37 orders/night, so this accrues in months,
+   not weeks. It is a **hard gate before real money**.
+2. **V5 is far from passed** — 5 unattended days, a kill-and-restart against a
+   *strategy* position (never done), a network drop (never seen).
+3. **The weekend has never been crossed live** (§2.25 is fixed offline).
+4. **An SDK self-reconnect dropping callbacks is unmeasured** — the re-assertion
+   closure is in FeedWatch's repair path as a precaution, untested against a real
+   socket drop.
+5. **No external watcher** for `kill -9` / power loss — deferred by decision.
 
 ### 5. Older V5 items, unchanged
 
@@ -328,8 +271,8 @@ assistant's shell (verified: absent at process, user and machine scope). Run
 | **V1c — `kbars` convention** | **PASSED** — and it found a real mismatch: `kbars` is **right-labelled** and carries the night session. Both corrected in `backfill.py`. Content diff moved to V3 (expired contracts are delisted). | `live/backfill.py` + `live/v1c_check.py`; 35 offline tests (`test_live_backfill{,_sessions}.py`, `test_v1c_check_helpers.py`) + 3 live runs 2026-08-10 |
 | **Session scope** | **DECIDED** (§2.12) — **NIGHT** only, `forced_close=False`. The strategy holds a **median 4.5 days**; the three defects that followed from getting this backwards are all fixed. | `params.json` + 174 trades all tagged NIGHT |
 | **V3 — live dry run** | **dry runs PASSED** (10 min 2026-08-11, then 60 min across the 05:00 close). Found and fixed the seam defect §2.14. Outstanding: simtrade + off-session filter (§2.15) and the `kbars`↔ticks diff | `outputs/live_20260811_034*`, `outputs/live_20260811_041125` |
-| **V4 — sim orders + fill gap** | **PARTIAL** (2026-08-12) — code complete and proven against the venue; the fill-model **gap number was not collected** (deferred, see the decision). **Hard gate before real money.** | `live/broker/shadow.py`, `live/v4_probe.py`; §2.19 |
-| V5 — soak | **UNBLOCKED (2026-08-17), awaiting the run.** Both blockers fixed and wired: **§2.24** — the 24 h token wall, closed by `ReloginScheduler` plus a seven-question probe that measured every SDK behaviour it rests on (a plain `login()` is a no-op; `force_refresh=True` is the form; callbacks die with the connection, so all five registrations are re-asserted). **§2.25** — the weekend, closed by `SessionPolicy.is_trading_day()`. Residual: a weekday market holiday still halts a soak; holidays are a data set, empty by default. What remains is **duration** — 5 unattended days, one deliberate kill-restart against a *strategy* position, and V4's fill gap accruing in the same run | `live/{relogin,relogin_probe}.py`, `live/sessions.py`; 653 tests |
+| **V4 — sim orders + fill gap** | **PARTIAL** (2026-08-12) — code complete and proven against the venue; the fill-model **gap number was not collected** (deferred, see the decision). **Hard gate before real money.** A 49 h soak (2026-08-17) added **nothing**: 56 forecasts, 56 signals, **0 orders**, every one inside the ±0.00045 band. At 0.18–0.37 orders/night this accrues in months. | `live/broker/shadow.py`, `live/v4_probe.py`; §2.19 |
+| V5 — soak | **ATTEMPTED 2026-08-17 → 08-19 (49 h), ended by §2.6.** It settled **§2.24**: the run crossed the 24 h wall and kept answering REST 25 h in, with peak token age 17 h 45 m — `force_refresh=True` genuinely resets the clock. It then died on the **contract roll**: the alias `TXFR1` is dereferenced once at start-up, FeedWatch re-subscribed the retired month 15 times for 0 ticks, staleness halt. Fixed by `live/roll.py` (a calendar **plan** plus the alias **net**, an IOC aggression ladder, a calendar splice and one-logical-trade accounting) — **none of it demonstrated; the next roll is 2026-09-16**. Still owed: 5 unattended days, a kill-restart against a *strategy* position, a weekend, and V4's fill gap accruing in the same run | `live/{relogin,roll,ioc_probe}.py`, `live/sessions.py`; 744 tests |
 | INT | not started | — |
 
 **All pre-V3 work is complete (2026-08-11).** Environment rebuilt and verified
@@ -558,6 +501,273 @@ These are *usually* the same but diverge around rollover when volume migrates
 before the alias does. Log both the resolved `code` and `delivery_month` on every
 bar and every order; assert they match the position's contract before submitting
 a CLOSE. → **V1b**.
+
+#### The alias is resolved once, at start-up — FIXED 2026-08-19, unproven live
+
+`resolve_txf` is called from a single site (`cli.py:405`), before the loop. The
+alias is dereferenced there and the resulting **contract object is what the run
+holds for its whole life** — every `subscribe`, every order, every reconciliation.
+`TXFR1` tracking the front month is a property of *reading* the alias, and a
+long-running process reads it exactly once.
+
+So a soak spanning a roll keeps trading a contract the venue has retired.
+`capture.py:57` already notes the code can change at rollover; nothing acts on it.
+
+#### MEASURED 2026-08-19 — the roll killed the soak, and the repair was inert
+
+`live_20260817_134515` started 2026-08-17 and resolved `TXFR1` →
+`delivery_month=202608`; all 96 624 captured ticks are stamped `TXFH6`. That
+contract's last trading day was the third Wednesday, **2026-08-19**, and it
+traded a normal day session to 13:44:59. Then:
+
+```
+04:59:00  last bar of the night session          (bar 1657, the last bar ever)
+13:44:59  TXFH6's final print
+14:55:00  re-login, ok — re-subscribes the same expired contract
+14:59:00  verify_failed: "no tick since the re-login (count still 96624)"
+14:59:05  recovery re-login succeeded → reported RELOGGED, INFO, window settled
+15:00:00  feed_check MISSED — and 15 more, once a minute
+15:15:00  HALT: no market data for 900.2 s
+```
+
+**The mechanism: one contract object, two different resolutions.** The venue kept
+answering `api.snapshots()` with a *live* front month — `venue_ts` advancing and
+volume climbing 575 → 1 796 through the new session — while the subscription
+delivered nothing at all. So `subscribe` binds to the month the alias resolved to
+at start-up (`target_code=TXFH6`, now expired), whereas `snapshots` re-resolves
+`TXFR1` at call time and follows the roll. FeedWatch read that gap exactly right
+— "the venue traded without us", 15 times — and its repair could not close it:
+**re-subscribing the old object is inert, 15 attempts for 0 ticks.** A roll is
+repaired only by re-reading the alias from `api.Contracts` and subscribing the
+*new* object.
+
+**The verify window caught it and then talked itself out of it — FIXED
+2026-08-19.** The tick half fired correctly at 14:59, one minute before the open,
+exactly its design case. But `_run_verify` took one recovery re-login and settled
+on *that call* succeeding, without re-running the check — so a session still
+receiving no ticks reported `RELOGGED`/INFO instead of `VERIFY_FAILED`/FATAL. The
+loudest alert in the system stayed silent while the run bled to a staleness halt
+sixteen minutes later.
+
+The window now stays open after the recovery and **re-checks 20 s later**, which
+decides it: `VERIFIED` or `VERIFY_FAILED`, either way ~40 s before the open. The
+grace is load-bearing rather than padding — the check's tick half asserts a print
+since the last re-login and the recovery re-login *resets that baseline*, so an
+immediate re-check would fail by construction and make every recovery a FATAL. A
+re-check still owed when the window closes is a `VERIFY_FAILED` too; nothing may
+leave the window unsettled. 6 new tests, `tests/test_live_relogin.py` now 54.
+
+Nothing was at risk — flat account, simulation-only — but **V5's
+five-unattended-day criterion cannot be met across a roll** without either a
+restart or code that re-resolves.
+
+The cheap operational answer is a restart after settlement, which re-reads the
+alias. The design question — re-resolve in-process on a schedule, or on an
+expiry check, and how a *held position* migrates when the contract under it
+retires — is untouched, and the second half of it is the hard part: the strategy
+holds a median 4.5 days, which is longer than the gap between a roll and the
+position that straddles it.
+
+#### The fix — `live/roll.py`, built 2026-08-19
+
+**Detection.** `RollWatch` re-reads the alias and compares `delivery_month`,
+driven from two triggers the CLI already has: after a successful re-login (in the
+pre-open quiet), and on a FeedWatch `MISSED` — the verdict the dead soak produced
+fifteen times. A 5-minute throttle keeps the reactive trigger from turning a
+genuine feed outage into a venue call a minute. Nothing raises out of `check`: it
+runs inside a liveness path, so a failed read is recorded and retried rather than
+ending a healthy run.
+
+`refresh` (`api.fetch_contracts`) is injected **separately** from `resolve`,
+because whether a `force_refresh` re-login re-downloads the contract table is
+unmeasured and unmeasurable from a compiled `_core.pyd`. Calling it explicitly
+means the fix does not rest on that assumption.
+
+**Application.** `cli.py:_apply_roll` moves all four holders of the expired
+object together — the name the closures read, the broker's contract *and* its
+accepted-code set (`switch_contract`, which rebuilds rather than adds, so a
+settled leg cannot keep counting toward `broker_position()`), the subscription,
+and the verify window's tick baseline. Forgetting any one of them is what makes a
+roll look repaired while staying broken.
+
+**The position.** The alias moves only *after* the old month is dead, so by the
+time a roll is detectable the venue has already cash-settled anything held —
+there is no order that could close it. `settle_rolled_leg` closes the leg in both
+mirrors through the same two calls a venue fill uses, at the last price this
+process saw, recorded with `price_is_estimated: true` because the real number
+comes from a settlement auction we never see. The size is then re-opened on the
+first bar of the new month through the ordinary signal path, which is what
+rolling the exposure means once the old leg is beyond reach.
+
+**The warm-up.** `fetch_bars_continuous` splices: cache + every listed month,
+collapsed to one row per minute by highest volume — `real_data.load_minute_bars`'s
+own rule, so a warm-up spanning a roll is the same front-month-continuous series
+the model was evaluated on. The local cache exists because **expired contracts
+are delisted** (§2.8 Finding D): after the settlement the pre-roll bars are
+unreachable from the venue, and only a local copy still has them. Without this a
+restart near a roll warms up on the new month's thin back-month history, where
+3 008 bars span weeks rather than ~2 days.
+
+**37 tests** — 28 in `tests/test_live_roll.py`, 3 on the broker's code set in `tests/test_shioaji_adapter.py`, and 6 on the verify window's re-check in `tests/test_live_relogin.py`; suite **691 green**. The scheduled roll that followed is below. All of it is
+offline — **none of it has run against a real roll.** The next settlement is the
+third Wednesday of September 2026 (2026-09-16); until then the evidence is that
+the September contract resolves and the run stays alive, not that the roll path
+works.
+
+#### The scheduled roll — BUILT 2026-08-23
+
+The reactive path above is a net, not a plan: the alias only flips **after** the
+old month is dead, so it can never roll a position, only settle one. The plan
+moves while both months still trade.
+
+| | `RollSchedule` — the plan | `RollWatch` — the net |
+|---|---|---|
+| Driven by | the calendar | the alias's `delivery_month` |
+| Fires | 15:30 the day before the last trading day | after the expiry |
+| Position | **closed on the old month, re-opened on the new** | settled; the venue got there first |
+
+**Why 15:30 that evening.** For a NIGHT strategy the expiring month's final night
+session starts 15:00 the day *before* its last trading day — the 15:00 session on
+the last trading day already belongs to the next month. 15:30 is the most liquid
+half hour either contract sees (the incoming month is thin, so the roll wants the
+busiest moment, not the calmest), and it is ~13 h clear of the contract's end, so
+a failed roll has the whole session behind it. 04:00 also satisfies "an hour
+before the close" and is the worst hour of the tape: 8–12 lot bars on both
+contracts at once. The window stays open an hour because the roll is two orders
+that both have to fill.
+
+**No holiday table, deliberately.** `last_trading_day` computes the naive third
+Wednesday. If a holiday moves the real one *later* we roll early — harmless. If
+*earlier*, we roll late and `RollWatch` catches the expiry, which is the path that
+already existed. A table would replace two survivable errors with one silent
+dependency maintained for ever. What is checked instead is the tape: before
+rolling, both months are snapshotted and the incoming one must be printing. The
+gate is "is the month we are about to trade alive", **not** "has volume crossed
+over" — at the roll instant the expiring month usually still has the larger
+volume, so a crossover test would refuse every correct roll. Both volumes are
+recorded, which is how the calendar gets validated from data later.
+
+**The sequence is driven by observation, never a timer.** `request_roll` →
+`submit_exit` on the old month → the close *fills* → `switch` → the CLI moves the
+contract → `resume_roll` → entry on the new month → that fills. A close that does
+not fill stays visible as `closing` instead of advancing into a switch that would
+strand the old lot.
+
+#### The roll ladder — BUILT 2026-08-23, and one assumption inside it
+
+**Market orders were asked for and rejected on evidence.** The request was that
+the roll be guaranteed to execute; `MKT` does not deliver that here. §2.19
+measured that Shioaji's simulator **matches on prints, not on a resting book** —
+in a print-less minute no price fills, so aggression is irrelevant and a market
+order buys nothing the ladder does not. In production it would fill, but it gives
+up the bound: the worst fill stops being knowable before the order is sent, in a
+night-session back month. `MKP` is the right shape and its band semantics are
+still unverified.
+
+**What was built instead: an escalating-aggression ladder, IOC.**
+
+| attempt | 1 | 2 | 3 | 4 | 5 | 6+ |
+|---|---|---|---|---|---|---|
+| ticks through | 5 | 10 | 15 | 20 | 25 | 25 |
+
+- Equal **5-tick steps** (the operator's call, over doubling) — every rung's cost
+  is knowable in advance.
+- **Capped at 25**, because past a point aggression stops helping for the §2.19
+  reason and only spends the bound. Beyond it the ladder retries at the cap.
+- **IOC, not ROD** — and this inverts §2.19's flatten conclusion *only* because a
+  retry now exists. Nothing rests, so re-pricing needs no cancel and §2.2's
+  asynchronous cancel/replace race never happens: **the retry is the re-price.**
+- **10 s between rungs, not the 5 s first proposed.** `max_orders_per_minute` is
+  10 and a breach is a **STOP halt** — halted mid-roll while still holding the
+  expiring contract is the worst state reachable here. 10 s is 6/min for one leg,
+  inside the cap with room for the other, and longer than `IOC_TTL_SECONDS` so
+  attempt N+1 cannot race attempt N's expiry.
+- **Clock-driven**, because a bar is a minute wide and the point is to retry
+  inside one. Only submission moved off the bar path; fill collection stays the
+  loop's, so the single-consumer invariant is untouched.
+
+**The assumption, stated because it is load-bearing.** The ladder submits only
+when nothing is pending, and §2.19 saw **an expired IOC leave `has_pending()`
+True**. Whether the venue reports an IOC expiry is UNMEASURED —
+`live/ioc_probe.py` answers it and needs a live session, which was not available.
+So the broker does not depend on the answer: an IOC unresolved after
+`IOC_TTL_SECONDS` (3 s) stops counting as pending on our side, **retired rather
+than dropped** so a late fill is still booked. If the probe shows the venue does
+report, this becomes a backstop and nothing else changes. If it shows the venue
+reports something *else* — a rejection, a different `op_type` — that is the one
+finding that could still change the design.
+
+**Simultaneous legs were rejected.** Closing the old month and opening the new one
+at the same instant is unrepresentable in the current state model: one
+`self.contract` per broker, one signed int per mirror, one month's code set for
+reconciliation. A buy that fills against a sell that does not leaves two lots
+across two contracts, `max_position=1` violated and the reconciliation rail
+halting into that state. The cost of sequencing is ~1 point of tracking error (a
+median night minute moves 0.0095 %, ~4 points at 45 000, and the gap is one bar);
+the cost of double exposure is hundreds.
+
+**15 further tests** — 7 on the ladder, 8 on the broker's IOC path and local
+deadline; suite **744 green**. `tests/test_ioc_probe.py` (11) covers the probe's
+own reading and redaction.
+
+#### MEASURED 2026-08-23 — the splice rule is a calendar, and volume never was
+
+The question was whether the bar splice should follow volume (as
+`load_minute_bars` appears to) or the calendar. It is settled, from the data:
+
+| file | rows | minutes carrying >1 contract |
+|---|---|---|
+| `TXF_RPT_minute_night.csv` | 1 733 348 | **0** |
+| `TXF_RPT_minute_day.csv` | 1 124 790 | **0** |
+| `TXF_RPT_minute.csv` | 2 858 138 | **0** |
+
+**`load_minute_bars`'s highest-volume collapse is a no-op on every dataset this
+project has evaluated on** — there was never anything to choose between. The
+evaluated series is spliced by **calendar**: across 108 seams in the night file,
+106 land exactly one day after the expiring month's last trading day, all stamped
+00:00, each preceded by a ~19 h gap (the last trading day's 15:00–23:59 block is
+absent from the file entirely).
+
+**The seam is large.** Median jump **95 points / 0.70 %**, mean 155 pts, max 760
+pts (8.0 %); ordinary 1-min |return| runs median 0.0095 %, p99 0.099 %. So **95 %
+of seams exceed the ±0.00045 band**, and the model was evaluated on a series
+carrying one ~0.7 % discontinuity a month — basis *plus* a whole day session's
+move, because of the 19 h hole. Calmar 13.6742 already includes whatever that
+does.
+
+Three things follow, and all three are now implemented:
+
+- `collapse_front_month` takes `front_month_at` and follows the roll calendar,
+  with volume kept only as the tie-break for a minute the front month did not
+  print. At the roll instant the expiring month usually still has more volume, so
+  a volume rule would keep feeding the cache a contract we had stopped trading.
+- **No revalidation is needed** — the offline series does not change. It was
+  already calendar-spliced; only live moves to match it.
+- **Splice raw, no back-adjustment.** Live switches mid-session, so its seam is
+  pure basis (~0.05 %) — roughly 14× *smaller* than the evaluated one. Adjusting
+  would move away from the evaluated convention, not toward it. Live's seam also
+  lands ~1.5 days earlier, which is unavoidable: an expired contract cannot be
+  traded and the marks must sit in the same contract as the position.
+
+The bar cache now carries a `contract` column so the rule stays re-derivable —
+live NIGHT data is the only place the real roll behaviour will ever show up.
+
+#### One logical trade across a roll
+
+`build_trades(roll_fills=…)` banks a roll's closing leg instead of ending the
+round-trip, and resumes at the re-entry's price; `TradeRecord.rolled` counts the
+boundaries crossed. Two trades would split a median 4.5-day hold in half and
+inflate the trade count, so per-trade metrics would stop being comparable with the
+backtest, where a held position simply crosses a splice. Opt-in: omit it and
+behaviour is byte-identical. A roll whose re-entry never arrives is still booked,
+at the price the position actually left at. `LiveRuntime.roll_fills` collects the
+legs and the trail records them, so a session can be re-scored months later.
+
+**26 further tests** — 7 on the schedule and calendar, 7 on the roll sequence, 5
+on the calendar splice and the cache's contract column, 7 on the trade
+accounting; suite **715 green**. Still entirely offline: **none of this has run
+against a real roll.** The next is 2026-09-16, and the roll fires 2026-09-15
+15:30.
 
 ### 2.7 Latency
 
@@ -1241,7 +1451,7 @@ that would reach it. It remains correct as a backstop (a policy change, or a fee
 that ever sent genuine out-of-session prints, would need it) and is covered by
 offline tests. **No further live run will exercise it; stop waiting for one.**
 
-### 2.16 Duplicate bars from the clock-flush race — OPEN, and the most serious yet
+### 2.16 Duplicate bars from the clock-flush race — FIXED 2026-08-11 (V1 retired the residual)
 
 **Found 2026-08-11 in the 14:55→15:15 session-open run.** The run emitted **20
 bars for 15 distinct minutes**. Five minutes — 15:00, 15:03, 15:04, 15:05,
@@ -1716,7 +1926,7 @@ in-process can report its own instant death; that needs an external watcher over
 
 **Tests:** `tests/test_live_alerts.py` (19).
 
-### 2.24 The session token expires at 24 h — MEASURED 2026-08-14, FIX PLANNED
+### 2.24 The session token expires at 24 h — MEASURED 2026-08-14, FIXED 2026-08-18
 
 **The soak died at 24 h 0 m 36 s.** Started 2026-08-13 19:13:26, halted
 2026-08-14 19:14:02, artifacts `outputs/live_20260813_191326`:
@@ -1826,7 +2036,7 @@ must call `api.usage()` **directly**.
 ~~**And one thing we do not know:** that `usage()` actually raises on an expired
 token.~~ **Settled 2026-08-16 — it raises.** See the run-1 table above.
 
-#### Step 1 — the probe — WRITTEN 2026-08-16, awaiting a run
+#### Step 1 — the probe — WRITTEN 2026-08-16, RUN FIVE TIMES 2026-08-16/17
 
 `live/relogin_probe.py`, with `tests/test_relogin_probe.py` (25) and
 `docs/live/relogin_probe.md`. **Two modes**, because five of the seven questions
@@ -2158,12 +2368,20 @@ Outcome: RELOGGED | FAILED | ABANDONED | VERIFIED | VERIFY_FAILED
 - **No token-age floor**, and no age backstop. See the two decisions above.
 - On success, re-run position reconciliation once against the new token.
 
-#### Step 3 — wire into `cli.py`
+#### Step 3 — wire into `cli.py` — WIRED 2026-08-17
 
-One call beside `feed.check(stamp)` in the clock block (`cli.py:536-568`). The
-injected closure does whatever Step 1 measured — logout/login, plus re-asserting
-the subscription and/or the order callback if the probe shows they do not
-survive. INFO on success, WARN on failure, both recorded.
+One call beside `feed.check(stamp)` in the clock block (`cli.py:702`), gated on
+nothing: the anchors sit in the pre-open quiet, which is by definition outside
+every session, so the policy gate the feed check carries would have stopped this
+firing at all.
+
+The closures are what Step 1 measured (`cli.py:586-626`). `_relogin` is
+`login(force_refresh=True)` followed by `_register_callbacks()` and
+`_subscribe(drop_first=False)` — a refreshing login replaces the session object
+and takes every registration with it. `_verify` is `api.usage()` plus an
+assertion that a tick has arrived since the re-login, skipped on non-trading days
+(§2.25). INFO on success, WARN on a failed attempt or an abandoned window, FATAL
+on a session that failed its pre-open check and could not be recovered.
 
 #### Step 4 — `tests/test_live_relogin.py` — DONE (48 tests)
 
@@ -2183,10 +2401,37 @@ Still to do when the probe lands: **fakes built from probe-measured types**
 (§2.22b). Today's fakes are bare callables that raise or return `None`, which is
 honest — they stand in for nothing whose shape we have observed yet.
 
-#### Step 5 — verify in the soak, not in a separate run
+#### Step 5 — verify in the soak, not in a separate run — PASSED 2026-08-18
 
-Success is the next soak crossing **24 h** with `relogin` records at 08:40 and
-14:55, `verified` records at 08:44 and 14:59, and no 401.
+Success was the next soak crossing **24 h** with `relogin` records at 08:40 and
+14:55, `verified` records at 08:44 and 14:59, and no 401. All three happened.
+
+`outputs/live_20260817_134515` started 2026-08-17 13:45:15, **passed the wall at
+2026-08-18 13:45:15 and was still running at 2026-08-19 01:29 (35 h 44 m)** —
+where the soak above died at 24 h 0 m 36 s.
+
+| Anchor | re-login | verify |
+|---|---|---|
+| 2026-08-17 night | 14:55:00, `attempts=1` | 14:59:00 `verified` |
+| 2026-08-18 day | 08:40:00, `attempts=1` | 08:44:00 `verified` |
+| 2026-08-18 night | 14:55:00, `attempts=1` | 14:59:00 `verified` |
+
+Every window settled on its first attempt: 0 failures, 0 abandoned, 0 verify
+failures. The three INFO re-login alerts are the only alerts of any severity in
+the file, and all 54 `feed_check` verdicts were `quiet`.
+
+**What closes the question is the REST calls made *after* the wall, not the
+uptime.** `api.usage()` answered at 2026-08-18 14:59:00 — 25 h 13 m 45 s after
+the login that issued the first token — and the feed check's `api.snapshots()`
+answered a minute later. `usage()` is an authenticated call on the same token
+that raised `TokenError` here, so a run that crosses 24 h *and* keeps answering
+it is exactly the branch this step named: `force_refresh=True` resets the clock,
+rather than firing on schedule and printing healthy counters while the token
+expires anyway.
+
+**Peak token age was 17 h 45 m 00 s** (2026-08-17 14:55 → 2026-08-18 08:40) — the
+designed ceiling to the second, on the overnight leg between the night anchor and
+the next day's.
 
 #### The open risk, stated (§2.24)
 

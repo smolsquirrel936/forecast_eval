@@ -71,6 +71,11 @@ Saturday 15:00 as a session.
   refreshing through it — see [relogin.md](relogin.md). Only the verify step's
   tick half is gated, because a closed day has no pre-open print to confirm
   against.
+- **The contract roll deliberately does not use `holidays`.** [roll.py](roll.md)
+  computes a naive third Wednesday, because both ways it can be wrong are
+  survivable — a holiday moving the real last trading day later makes it roll
+  early (harmless), earlier makes it roll late and `RollWatch` catches the expiry.
+  Filling this list improves the roll's timing; it is not load-bearing for it.
 - **Residual: a weekday market holiday still halts a soak** — ~10–15 days a year
   against the ~104 this fixes. `holidays` carries them as *data*, empty by
   default: a stale list would halt a run on a day the market was open, which is

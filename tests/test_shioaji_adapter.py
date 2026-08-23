@@ -572,3 +572,126 @@ def test_attach_survives_a_throwing_clear():
     api._callback = None
     b.attach()
     assert api._callback is not None
+
+
+# ---- the contract roll (§2.6) ----------------------------------------------
+#
+# A soak died holding an object the venue had retired. `switch_contract` is the
+# broker half of the repair, and the code set is the part with teeth: it decides
+# which of the venue's positions count as ours.
+
+def test_switch_contract_repoints_the_broker_at_the_new_month():
+    api, b, _rails = _broker()
+    september = make_contract(code="TXFI6", delivery_month="202609")
+    b.switch_contract(september)
+    assert b.contract is september
+
+
+def test_switch_contract_forgets_the_settled_month_instead_of_accumulating():
+    # Carrying the expired code forward would let a settled leg keep counting
+    # toward broker_position(), so the reconciliation rail would compare a mirror
+    # holding one month against a venue sum across two.
+    api, b, _rails = _broker()
+    api.positions = [FakePosition(code="TXFH6", direction="Buy", quantity=1)]
+    assert b.broker_position() == 1
+
+    b.switch_contract(make_contract(code="TXFI6", delivery_month="202609"))
+    assert b.broker_position() == 0
+    assert "TXFH6" not in b._codes
+
+
+def test_switch_contract_is_recorded_with_both_the_code_and_the_month():
+    class Rec:
+        def __init__(self):
+            self.events = []
+
+        def record(self, event, **fields):
+            self.events.append((event, fields))
+
+    rec = Rec()
+    api, b, _rails = _broker(recorder=rec)
+    b.switch_contract(make_contract(code="TXFI6", delivery_month="202609"))
+    event, fields = rec.events[-1]
+    assert event == "broker_contract_switched"
+    assert fields["code"] == "TXFI6" and fields["delivery_month"] == "202609"
+
+
+# ---- roll legs go out IOC, priced through the touch (§2.6) ------------------
+#
+# IOC is right *only* because the ladder retries: §2.19 measured that an IOC
+# alone expires into nothing, which is why the FLATTEN path uses ROD. With a
+# retry the trade-off inverts — nothing rests, so re-pricing needs no cancel and
+# §2.2's asynchronous cancel/replace race never happens.
+
+def test_an_ordinary_order_is_still_lmt_rod():
+    api, b, _rails = _broker()
+    b.submit(_buy(), current_price=17500.0)
+    sent = api.placed[-1]
+    assert str(getattr(sent.order_type, "value", sent.order_type)) == "ROD"
+
+
+def test_a_roll_leg_goes_out_ioc():
+    api, b, _rails = _broker()
+    with b.rolling(5):
+        b.submit(_buy(), current_price=17500.0)
+    sent = api.placed[-1]
+    assert str(getattr(sent.order_type, "value", sent.order_type)) == "IOC"
+
+
+def test_the_rung_prices_the_limit_through_the_touch():
+    api, b, _rails = _broker()
+    with b.rolling(15):
+        b.submit(_buy(price=17500.0), current_price=17500.0)
+    assert api.placed[-1].price == 17515.0             # a BUY pays more
+
+
+def test_a_selling_roll_leg_goes_the_other_way():
+    api, b, _rails = _broker()
+    order = OrderEvent(T0, "SELL", 17500.0, "CLOSE", quantity=1)
+    with b.rolling(15):
+        b.submit(order, current_price=17500.0)
+    assert api.placed[-1].price == 17485.0
+
+
+def test_the_roll_scope_is_restored_even_if_the_body_raises():
+    api, b, _rails = _broker()
+    with pytest.raises(RuntimeError):
+        with b.rolling(5):
+            raise RuntimeError("boom")
+    b.submit(_buy(), current_price=17500.0)
+    sent = api.placed[-1]
+    assert str(getattr(sent.order_type, "value", sent.order_type)) == "ROD"
+
+
+def test_an_unresolved_ioc_stops_counting_as_pending_after_its_deadline():
+    """The gate the whole ladder hangs on. §2.19 saw an expired IOC leave
+    `has_pending()` True; whether the venue reports the expiry is unmeasured, so
+    the ladder must not depend on it — or every rung is blocked and the ladder is
+    inert while logging beautifully."""
+    api, b, _rails = _broker()
+    with b.rolling(5):
+        b.submit(_buy(), current_price=17500.0)
+    assert b.has_pending() is True
+
+    b._ioc_deadline -= 10.0                    # the deadline has passed
+    assert b.has_pending() is False
+
+
+def test_a_timed_out_ioc_is_retired_not_forgotten():
+    """The venue may simply be slower than our deadline. A fill we asked for and
+    then forgot would be a position nobody owns."""
+    api, b, _rails = _broker()
+    with b.rolling(5):
+        b.submit(_buy(), current_price=17500.0)
+    live = b._live
+    b._ioc_deadline -= 10.0
+    b.has_pending()
+    assert b._live is None
+    assert live in b._retiring
+
+
+def test_an_ordinary_rod_order_never_times_out():
+    api, b, _rails = _broker()
+    b.submit(_buy(), current_price=17500.0)
+    assert b._ioc_deadline is None
+    assert b.has_pending() is True

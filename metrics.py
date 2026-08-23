@@ -20,7 +20,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import (Any, Callable, Collection, Dict, List, Optional,
+                    Sequence)
 
 import numpy as np
 import pandas as pd
@@ -51,18 +52,25 @@ class TradeRecord:
     net_pnl_points: float      # pnl_points - fees_points
     session: str               # session of the EXIT (where PnL is booked)
     bars_held: int             # exit_idx - entry_idx (if available)
+    rolled: int = 0            # contract rolls this round-trip survived (§2.6)
 
 
 def build_trades(
     fills: Sequence[FillEvent],
     *,
     session_lookup: Optional[Callable[[pd.Timestamp], str]] = None,
+    roll_fills: Optional[Collection[Any]] = None,
     fill_bar_idx: Optional[Sequence[int]] = None,
 ) -> List[TradeRecord]:
     """Walk fills chronologically; pair opening fills with closing fills.
 
     Assumes ``max_position == 1`` (v1 invariant) — every non-flat fill is
     either purely opening or purely closing.
+
+    ``roll_fills`` holds the timestamps of fills that are contract-roll legs
+    (§2.6). A closing fill listed there does not end the round-trip: its PnL is
+    banked and the trade continues at the re-entry's price, so one position held
+    across a roll stays one trade. Leave it ``None`` and nothing changes.
     """
     # Tech: running state for the open leg as we scan fills (position sign, entry
     #       price/time/index/fee, and side label).
@@ -76,19 +84,73 @@ def build_trades(
     entry_idx = -1
     entry_fee = 0.0
     side = ""
+    # Tech: PnL and fees banked from legs already closed by a roll, the number of
+    #       rolls this round-trip has survived, and the leg it was suspended on.
+    # Why:  §2.6 — rolling closes one contract and opens another, which is two
+    #       fills for one economic position. Booking them as two trades would
+    #       split a median 4.5-day hold into two shorter ones and inflate the
+    #       trade count, so per-trade metrics would stop being comparable with the
+    #       backtest, where a held position simply crosses a splice. `suspended`
+    #       keeps the last roll-close so an exposure that never comes back is
+    #       still booked, at the price it actually left at.
+    rolls = set() if roll_fills is None else set(roll_fills)
+    carry_pnl = 0.0
+    carry_fees = 0.0
+    n_rolled = 0
+    suspended: Optional[FillEvent] = None
 
     for k, f in enumerate(fills):
         signed = 1 if f.side == "BUY" else -1
+        if pos == 0 and suspended is not None and f.timestamp in rolls:
+            # Tech: the roll's opening leg — resume the suspended trade at the new
+            #       contract's price, keeping entry time, side and index.
+            # Why:  this is what makes the pair one trade. The entry *price* has
+            #       to move to the new month or the PnL would be measured across
+            #       two instruments; the entry *time* must not, because the hold
+            #       began when the position did.
+            pos = signed
+            entry_price = f.fill_price
+            entry_fee = f.fee
+            suspended = None
+            continue
+
         if pos == 0:
             # Tech: flat → this fill opens a position; capture all entry details.
             # Why:  the optional fill_bar_idx lets us record holding period later;
             #       when it's absent we store -1 and report 0 bars held.
+            if suspended is not None:
+                # Tech: a roll whose re-entry never arrived, and something else
+                #       has opened instead — book the suspended trade first.
+                # Why:  the exposure did end, at the roll's closing price. Letting
+                #       the new position inherit the banked PnL would attribute one
+                #       trade's result to another.
+                trades.append(_book(
+                    entry_ts, suspended, side, entry_price, pos_before=side,
+                    carry_pnl=carry_pnl, carry_fees=carry_fees,
+                    n_rolled=n_rolled, session_lookup=session_lookup,
+                    entry_idx=entry_idx, fill_bar_idx=fill_bar_idx))
+            carry_pnl = carry_fees = 0.0
+            n_rolled = 0
+            suspended = None
             pos = signed
             entry_price = f.fill_price
             entry_ts = f.timestamp
             entry_fee = f.fee
             entry_idx = fill_bar_idx[k] if fill_bar_idx is not None else -1
             side = "LONG" if signed > 0 else "SHORT"
+        elif signed != pos and f.timestamp in rolls:
+            # Tech: a roll's closing leg — bank its PnL and fees, remember it,
+            #       and go flat without emitting a trade.
+            # Why:  the position is economically continuous; only the instrument
+            #       under it changed. Everything about the entry is kept, so the
+            #       round-trip that eventually closes reports the original entry
+            #       time and side, with `rolled` saying how many boundaries it
+            #       crossed.
+            carry_pnl += (f.fill_price - entry_price) * pos
+            carry_fees += entry_fee + f.fee
+            n_rolled += 1
+            suspended = f
+            pos = 0
         elif signed != pos:  # closing fill
             # Tech: opposite-side fill → close the round-trip: PnL is (exit-entry)
             #       signed by direction, fees sum both legs, session is the exit's,
@@ -96,8 +158,8 @@ def build_trades(
             # Why:  this is the only place a TradeRecord is born; pnl*pos folds
             #       long/short into one formula, and session_lookup defers session
             #       classification so this stays independent of the Environment.
-            pnl = (f.fill_price - entry_price) * pos
-            fees = entry_fee + f.fee
+            pnl = (f.fill_price - entry_price) * pos + carry_pnl
+            fees = (f.fee if n_rolled else entry_fee + f.fee) + carry_fees
             sess = session_lookup(f.timestamp) if session_lookup else "UNKNOWN"
             bars = (
                 (fill_bar_idx[k] - entry_idx)
@@ -115,6 +177,7 @@ def build_trades(
                 net_pnl_points=pnl - fees,
                 session=sess,
                 bars_held=bars,
+                rolled=n_rolled,
             ))
             # Tech: reset all open-leg state back to flat.
             # Why:  prevents the just-closed trade from bleeding into the next pair;
@@ -127,7 +190,44 @@ def build_trades(
             side = ""
         # signed == pos would be pyramiding; v1 disallows.
 
+    # Tech: a roll left suspended when the fills run out is still a closed
+    #       position — book it at the roll's closing price.
+    # Why:  otherwise a session that rolls and then ends (a soak stopped in the
+    #       roll window, or a re-entry that never filled) silently loses the whole
+    #       round-trip from the metrics, which is the one place it would be
+    #       noticed.
+    if suspended is not None:
+        trades.append(_book(
+            entry_ts, suspended, side, entry_price, pos_before=side,
+            carry_pnl=carry_pnl, carry_fees=carry_fees, n_rolled=n_rolled,
+            session_lookup=session_lookup, entry_idx=entry_idx,
+            fill_bar_idx=fill_bar_idx))
+
     return trades
+
+
+def _book(entry_ts, exit_fill, side, entry_price, *, pos_before, carry_pnl,
+          carry_fees, n_rolled, session_lookup, entry_idx, fill_bar_idx):
+    # Tech: build the TradeRecord for a trade whose last leg was a roll close,
+    #       using only the PnL already banked.
+    # Why:  the closing leg's arithmetic happened when it was banked, so redoing
+    #       it here would double-count. This exists so the two places that can
+    #       discover an unresumed roll — a fresh entry, and the end of the
+    #       stream — cannot drift apart.
+    sess = session_lookup(exit_fill.timestamp) if session_lookup else "UNKNOWN"
+    return TradeRecord(
+        entry_ts=entry_ts,
+        exit_ts=exit_fill.timestamp,
+        side=side,
+        entry_price=entry_price,
+        exit_price=exit_fill.fill_price,
+        pnl_points=carry_pnl,
+        fees_points=carry_fees,
+        net_pnl_points=carry_pnl - carry_fees,
+        session=sess,
+        bars_held=0,
+        rolled=n_rolled,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -465,13 +565,20 @@ def compute_metrics(
     tick_df: pd.DataFrame,
     *,
     forced_close: bool = False,
+    roll_fills: Optional[Collection[Any]] = None,
 ) -> Dict[str, Dict]:
     """Full metric pack. Bucketed by session iff ``forced_close``."""
     # Tech: rebuild round-trips from the fills, tagging each by the exit's session.
     # Why:  trades are the unit every trading metric needs; classify_session is the
     #       same function the Environment used, so booking is consistent end to end.
+    # Tech: `roll_fills` keeps a position held across a contract roll one trade.
+    # Why:  §2.6 — rolling closes one month and opens another, two fills for one
+    #       economic position. Passing the legs through is what keeps a live
+    #       session's per-trade numbers comparable with a backtest, where a held
+    #       position crosses a splice instead of being closed and re-opened.
     session_lookup = classify_session
-    trades = build_trades(result.fills, session_lookup=session_lookup)
+    trades = build_trades(result.fills, session_lookup=session_lookup,
+                          roll_fills=roll_fills)
 
     out: Dict[str, Dict] = {}
     if forced_close:

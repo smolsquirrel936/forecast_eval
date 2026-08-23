@@ -46,9 +46,12 @@ def load_minute_bars(path: Path, n_bars: int | None) -> pd.DataFrame:
     * ``tick/TXF_OHLC_1min.csv`` — columns ``timestamp,open,high,low,close``.
     * ``RPT/TXF_RPT_minute.csv`` — columns
       ``datetime,contract,open,high,low,close,volume``. TXF trades several
-      contract months at once, so a minute can appear under multiple
-      ``contract`` values; we keep the **highest-volume** row per minute
-      (the front month) for a continuous series with automatic rollover.
+      contract months at once, so a minute *could* appear under multiple
+      ``contract`` values; we keep the **highest-volume** row per minute.
+      **MEASURED 2026-08-23: in practice it never does** — all three RPT files
+      carry exactly one contract per minute, so this collapse is a no-op and
+      the files are already front-month-continuous, spliced on the calendar
+      one day after each expiry (SHIOAJI_PLAN §2.6).
 
     If ``n_bars`` is None, return every traded minute; otherwise return
     the trailing ``n_bars`` rows. Dropping NaN closes matters because
@@ -65,10 +68,15 @@ def load_minute_bars(path: Path, n_bars: int | None) -> pd.DataFrame:
 
     # Tech: if a per-minute "contract" column exists, collapse each minute to the
     #       single highest-volume contract before anything else.
-    # Why:  multiple contract months print at the same minute; mixing them would put
-    #       several rows on one timestamp (breaking the monotonic-time assumption) and
-    #       splice prices across strikes. The most-traded contract is the front month,
-    #       so volume-max selection tracks the liquid leg and rolls over cleanly.
+    # Why:  a defence against several rows landing on one timestamp, which would
+    #       break the monotonic-time assumption and splice prices across months.
+    #       **It has never had to fire.** MEASURED 2026-08-23 across all three RPT
+    #       files (1.1M / 1.7M / 2.9M rows): zero minutes carry more than one
+    #       contract, so the series arrives already front-month-continuous. That
+    #       matters beyond trivia — the live splice was built to reproduce "the
+    #       evaluated convention", and the evaluated convention turned out to be a
+    #       *calendar*, not this rule (SHIOAJI_PLAN §2.6). Kept as a guard, not
+    #       relied on as a definition.
     if "contract" in df.columns:
         idx = df.groupby("timestamp")["volume"].idxmax()
         df = df.loc[idx].reset_index(drop=True)

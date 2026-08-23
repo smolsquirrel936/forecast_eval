@@ -261,10 +261,13 @@ def test_a_failed_verify_takes_one_recovery_relogin():
     fired = _tick(s, MON.replace(hour=8, minute=44),
                   MON.replace(hour=8, minute=45), step_seconds=1)
 
-    assert [f[1] for f in fired] == [Outcome.RELOGGED]
+    # The recovery login fires first, and the re-check then condemns the
+    # session: this verify never recovers, so RELOGGED must not be the last word.
+    assert [f[1] for f in fired] == [Outcome.RELOGGED, Outcome.VERIFY_FAILED]
     assert len(logins) == 1
     assert "verify_failed" in rec.kinds()
     assert "relogin_after_failed_verify" in rec.kinds()
+    assert "verify_failed_after_recovery" in rec.kinds()
 
 
 def test_a_failed_verify_and_failed_recovery_reports_verify_failed():
@@ -281,8 +284,9 @@ def test_a_failed_verify_and_failed_recovery_reports_verify_failed():
     assert "verify_recovery_failed" in rec.kinds()
 
 
-def test_verify_gets_one_shot_not_a_retry_ladder():
-    """A check still retrying when the session opens has failed at its job."""
+def test_verify_is_one_check_one_recovery_and_one_recheck():
+    """A check still retrying when the session opens has failed at its job — so
+    the window allows exactly one re-check after the recovery, not a ladder."""
     calls = []
 
     def boom():
@@ -293,7 +297,7 @@ def test_verify_gets_one_shot_not_a_retry_ladder():
     s.note_login(MON - timedelta(hours=12))
     _tick(s, MON.replace(hour=8, minute=44),
           MON.replace(hour=8, minute=45), step_seconds=1)
-    assert len(calls) == 1
+    assert len(calls) == 2
 
 
 def test_verify_backs_up_an_abandoned_relogin_window():
@@ -306,10 +310,16 @@ def test_verify_backs_up_an_abandoned_relogin_window():
         if n[0] <= 3:                     # the three windowed attempts fail
             raise RuntimeError("blip")
 
-    s = ReloginScheduler(
-        relogin=relogin,
-        verify=lambda: (_ for _ in ()).throw(RuntimeError("401 expired")),
-    )
+    checks = [0]
+
+    def verify():
+        # Fails once — the state the abandoned window left — then passes, because
+        # the recovery login above genuinely repaired it.
+        checks[0] += 1
+        if checks[0] == 1:
+            raise RuntimeError("401 expired")
+
+    s = ReloginScheduler(relogin=relogin, verify=verify)
     s.note_login(MON - timedelta(hours=12))
     fired = _tick(s, MON.replace(hour=8, minute=40),
                   MON.replace(hour=8, minute=45), step_seconds=1)
@@ -317,7 +327,7 @@ def test_verify_backs_up_an_abandoned_relogin_window():
     kinds = [f[1] for f in fired]
     assert kinds.count(Outcome.FAILED) == 3
     assert Outcome.ABANDONED in kinds
-    assert kinds[-1] is Outcome.RELOGGED     # recovered in the verify window
+    assert kinds[-1] is Outcome.VERIFIED     # recovered, and then proven
     assert s.n_relogins == 1
 
 
@@ -435,3 +445,92 @@ def test_recorder_is_optional():
     s = _sched(recorder=None)
     s.note_login(MON - timedelta(hours=12))
     assert len(_tick(s, MON, MON + timedelta(days=1))) == 2
+
+
+# ---- the recovery re-check (§2.6) ------------------------------------------
+#
+# The soak that found this had a live token and a dead feed. The check caught it
+# at 14:59, the recovery re-login succeeded, and the window settled on *that* —
+# reporting RELOGGED/INFO while the session was unusable. The run then bled to a
+# staleness halt sixteen minutes later, with the FATAL this window exists to
+# raise never firing. A login proves a login; only the check proves the session.
+
+def _dead_feed_scheduler(recovers, recorder=None):
+    """Verify fails; the recovery login succeeds; the re-check goes either way."""
+    calls = [0]
+
+    def verify():
+        calls[0] += 1
+        if calls[0] == 1 or not recovers:
+            raise RuntimeError("no tick since the re-login — the feed did not come back")
+
+    s = ReloginScheduler(relogin=lambda: None, verify=verify, recorder=recorder)
+    s.note_login(MON - timedelta(hours=12))
+    return s, calls
+
+
+def test_a_recovery_that_did_not_help_now_ends_in_verify_failed():
+    """The §2.6 case, and the whole point of the re-check."""
+    s, _calls = _dead_feed_scheduler(recovers=False, recorder=(rec := Recorder()))
+    fired = _tick(s, MON.replace(hour=14, minute=59),
+                  MON.replace(hour=15, minute=0), step_seconds=1)
+
+    assert [f[1] for f in fired] == [Outcome.RELOGGED, Outcome.VERIFY_FAILED]
+    assert s.n_verify_failures == 1
+    assert "verify_failed_after_recovery" in rec.kinds()
+
+
+def test_the_verdict_still_lands_before_the_session_opens():
+    """A FATAL after the open would be a report, not a defence."""
+    s, _calls = _dead_feed_scheduler(recovers=False)
+    fired = _tick(s, MON.replace(hour=14, minute=59),
+                  MON.replace(hour=15, minute=0), step_seconds=1)
+    when, outcome = fired[-1]
+    assert outcome is Outcome.VERIFY_FAILED
+    assert when < MON.replace(hour=15, minute=0)
+
+
+def test_a_recovery_that_worked_reports_verified():
+    s, _calls = _dead_feed_scheduler(recovers=True, recorder=(rec := Recorder()))
+    fired = _tick(s, MON.replace(hour=14, minute=59),
+                  MON.replace(hour=15, minute=0), step_seconds=1)
+
+    assert [f[1] for f in fired] == [Outcome.RELOGGED, Outcome.VERIFIED]
+    assert s.n_verified == 1
+    assert s.n_verify_failures == 0
+    assert "verified_after_recovery" in rec.kinds()
+
+
+def test_the_recheck_waits_out_its_grace_before_deciding():
+    """Re-checking immediately would fail by construction: the recovery re-login
+    resets the tick baseline the check reads, so the feed is given time to
+    deliver before it is condemned."""
+    s, calls = _dead_feed_scheduler(recovers=True)
+    start = MON.replace(hour=14, minute=59)
+    _tick(s, start, start + timedelta(seconds=15), step_seconds=1)
+    assert calls[0] == 1                      # only the original check has run
+
+    _tick(s, start + timedelta(seconds=15), start + timedelta(seconds=25),
+          step_seconds=1)
+    assert calls[0] == 2                      # the re-check fired after 20 s
+
+
+def test_a_recheck_left_owed_when_the_window_closes_is_a_failure():
+    """Nothing may leave the window unsettled — the session is about to open and
+    the last thing known about it is that its health check failed."""
+    s, _calls = _dead_feed_scheduler(recovers=True)
+    s.recheck_grace = timedelta(minutes=5)    # longer than the window itself
+    fired = _tick(s, MON.replace(hour=14, minute=59),
+                  MON.replace(hour=15, minute=1), step_seconds=1)
+
+    assert [f[1] for f in fired] == [Outcome.RELOGGED, Outcome.VERIFY_FAILED]
+    assert s.n_verify_failures == 1
+
+
+def test_the_recovery_re_anchors_token_age_even_when_the_recheck_fails():
+    """The token really is fresh; only the session is not. Leaving the age clock
+    on the old login would hand the next window a wrong number."""
+    s, _calls = _dead_feed_scheduler(recovers=False)
+    at = MON.replace(hour=14, minute=59)
+    _tick(s, at, at + timedelta(minutes=1), step_seconds=1)
+    assert s.token_age(at + timedelta(minutes=1)) < timedelta(minutes=2)

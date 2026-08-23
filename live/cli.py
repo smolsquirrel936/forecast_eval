@@ -46,12 +46,15 @@ from forecast_eval.live.broker.shioaji import ShioajiBroker       # noqa: E402
 from forecast_eval.live.broker.sim import SimBroker               # noqa: E402
 from forecast_eval.live.capture import TickCapture                # noqa: E402
 from forecast_eval.live.config import PINNED                      # noqa: E402
-from forecast_eval.live.contracts import resolve_txf              # noqa: E402
+from forecast_eval.live.contracts import (                        # noqa: E402
+    contract_month, dated_months, resolve_txf, txf_root)
 from forecast_eval.live.alerts import Alerter                     # noqa: E402
 from forecast_eval.live.feedwatch import FeedWatch, Verdict       # noqa: E402
 from forecast_eval.live.recorder import Recorder                  # noqa: E402
 from forecast_eval.live.relogin import (                          # noqa: E402
     Outcome as ReloginOutcome, ReloginScheduler)
+from forecast_eval.live.roll import (                             # noqa: E402
+    Roll, RollSchedule, RollWatch, front_month_at, roll_at)
 from forecast_eval.live.runtime import LiveRuntime                # noqa: E402
 from forecast_eval.live.startup import (                          # noqa: E402
     RestartBlocked, RestartGuard, RestartPolicy,
@@ -287,6 +290,25 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _warmup_contracts(api: Any, front: Any) -> list:
+    """The listed months up to and including `front`, oldest first."""
+    # Tech: enumerate the dated TXF months, keep those not later than the front
+    #       month, and return the last two. Any failure degrades to `[front]`.
+    # Why:  §2.6 — two months is what a spliced warm-up needs: the one trading now
+    #       and the one behind it, whose bars cover the window before the roll.
+    #       Older months are already delisted and would only cost a wasted fetch.
+    #       This runs on the start-up path, where an SDK-shape surprise must not
+    #       be fatal (§2.18): the single-contract answer is exactly today's
+    #       behaviour, so the degraded case is never worse than not trying.
+    try:
+        root, _route = txf_root(api)
+        month = contract_month(front)
+        earlier = [c for c in dated_months(root) if contract_month(c) <= month]
+        return earlier[-2:] or [front]
+    except Exception:                                  # noqa: BLE001 — see Why
+        return [front]
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     cfg = PINNED
@@ -365,6 +387,8 @@ def main(argv=None) -> int:
     #       venue broker was ever built.
     live_broker = None
     relogin = None
+    roll = None
+    schedule = None
     login_at = None
     exit_code = 0
     try:
@@ -465,8 +489,18 @@ def main(argv=None) -> int:
         start = end - timedelta(days=args.warmup_days)
         guard.record_backfill(datetime.now())
         t0 = time.time()
-        bars = rt.fetch_warmup_bars(api, contract, start.isoformat(),
-                                    end.isoformat())
+        # Tech: back-fill from every listed month up to the front one, merged
+        #       with the local cache, rather than from the front month alone.
+        # Why:  §2.6. The front month's *own* history before it became front is
+        #       thin back-month trading, so 3 008 of those bars span far more
+        #       calendar time than the model expects. Collapsing several months on
+        #       volume reproduces the offline loader's front-month-continuous
+        #       series; the cache carries the month that just expired, which the
+        #       venue delists and cannot serve any more (§2.8 Finding D).
+        bars = rt.fetch_warmup_bars(api, _warmup_contracts(api, contract),
+                                    start.isoformat(), end.isoformat(),
+                                    cache_path=out.parent / "bars_cache.csv",
+                                    front_month_at=front_month_at)
         print(f"backfill: {len(bars)} bars in {time.time()-t0:.1f}s "
               f"[{bars['timestamp'].iloc[0]} .. {bars['timestamp'].iloc[-1]}]"
               if len(bars) else "backfill: EMPTY")
@@ -646,6 +680,180 @@ def main(argv=None) -> int:
             recorder=recorder,
         )
 
+        def _apply_roll(rolled, stamp):
+            # Tech: adopt the new contract everywhere the old one was held — the
+            #       name the closures read, the broker's contract and code set,
+            #       and the subscription — then settle any open leg.
+            # Why:  §2.6, MEASURED. One expired object was held by four different
+            #       things at once, and re-subscribing it was inert: fifteen
+            #       repairs, zero ticks, then a staleness halt. Every holder has
+            #       to be moved together, in one place, or the next roll finds
+            #       whichever one was forgotten.
+            nonlocal contract
+            old = contract
+            try:
+                api.unsubscribe(old, quote_type=sj.QuoteType.Tick)
+            except Exception as exc:                  # noqa: BLE001
+                # Tech: a failed unsubscribe on the expired month is expected.
+                # Why:  the venue has already retired it; there may be nothing
+                #       left to unsubscribe from. Recorded rather than raised,
+                #       because the subscription that matters is the next line.
+                recorder.record("unsubscribe_failed", error=repr(exc))
+            contract = rolled.contract
+            if live_broker is not None:
+                live_broker.switch_contract(contract)
+            _subscribe(drop_first=False)
+            # Tech: re-baseline the verify window's tick counter.
+            # Why:  it asserts a tick has arrived *since* the last re-login. The
+            #       ticks it counted belong to a contract that no longer prints,
+            #       so leaving the baseline where it was would let a stale count
+            #       satisfy the check on the new month.
+            ticks["at_relogin"] = ticks["n"]
+            print(f"contract rolled {rolled.from_month} -> {rolled.to_month}: "
+                  f"{rolled.note}")
+            alerter.warn("contract_rolled",
+                         f"front month {rolled.from_month} -> "
+                         f"{rolled.to_month}; re-subscribed and re-pointed")
+            # Tech: settle the expiring leg in the mirrors, at the last price this
+            #       process saw, and arm the same exposure for the new month.
+            # Why:  the alias moves only after the old month is dead, so the venue
+            #       has already cash-settled anything held — there is no order
+            #       that could close it. `LiveRuntime` re-opens on the first bar
+            #       of the new contract, which is what "roll the exposure" means
+            #       once the old leg is beyond reach.
+            if rt.trader.position != 0:
+                mark = rt.last_price
+                if mark is None:
+                    alerter.fatal("roll_unsettled",
+                                  "the contract rolled with a position open and "
+                                  "no price to settle it at — position mirror is "
+                                  "stale")
+                else:
+                    rt.settle_rolled_leg(price=mark, timestamp=stamp)
+
+        def _next_month_contract():
+            # Tech: the listed month directly after the one being held.
+            # Why:  the alias cannot express "the next one" — `TXFR1` still names
+            #       the expiring month right up to its expiry, which is exactly
+            #       why the scheduled roll cannot be driven by it. `TXFR2` is the
+            #       documented second-nearest alias and is tried first; the dated
+            #       list is the fallback for the day that alias is not there.
+            held = contract_month(contract)
+            try:
+                nxt, note = resolve_txf(api, "TXFR2")
+                if contract_month(nxt) > held:
+                    return nxt, note
+            except Exception as exc:                  # noqa: BLE001
+                recorder.record("roll_next_alias_failed", error=repr(exc))
+            root, _route = txf_root(api)
+            later = [c for c in dated_months(root)
+                     if contract_month(c) > held]
+            if not later:
+                return None, "no later month is listed"
+            c = later[0]
+            return c, (f"TXF -> code={getattr(c, 'code', '?')} "
+                       f"delivery_month={contract_month(c)} (via dated months)")
+
+        def _roll_evidence(nxt, stamp):
+            # Tech: snapshot both months, record their volumes, and return whether
+            #       the incoming one is actually printing.
+            # Why:  the roll date is a naive third Wednesday with no holiday table
+            #       (§2.6), so it is checked against the tape rather than trusted.
+            #       The gate is "is the month we are about to trade alive", not
+            #       "has volume crossed over" — at the roll instant the expiring
+            #       month usually still has the larger volume, so a crossover test
+            #       would refuse every correct roll. The volumes are recorded
+            #       either way, which is how the calendar gets validated from data
+            #       instead of from argument.
+            try:
+                snaps = api.snapshots([contract, nxt], timeout=5000)
+            except Exception as exc:                  # noqa: BLE001
+                recorder.record("roll_evidence_failed", when=stamp.isoformat(),
+                                error=repr(exc))
+                return False
+            got = {}
+            for label, snap in zip(("old", "new"), list(snaps)[:2]):
+                got[f"{label}_volume"] = getattr(snap, "total_volume", None)
+                got[f"{label}_ts"] = getattr(snap, "ts", None)
+                got[f"{label}_close"] = getattr(snap, "close", None)
+            recorder.record("roll_evidence", when=stamp.isoformat(),
+                            old_month=contract_month(contract),
+                            new_month=contract_month(nxt), **got)
+            alive = bool(got.get("new_volume")) and got.get("new_close")
+            if not alive:
+                alerter.warn("roll_deferred",
+                             f"the incoming month {contract_month(nxt)} is not "
+                             f"printing yet — not rolling on this tick")
+            return bool(alive)
+
+        def _check_schedule(stamp):
+            # Tech: run the scheduled roll — start it inside the window, and move
+            #       the contract once the runtime says the old leg is closed.
+            # Why:  §2.6. This is the *plan*; `_check_roll` below is the net. The
+            #       plan moves while both months still trade, which is the only
+            #       time a position can be rolled rather than settled.
+            if rt.roll_state == "switch":
+                nxt, note = _next_month_contract()
+                if nxt is None:
+                    alerter.fatal("roll_no_next_month",
+                                  "the old leg is closed and no later month is "
+                                  "listed — the run is flat and cannot re-enter")
+                    return
+                _apply_roll(Roll(contract=nxt, note=note,
+                                 from_month=contract_month(contract),
+                                 to_month=contract_month(nxt)), stamp)
+                roll.month = contract_month(nxt)
+                schedule.done(schedule.month, contract_month(nxt), stamp)
+                rt.resume_roll(stamp.isoformat())
+                return
+
+            if rt.roll_state is not None:
+                return                                # a roll is already running
+            if schedule.due(stamp):
+                nxt, _note = _next_month_contract()
+                if nxt is not None and _roll_evidence(nxt, stamp):
+                    alerter.info("roll_started",
+                                 f"scheduled roll {schedule.month} -> "
+                                 f"{contract_month(nxt)} beginning")
+                    rt.request_roll(stamp.isoformat())
+            elif (schedule.lapsed(stamp)
+                  and schedule.month not in lapsed_reported):
+                lapsed_reported.add(schedule.month)
+                alerter.warn("roll_window_lapsed",
+                             f"the roll window for {schedule.month} closed "
+                             f"without rolling — falling back to RollWatch, "
+                             f"which settles the position instead of trading it")
+
+        def _check_roll(stamp, reason):
+            # Tech: ask the watcher, and apply anything it hands back.
+            # Why:  one call site for both triggers, so the reactive path and the
+            #       scheduled one cannot drift into doing different things.
+            rolled = roll.check(stamp, reason=reason)
+            if rolled is not None:
+                _apply_roll(rolled, stamp)
+
+        # Tech: the roll watcher, seeded with the month resolved at start-up.
+        # Why:  §2.6 — `TXFR1` is dereferenced once and the object outlives the
+        #       month it named. `fetch_contracts` is passed as the refresh because
+        #       whether a re-login re-downloads the contract table is unmeasured;
+        #       calling it explicitly means the answer does not depend on that.
+        roll = RollWatch(
+            resolve=lambda: resolve_txf(api, args.contract),
+            month=contract_month(contract),
+            refresh=getattr(api, "fetch_contracts", None),
+            recorder=recorder,
+        )
+        # Tech: the calendar half — when we *plan* to move, as opposed to when the
+        #       venue forces us to.
+        # Why:  §2.6. The alias only flips after the old month is dead, so a plan
+        #       driven by it can never roll a position; it can only settle one.
+        #       This fires while both months trade.
+        schedule = RollSchedule(month=contract_month(contract),
+                                recorder=recorder)
+        lapsed_reported: set = set()
+        print(f"roll: {schedule.month} until "
+              f"{roll_at(schedule.month):%Y-%m-%d %H:%M}")
+
         # Tech: the token scheduler, seeded with the start-up login's timestamp.
         # Why:  §2.24 — the session token expires 24 h after login and the SDK has
         #       no refresh. Without `note_login` the first anchor would compare
@@ -703,6 +911,12 @@ def main(argv=None) -> int:
                 if outcome is ReloginOutcome.RELOGGED:
                     alerter.info("relogin",
                                  "token refreshed and callbacks re-asserted")
+                    # Tech: check for a roll immediately after a re-login.
+                    # Why:  §2.6 — the anchors sit in the pre-open quiet, which is
+                    #       the one moment a contract change can be adopted before
+                    #       real prints depend on it, and the login has just given
+                    #       the SDK its best chance of a fresh contract table.
+                    _check_roll(stamp, "after_relogin")
                 elif outcome is ReloginOutcome.FAILED:
                     alerter.warn("relogin_failed",
                                  "a re-login attempt failed — retrying inside "
@@ -721,6 +935,17 @@ def main(argv=None) -> int:
                                   "the session failed its pre-open check and "
                                   "could not be recovered — token or feed is "
                                   "dead as the session opens")
+                # Tech: the scheduled roll, checked every clock tick, and the
+                #       ladder that re-prices an unfilled roll leg.
+                # Why:  §2.6 — the window is an hour wide because the roll is two
+                #       orders that both have to fill. The ladder must run on the
+                #       *clock*: a bar is a minute wide and the whole point is to
+                #       retry inside one, escalating 5 ticks each time until the
+                #       leg goes through. Submitting off the bar path is safe —
+                #       fill *collection* stays the loop's, so the single-consumer
+                #       invariant is untouched.
+                _check_schedule(stamp)
+                rt.advance_roll_ladder(stamp.isoformat())
                 if cfg.policy.includes(stamp):
                     # Tech: alert only when the verdict *changes*, not on every
                     #       check.
@@ -737,6 +962,13 @@ def main(argv=None) -> int:
                             alerter.warn("feed_missed",
                                          "the venue traded without us — "
                                          "resubscribing")
+                            # Tech: MISSED is also what a roll looks like, so ask.
+                            # Why:  §2.6 — this is the verdict the dead soak
+                            #       produced fifteen times while its repair
+                            #       re-subscribed an expired contract. The watcher
+                            #       throttles itself, so a genuine feed outage
+                            #       cannot turn this into a venue call a minute.
+                            _check_roll(stamp, "feed_missed")
                         elif verdict is Verdict.UNREACHABLE:
                             alerter.warn("feed_unreachable",
                                          "cannot reach the venue to check the "
@@ -779,6 +1011,13 @@ def main(argv=None) -> int:
         #       lifetime rather than proved the fix; one that halts on a 401
         #       *despite* them says `force_refresh` does not reset the clock.
         #       Either way the number is what distinguishes the two.
+        if rt is not None and getattr(rt, "roll_fills", None):
+            recorder.record("roll_fills", timestamps=sorted(
+                str(t) for t in rt.roll_fills))
+        if roll is not None:
+            for k, v in roll.summary().items():
+                print(f"  {k:22s} {v}")
+            recorder.record("roll_summary", **roll.summary())
         if relogin is not None:
             for k, v in relogin.summary().items():
                 print(f"  {k:22s} {v}")

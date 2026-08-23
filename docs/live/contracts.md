@@ -27,7 +27,21 @@ as different from itself.
 | `resolve_in(container, name)` | function | attribute lookup, then key lookup; `None` if neither works |
 | `contract_codes(contract)` | function | every code identifying this contract — `code` **and** `target_code` |
 | `describe_contract_match(contract, captured)` | function | `(note, is_mismatch)` against codes seen in a capture |
+| `contract_month(contract)` | function | `delivery_month` as a plain string; `''` when it has none |
+| `dated_months(root)` | function | every dated month under a root, nearest delivery first — **aliases excluded** |
 | `ROUTES` | constant | the ordered candidates below |
+
+## The alias is a pointer, and `dated_months` drops it
+`TXFR1` carries a `delivery_month` copied from the month it points at, so it is
+indistinguishable from a real contract by that field alone — matching the *code*
+(`^[A-Z]{3}R\d+$`) is the only way to tell a pointer from a thing. Counting it
+would make the same contract appear twice and could sort a pointer ahead of its
+target.
+
+The [roll](roll.md) needs both halves of this: `contract_month` is what the roll
+is *detected* by, and `dated_months` is how the month behind the front one is
+reached — the alias cannot express "the previous one", and a spliced warm-up
+needs exactly that.
 
 ## Route order — deliberately "worst" first
 | # | Route | Status |

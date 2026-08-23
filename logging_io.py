@@ -141,6 +141,7 @@ def write_all(
     report_ticks: Optional[Any] = None,
     metrics: Optional[Mapping[str, Any]] = None,
     buy_and_hold: Optional[Mapping[str, Any]] = None,
+    roll_fills: Optional[Any] = None,
 ) -> dict:
     """Convenience: dump every artifact under ``output_dir/<name>{ext}``.
 
@@ -166,7 +167,8 @@ def write_all(
     #       the returned paths lets callers report exactly what was written (parquet
     #       or the CSV fallback).
     d = Path(output_dir)
-    trades = build_trades(result.fills, session_lookup=classify_session)
+    trades = build_trades(result.fills, session_lookup=classify_session,
+                          roll_fills=roll_fills)
     written = {
         "fills":     write_fills(result.fills, d / f"fills{ext}"),
         "orders":    write_orders(result.orders, d / f"orders{ext}"),

@@ -9,6 +9,7 @@
 Writes the five-file artifact bundle (parquet, with transparent CSV fallback), the
 `params.json` reproducibility record, and — by default — triggers chart generation.
 
+
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
@@ -16,11 +17,18 @@ Writes the five-file artifact bundle (parquet, with transparent CSV fallback), t
 | `timestamped_run_dir(name, root=None)` | function | `<root>/<name>_<YYYYMMDD_HHMMSS>/` |
 | `write_params(params, path)` | function | pretty JSON dump (str() fallback) |
 | `write_fills` / `write_orders` / `write_forecasts` / `write_signals` / `write_trades` | functions | per-artifact writers |
-| `write_all(result, output_dir, …)` | function | dump the whole bundle + optional auto-report |
+| `write_all(result, output_dir, *, roll_fills=None, …)` | function | dump the whole bundle + optional auto-report |
 
 ## The bundle
 `fills` · `orders` · `forecasts` · `signals` · `trades` (+ `params.json`). See
 [usage.md §6](../usage.md) for the on-disk layout.
+
+## Rolls
+`write_all(..., roll_fills=…)` forwards the timestamps of contract-roll legs to
+[build_trades](metrics.md), so a position held across a roll is written to
+`trades` as **one** round-trip rather than two (§2.6). Omit it and nothing
+changes — the parameter is opt-in for exactly the reason the rest of this module
+is conservative: every existing caller must keep producing the same artifact.
 
 ## Key points / gotchas
 - **Parquet → CSV fallback:** `_write` tries `to_parquet`; on any failure (no

@@ -54,12 +54,60 @@ live half and V3's shadow parity are both read back from.
    `--batch-size auto` sizes itself to fill whatever is free.
 3. **Login**, then `check_usage` — over quota, Shioaji returns *empty* history
    rather than erroring.
-4. **Resolve the contract**, printing the resolved `code` and `delivery_month`.
+4. **Resolve the contract**, printing the resolved `code` and `delivery_month`,
+   and the date the run plans to roll off it ([roll.md](roll.md)).
 5. **Adopt any held position** (§2.20) — before the backfill, so an unadoptable
    one costs seconds instead of a full warm-up.
-6. **Backfill → `warm_up`** — context, model and emitter deques (see
+6. **Backfill → `warm_up`** — from *every listed month up to the front one*,
+   merged with the local bar cache and spliced on the roll calendar, so a warm-up
+   that spans a roll is the series the model was evaluated on (see
+   [backfill.md](backfill.md)). Then context, model and emitter deques (see
    [runtime.md](runtime.md)).
 7. **Subscribe**, then run the consumer loop.
+
+## What the clock block runs, once a second
+Four things, in this order, and the ordering is not arbitrary:
+
+| | | |
+|---|---|---|
+| 1 | `rt.on_clock` + `guard.heartbeat` | close a quiet bar, prove we are alive |
+| 2 | [`relogin.check`](relogin.md) | **never** gated on the session policy — its anchors sit in the pre-open quiet, which is by definition outside every session |
+| 3 | `_check_schedule` | the [scheduled contract roll](roll.md); also ungated, for the same reason |
+| 3b | `rt.advance_roll_ladder` | re-prices an unfilled roll leg 5 ticks higher, at most every 10 s |
+| 4 | [`feed.check`](feedwatch.md) | *only* inside a session we trade — silence between 05:00 and 15:00 is expected |
+
+A successful re-login also asks [RollWatch](roll.md) whether the front month
+moved, and so does every `MISSED` verdict from the feed check. Those two are the
+reactive net; step 3 is the plan.
+
+## The contract roll (§2.6)
+A soak died because the alias `TXFR1` is dereferenced **once**, at start-up, and
+the object it returns is what every closure, the broker and the subscription hold
+for the life of the run. When the month behind it expired, the run kept
+re-subscribing a retired contract — 15 repairs, 0 ticks, then a staleness halt.
+
+`_apply_roll` is the one place that moves, and it moves **four** holders together
+plus the position:
+
+```
+api.unsubscribe(old)           # best effort; the month may already be gone
+contract = rolled.contract     # the name every closure reads
+live_broker.switch_contract()  # broker contract + accepted code set
+_subscribe(drop_first=False)   # the new object, on a fresh subscription
+ticks["at_relogin"] = ticks["n"]   # re-baseline the verify window's tick counter
+```
+
+Two paths reach it. `_check_schedule` is the **plan**: inside the roll window it
+snapshots both months (recording their volumes, which is how the naive
+third-Wednesday calendar gets validated from data), requires the incoming month
+to be printing, and asks the runtime to close the old leg — then switches once
+that close has actually filled, and arms the re-entry. `_check_roll` is the
+**net**: if the plan was missed, the alias flip is caught and the position is
+settled rather than traded, because the venue has already cash-settled it.
+
+`_warmup_contracts` supplies the other half — the listed months up to the front
+one — so the backfill can splice across the boundary. Any SDK-shape surprise
+there degrades to `[front]`, which is exactly the old behaviour.
 
 ## Key invariants / gotchas
 - **`--broker shioaji` takes two deliberate flags, not one.** Through V3 the
@@ -111,9 +159,13 @@ live half and V3's shadow parity are both read back from.
 - **Two SDK forms are deprecated and already corrected here:** the tick callback
   takes `(data)`, not `(exchange, data)`; and contracts are reached through
   `api.contracts`, not `api.Contracts`.
+- **The roll's two orders are sequenced by observation, not by a timer.** The
+  switch happens only after the closing fill is seen; a close that does not fill
+  leaves the roll visibly stuck in `closing` rather than advancing into a state
+  that would strand the old month's lot.
 - **Teardown runs in `finally`** — unsubscribe, shutdown, summary, close capture
   and recorder, logout, `guard.end`. A crash still leaves a complete artifact set
   and a clean restart ladder.
 
 ## Related
-[live/runtime.py](runtime.md) · [live/startup.py](startup.md) · [live/recorder.py](recorder.md) · [live/capture.py](capture.md) · [live/broker/dryrun.py](broker/dryrun.md) · [SHIOAJI_PLAN.md](../../SHIOAJI_PLAN.md)
+[live/runtime.py](runtime.md) · [live/roll.py](roll.md) · [live/startup.py](startup.md) · [live/recorder.py](recorder.md) · [live/capture.py](capture.md) · [live/broker/dryrun.py](broker/dryrun.md) · [SHIOAJI_PLAN.md](../../SHIOAJI_PLAN.md)
