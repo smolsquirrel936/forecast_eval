@@ -13,11 +13,14 @@ and prints the metric pack plus a buy-and-hold floor.
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
-| `DEFAULT_DATA` | const | path to the 1-min CSV |
 | `load_minute_bars(path, n_bars)` | function | drop NaN closes; `n_bars=None` → full dataset |
 | `main(argv)` | function | parse CLI, split, run (with progress bar), log, print metrics |
 
 ## Key points
+- **`--data` is required** — there is no default path. The old default named the
+  DAY file while every tuning run used NIGHT, and a session picked by a default
+  is one nothing can check (SHIOAJI_PLAN §2.12, the same reason `fetch_bars`
+  takes a required policy).
 - `--n-bars` defaults to **None** (use everything); `--lookback-frac` (0.30) sets
   the silent-warmup fraction.
 - `warmup_bars` is the *data-driven split*, so trading is suppressed across the whole

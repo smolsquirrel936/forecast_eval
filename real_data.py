@@ -35,8 +35,6 @@ from forecast_eval.metrics import buy_and_hold_pnl, compute_metrics
 from forecast_eval.run import run_backtest
 from forecast_eval.strategy.threshold import ThresholdEmitter
 
-DEFAULT_DATA = Path(r"\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_day.csv")
-
 
 def load_minute_bars(path: Path, n_bars: int | None) -> pd.DataFrame:
     """Load a 1-min OHLC file as ticks, dropping NaN closes.
@@ -103,7 +101,13 @@ def main(argv=None) -> int:
     #       split, so the warmup fraction is a first-class knob; context-length is
     #       capped by the model regardless of how much history is available.
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--data", type=Path, default=DEFAULT_DATA,
+    # Tech: --data is required; this CLI has no default dataset path.
+    # Why:  the removed default named the DAY file while every tuning run in
+    #       `results.tsv` used the NIGHT one — a session chosen by a default that
+    #       nothing can check. `fetch_bars` dropped its own session default for
+    #       exactly this reason (SHIOAJI_PLAN §2.12): a wrong one is undetectable
+    #       once it ships, so this CLI names the file or refuses to run.
+    ap.add_argument("--data", type=Path, required=True,
                     help="Path to a 1-min OHLC csv (RPT or tick schema)")
     ap.add_argument("--n-bars", type=int, default=None,
                     help="Trailing rows to use (default: full dataset)")
