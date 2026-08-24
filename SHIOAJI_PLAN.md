@@ -28,53 +28,101 @@ This is a correction of a real habit: a 45-minute shakedown was proposed for the
 §2.20 resume fix when every line it touches runs before the first bar. Ten
 minutes covered it.
 
-## ▶ NEXT SESSION — START HERE (written 2026-08-23)
+## ▶ NEXT SESSION — START HERE (written 2026-08-23, updated 2026-08-24)
 
-**744 tests green. §2.24 is PROVEN LIVE. §2.6 — the contract roll — was found by
+**746 tests green. §2.24 is PROVEN LIVE. §2.6 — the contract roll — was found by
 a dead soak and is now built, tested and undemonstrated.** Nothing offline is
-blocking. What is left needs a market: one probe, one shakedown, one soak.
+blocking. **The probe and the shakedown are both done (2026-08-24); what is left
+is the soak — step 2 below.**
 
-### 0. Do these three things, in this order
+### ⏱ IN FLIGHT — the V5 soak, launched 2026-08-24 ~14:45
 
-**1 — run the IOC probe (any open session, ~45 s).** It answers the one
-assumption inside the roll ladder that is still ours rather than the venue's.
+*(Written at 10:15 that morning, so the launch was still ahead. **Confirm it
+actually went out** before trusting the rest of this section.)*
 
 ```powershell
-uv run python -m forecast_eval.live.ioc_probe --i-understand-this-places-orders --control-rod
+uv run python -m forecast_eval.live.cli --broker shioaji --i-understand-this-places-orders --warmup-days 90
 ```
 
-Unfillable orders by construction (a BUY 200 points below the market, one lot,
-`simulation=True` asserted). It must run **inside a session** — off-hours the
-venue rejects rather than expires, which is a different answer. ⚠️ The SDK's own
-banner lines carry the national ID; only the redacted paste-back block is safe to
-copy (§2.26).
+**Start the next session by asking how it is doing** — the console tail, the
+summary block if it has stopped, or `outputs/live_<ts>/session.jsonl`. Read it
+against these expectations before concluding anything:
 
-*What it decides:* §2.19 saw an expired IOC leave `has_pending()` **True**. The
-ladder submits only when nothing is pending, so if the venue never reports an IOC
-expiry the ladder would be inert while logging beautifully. Today
-`IOC_TTL_SECONDS = 3` covers that from our side. A clean report, or a report
-shaped like a cancel, changes nothing; a **rejection** would change the order type.
+- **14:55 and 14:59, inside the first 15 minutes.** The anchors are
+  *unconditional* — `ReloginScheduler.check` has no token-age gate, so an anchor
+  window fires however new the token is. That is the whole reason for a 14:45
+  launch. Expect `relogins 1` and `session_verified 1` **before** the 15:00 open;
+  a `verify_failed` there is the FATAL this window exists to raise (§2.6).
+- **At 15:00.** `bars` starts rising, `off_session_dropped` stops, and
+  `feed_checks` begins — it is gated on `policy.includes`, so it reads 0 for the
+  entire pre-open stretch by design.
+- **Zero orders is the expected first night, not a failure.** Only 3.74 % of
+  signals are non-HOLD and the measured rate is **0.18–0.37 orders/night**; the
+  49 h soak produced 56 signals and **0** orders. Judge the run by uptime,
+  `alerts_fatal`, and `halted` — not by trade count.
+- **Still owed by V5:** 5 unattended days, a kill-restart against a *strategy*
+  position, a weekend, and V4's fill gap accruing in the same run.
+- **2026-09-15 15:30** is the first time `live/roll.py` executes for real.
 
-**2 — shake the start-up down (5 minutes, any time).**
+### Open items carried in, as of 2026-08-24
+
+1. **The working tree is dirty and nothing is committed** — `SHIOAJI_PLAN.md`,
+   `docs/live/ioc_probe.md`, `live/ioc_probe.py`, `tests/test_ioc_probe.py`. That
+   is the two IOC-probe fixes plus this record. 746 tests green.
+2. **A real national ID is committed to the repo.** `L125551606` appears as a
+   test fixture and in prose in `tests/test_ioc_probe.py`,
+   `tests/test_relogin_probe.py`, `tests/test_live_recorder.py`,
+   `live/relogin_probe.py:87`, and twice in this file's own leak write-up (the
+   "Run 1 printed…" / "Run 2 still printed…" paragraphs) — and `origin` is a GitHub
+   remote, so it is already pushed. The redaction tests use the operator's own ID
+   as the string they assert gets redacted; a synthetic `A123456789` matches the
+   same `[A-Z][0-9]{9}` pattern and would test identically. Rewriting the files
+   does not rewrite the history.
+
+**The IOC probe is DONE (2026-08-24, day session).** ✅ **The venue reports
+nothing when an IOC expires** — the only callback is the `New`/`00` submission
+ack in ~0.03 s, then silence through 10 s and an `update_status()`, 3/3. A
+cancelled ROD control *did* report, 0.109 s after the request, so the silence is
+the venue's answer and not a dead callback path. No rejection, no unexpected
+`op_type`. **`IOC_TTL_SECONDS = 3` is load-bearing and the ladder design is
+unchanged.** Full reading, and the two probe bugs it cost to get there, in §2.6's
+*MEASURED 2026-08-24*.
+
+### 0. Where the start-up steps stand
+
+**1 — shake the start-up down: DONE 2026-08-24, twice.** ✅ Clean both times —
+VRAM 30.2 GiB, contract 202609 with the roll planned 2026-09-15 15:30, backfill
+complete to the last night close, pinned config, 0 alerts, 0 late/simtrade drops.
+Run in the day session under a NIGHT policy, so `bars 0` and
+`off_session_dropped` counting *bars* (5 in 5 minutes, 1 in 1) is the expected
+reading, not a fault.
 
 ```powershell
 uv run python -m forecast_eval.live.cli --broker dryrun --duration-minutes 5
 ```
 
-The start-up path, the warm-up, the clock block and the order path have all
-changed since the last live run. On this project the *first* live run of new code
-is where things are found — §2.22b crashed a soak 42 bars in with green tests
-behind it.
+The second run measured `--warmup-days 90` before committing the soak to it — see
+*MEASURED 2026-08-24* under the priming section (§K=500).
 
-**3 — restart the soak** (weekday, ~14:45 so the 14:55/14:59 anchors fire inside
+**2 — restart the soak** (weekday, ~14:45 so the 14:55/14:59 anchors fire inside
 15 minutes):
 
 ```powershell
-uv run python -m forecast_eval.live.cli --broker shioaji --i-understand-this-places-orders
+uv run python -m forecast_eval.live.cli --broker shioaji --i-understand-this-places-orders --warmup-days 90
 ```
 
-The front month is now **202610** (`TXFI6` expired 2026-09-16 — check the banner).
-The bar cache starts empty and fills from this run forward.
+**`--warmup-days 90` is deliberate.** At the default 30 the priming window is 124
+boundaries and roughly **1 start in 6** would refuse on `<3` emitter samples; 90
+takes it to 196 boundaries and ~2 %, for 0.4 s of backfill. It does *not* triple
+the data — only two contract months are fetched, so the window scales
+sub-linearly (+32 %). Same section.
+
+The front month is **202609** — confirmed against the banner on 2026-08-24
+(`TXFR1 -> code=TXFR1 delivery_month=202609`). `TXFI6` is September and expires
+**2026-09-16**, which is also the next roll, so 202610 does not become front
+until then. **The bar cache is no longer empty** — the 90-day dryrun left 8 880
+bars in `outputs/bars_cache.csv` (2026-05-25 → 08-22, all 202609), which is the
+pre-roll side the splice will need in September.
 
 ### 1. What the last soak proved, and what killed it
 
@@ -106,7 +154,7 @@ that was already dead. Fixed: the window now re-checks 20 s after the recovery.
 | the splice | `collapse_front_month` follows the **roll calendar**, not volume — measured: all three RPT files carry one contract per minute, so the evaluated series was always calendar-spliced |
 | the cache | `outputs/bars_cache.csv`, with a `contract` column, because expired months are delisted and only a local copy holds the pre-roll side |
 | accounting | `build_trades(roll_fills=…)` books a rolled position as **one** round-trip; `TradeRecord.rolled` counts boundaries |
-| `live/ioc_probe.py` | written, never run — see step 0 |
+| `live/ioc_probe.py` | **RUN 2026-08-24** — an expired IOC reports nothing, so `IOC_TTL_SECONDS` is load-bearing and the ladder is unchanged (§2.6, *MEASURED 2026-08-24*) |
 
 **The next roll is 2026-09-16; the roll fires 2026-09-15 15:30.** That is the
 first time any of this executes for real.
@@ -272,7 +320,7 @@ assistant's shell (verified: absent at process, user and machine scope). Run
 | **Session scope** | **DECIDED** (§2.12) — **NIGHT** only, `forced_close=False`. The strategy holds a **median 4.5 days**; the three defects that followed from getting this backwards are all fixed. | `params.json` + 174 trades all tagged NIGHT |
 | **V3 — live dry run** | **dry runs PASSED** (10 min 2026-08-11, then 60 min across the 05:00 close). Found and fixed the seam defect §2.14. Outstanding: simtrade + off-session filter (§2.15) and the `kbars`↔ticks diff | `outputs/live_20260811_034*`, `outputs/live_20260811_041125` |
 | **V4 — sim orders + fill gap** | **PARTIAL** (2026-08-12) — code complete and proven against the venue; the fill-model **gap number was not collected** (deferred, see the decision). **Hard gate before real money.** A 49 h soak (2026-08-17) added **nothing**: 56 forecasts, 56 signals, **0 orders**, every one inside the ±0.00045 band. At 0.18–0.37 orders/night this accrues in months. | `live/broker/shadow.py`, `live/v4_probe.py`; §2.19 |
-| V5 — soak | **ATTEMPTED 2026-08-17 → 08-19 (49 h), ended by §2.6.** It settled **§2.24**: the run crossed the 24 h wall and kept answering REST 25 h in, with peak token age 17 h 45 m — `force_refresh=True` genuinely resets the clock. It then died on the **contract roll**: the alias `TXFR1` is dereferenced once at start-up, FeedWatch re-subscribed the retired month 15 times for 0 ticks, staleness halt. Fixed by `live/roll.py` (a calendar **plan** plus the alias **net**, an IOC aggression ladder, a calendar splice and one-logical-trade accounting) — **none of it demonstrated; the next roll is 2026-09-16**. Still owed: 5 unattended days, a kill-restart against a *strategy* position, a weekend, and V4's fill gap accruing in the same run | `live/{relogin,roll,ioc_probe}.py`, `live/sessions.py`; 744 tests |
+| V5 — soak | **ATTEMPTED 2026-08-17 → 08-19 (49 h), ended by §2.6.** It settled **§2.24**: the run crossed the 24 h wall and kept answering REST 25 h in, with peak token age 17 h 45 m — `force_refresh=True` genuinely resets the clock. It then died on the **contract roll**: the alias `TXFR1` is dereferenced once at start-up, FeedWatch re-subscribed the retired month 15 times for 0 ticks, staleness halt. Fixed by `live/roll.py` (a calendar **plan** plus the alias **net**, an IOC aggression ladder, a calendar splice and one-logical-trade accounting) — **none of it demonstrated; the next roll is 2026-09-16** — though the ladder's one open assumption was settled live on 2026-08-24 (an expired IOC reports nothing; §2.6). Still owed: 5 unattended days, a kill-restart against a *strategy* position, a weekend, and V4's fill gap accruing in the same run | `live/{relogin,roll,ioc_probe}.py`, `live/sessions.py`; 746 tests |
 | INT | not started | — |
 
 **All pre-V3 work is complete (2026-08-11).** Environment rebuilt and verified
@@ -688,14 +736,55 @@ still unverified.
 
 **The assumption, stated because it is load-bearing.** The ladder submits only
 when nothing is pending, and §2.19 saw **an expired IOC leave `has_pending()`
-True**. Whether the venue reports an IOC expiry is UNMEASURED —
-`live/ioc_probe.py` answers it and needs a live session, which was not available.
-So the broker does not depend on the answer: an IOC unresolved after
-`IOC_TTL_SECONDS` (3 s) stops counting as pending on our side, **retired rather
-than dropped** so a late fill is still booked. If the probe shows the venue does
-report, this becomes a backstop and nothing else changes. If it shows the venue
-reports something *else* — a rejection, a different `op_type` — that is the one
-finding that could still change the design.
+True**. So the broker does not depend on the venue's answer: an IOC unresolved
+after `IOC_TTL_SECONDS` (3 s) stops counting as pending on our side, **retired
+rather than dropped** so a late fill is still booked.
+
+#### MEASURED 2026-08-24 — the venue reports nothing when an IOC expires
+
+`live/ioc_probe.py`, day session, 09:32–09:33. Three IOCs one lot at 44 949
+against a 45 149 market (200 points below, unfillable by construction), plus a
+cancelled ROD control.
+
+- **An expired IOC reports nothing at all.** The single callback each attempt
+  produced is the submission ack — `operation.op_type='New'`, `op_code='00'` —
+  arriving in **0.029 / 0.043 / 0.031 s**. After it: 10 s of waiting and an
+  `update_status()` produced no second message. **3/3, and 3/3 again on the
+  first run.**
+- **Cancellations do report, so the silence is not a dead callback path.** The
+  ROD control's cancel arrived **0.109 s after** `cancel_order`. The venue's
+  reporting path is ~100 ms quick; ten seconds of nothing is ~100× that, not a
+  timing artifact.
+- **No rejection, no unexpected `op_type`.** The one finding that could have
+  changed the order type did not occur.
+
+**So `has_pending()` would stay True forever** on the callback path the adapter
+uses, and `IOC_TTL_SECONDS` is **load-bearing rather than a backstop** — without
+it every rung after the first is blocked by the pending check and the ladder is
+inert while logging beautifully. The 10 s rung interval stays above the 3 s TTL
+for the same reason it always did. **The design is unchanged; the assumption is
+now the venue's answer rather than ours.**
+
+*Boundary on the claim.* This proves the venue never **pushes** an expiry.
+Whether `trade.status` shows one after `update_status()` was not read back —
+irrelevant while the adapter is callback-driven, and the untested alternative if
+an event-driven retire is ever wanted in place of the TTL.
+
+*It cost two runs to read, both times the probe's own bugs* — the shape §2.19
+warns about, arrived at from the other side. Both fixed with tests:
+
+1. the simulation guard read `is not True` against an attribute **shioaji 1.7.2
+   does not expose** (`hasattr` is False, so `None`), aborting every run before
+   an order was placed. `v72_probe` and `relogin_probe` had the measured form —
+   abort only on an explicit `False` — and a comment claiming "every probe here
+   checks it the same way" is what hid the difference;
+2. `message_facts` gated on `isinstance(msg, dict)`, but the SDK hands the
+   callback a **mapping that is not a `dict`**, so it fell to the raw-only branch
+   and reported `op_type=None` for every message — **indistinguishable from the
+   venue reporting nothing, which is the exact question being asked.** It also
+   read the fields at the top level rather than inside `operation`, where
+   `_handle_order` reads them. `tests/test_ioc_probe.py` had encoded the same
+   invented shape, so it passed while the probe was blind.
 
 **Simultaneous legs were rejected.** Closing the old month and opening the new one
 at the same instant is unrepresentable in the current state model: one
@@ -707,8 +796,8 @@ median night minute moves 0.0095 %, ~4 points at 45 000, and the gap is one bar)
 the cost of double exposure is hundreds.
 
 **15 further tests** — 7 on the ladder, 8 on the broker's IOC path and local
-deadline; suite **744 green**. `tests/test_ioc_probe.py` (11) covers the probe's
-own reading and redaction.
+deadline; suite **746 green**. `tests/test_ioc_probe.py` (13) covers the probe's
+own reading and redaction, including the two shapes that made it blind.
 
 #### MEASURED 2026-08-23 — the splice rule is a calendar, and volume never was
 
@@ -900,6 +989,63 @@ check skipped when the emitter has no rolling window or its trend filter is off.
 
 Zero real-time dead period, and the filter is correctly primed from bar one.
 This is strictly better than either option originally offered.
+
+#### MEASURED 2026-08-24 — K=500 is never reached, because `--warmup-days` scales sub-linearly
+
+Two dryruns, same day, same market, only the flag changed:
+
+| `--warmup-days` | bars | range | prime boundaries |
+|---|---|---|---|
+| 30 | 6 706 | 2026-07-24 → 08-22 | **124** |
+| 90 | 8 880 | 2026-05-25 → 08-22 | **196** |
+
+**Tripling the calendar window added 32 % more bars, not 200 %.** The extra 2 174
+bars span ~43 sessions — about **50 bars/session against ~319/session** in the
+recent month, roughly 6× thinner.
+
+*Why:* `cli._warmup_contracts` fetches **the last two listed months only**
+(202608, 202609 here). For May–July minutes neither was the calendar front
+month, and `collapse_front_month` does not drop those rows — its documented
+volume tie-break fills them from whichever fetched month printed, i.e. **thin
+back-month trading**. The resulting `outputs/bars_cache.csv` shows it directly:
+all 8 880 rows carry `contract=202609`, back to the 2026-05-25 bar, months before
+202609 became front. Reaching the designed K=500 needs ~18 000 front-month bars
+≈ 56 night sessions, which no `--warmup-days` value delivers while only two
+months are fetched.
+
+**So the binding constraint on priming is the backfill window, not K=500.** The
+`emitter_prime_boundaries=500` cap has never been the limit in a real run and the
+"~115 boundaries of margin" above the 385-boundary worst case does not exist in
+deployment — 124 boundaries is a *third* of that worst case.
+
+**What that costs, in the only terms that matter — the start-up refusal.**
+`_check_primed` refuses below 3 samples, and the deque fills only on non-HOLD
+signals at the measured 3.74 %:
+
+| boundaries | expected non-HOLD | P(fewer than 3) |
+|---|---|---|
+| 124 (30 days) | 4.6 | **~16 %** — about 1 start in 6 |
+| 196 (90 days) | 7.3 | **~2 %** |
+
+Non-HOLDs cluster in trends, so the true tail is worse than these Poisson
+figures, not better.
+
+**`emitter_samples=4` is saturation, not a thin margin.**
+`ThresholdEmitter._short_prices` is `deque(maxlen=short_window + 1)` = **4**.
+Both runs reported 4. Extra boundaries can never produce a fifth sample; they buy
+insurance against a quiet stretch yielding fewer than three, and nothing else.
+
+**Decision: the soak runs `--warmup-days 90`.** It is free — backfill 0.4 s,
+warm-up 11.2 s (the 124-boundary run's 28.4 s was a cold checkpoint load, so
+warm-up time is dominated by the model, not the boundary count). It also answers
+step 1's open question above: an 8 880-bar / 90-day span returns in **one**
+`kbars` call.
+
+*Residual, accepted.* If fewer than 4 non-HOLD signals land after the thin
+stretch, the deque can start holding a back-month-derived price, which differs
+from the front month by the basis and would skew `_trend_confirms` until evicted.
+Unlikely at ~7 expected samples, and self-clearing. The 3 008-bar model context is
+unaffected — it is the trailing slice, and at 8 880 bars it begins in August.
 
 #### Open gap this creates — `kbars` is an unvalidated second bar source
 
@@ -3045,6 +3191,12 @@ print whenever it comes, while IOC expires with nothing — and an expired IOC l
 retry on. A `FLATTEN` halt would have submitted one IOC, watched it expire, and
 never retried: position open, loop believing an order is working. Implemented as
 LMT+ROD differing from an ordinary order *only* in price.
+
+**Confirmed 2026-08-24.** The expired IOC leaves `has_pending()` True because the
+venue sends **no expiry message at all** — measured directly, three attempts, and
+against a cancelled ROD control that did report in 0.109 s. See §2.6's *MEASURED
+2026-08-24*. This reading of the flatten stands unchanged, and the roll ladder's
+`IOC_TTL_SECONDS` is the only thing that retires an IOC anywhere in the stack.
 
 **Consequence for V4's headline number — record this with the result.** A fill
 rate measured here is a property of **Shioaji's matching engine**, not of a real

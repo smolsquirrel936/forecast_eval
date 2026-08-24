@@ -82,21 +82,45 @@ def message_facts(msg: Any) -> Dict[str, Any]:
     #       answer can be applied directly instead of re-interpreted, and the raw
     #       repr is kept beside them so a field we did not think to ask for is
     #       still visible.
-    if not isinstance(msg, dict):
-        return {"raw": redact(repr(msg))[:300]}
+    # Tech: accept anything that answers `.get`, not only a real `dict`, and use
+    #       the same test for the nested blocks.
+    # Why:  MEASURED 2026-08-24 — the SDK's callback argument is a mapping that is
+    #       **not** a `dict` (`isinstance` False), so this bailed to the raw-only
+    #       branch on every live message. `.get(...)` on that result then returned
+    #       None for every field while `raw` still printed a dict-shaped repr —
+    #       "the venue reports nothing to key on" and "we never looked" produce
+    #       identical output, which cost two probe runs to tell apart.
+    #       `_handle_order` never had the bug because it only ever calls `.get`.
+    if not hasattr(msg, "get"):
+        return {"raw": redact(repr(msg))[:600]}
     order = msg.get("order") or {}
     status = msg.get("status") or {}
+    # Tech: the verdict fields live in the nested `operation` block, which is
+    #       where `_handle_order` reads them; fall back to the top level.
+    # Why:  MEASURED 2026-08-24 — reading them at the top level returned None for
+    #       every field of every message, including the control ROD's cancel,
+    #       which the adapter is known to key on as `op_type == "Cancel"`. The
+    #       probe reported "the venue carries nothing to key on" when what it had
+    #       measured was its own extraction. The fallback keeps a message that
+    #       does arrive flat readable rather than trading one blind spot for
+    #       another.
+    operation = msg.get("operation") or msg
     return {
-        "op_type": msg.get("op_type"),
-        "op_code": msg.get("op_code"),
-        "op_msg": redact(str(msg.get("op_msg", "")))[:80],
-        "status": status.get("status") if isinstance(status, dict) else None,
+        "op_type": operation.get("op_type"),
+        "op_code": operation.get("op_code"),
+        "op_msg": redact(str(operation.get("op_msg", "")))[:80],
+        "status": status.get("status") if hasattr(status, "get") else None,
         "order_type": (order.get("order_type")
-                       if isinstance(order, dict) else None),
+                       if hasattr(order, "get") else None),
         "price_type": (order.get("price_type")
-                       if isinstance(order, dict) else None),
-        "quantity": order.get("quantity") if isinstance(order, dict) else None,
-        "raw": redact(repr(msg))[:300],
+                       if hasattr(order, "get") else None),
+        "quantity": order.get("quantity") if hasattr(order, "get") else None,
+        # Tech: 600 characters of redacted repr, not 300.
+        # Why:  the 2026-08-24 run truncated mid-`quantity`, so the raw — the only
+        #       thing that made the None fields readable at all — stopped just
+        #       short of the order block. Redaction runs before the slice, so a
+        #       longer window cannot leak more than a shorter one.
+        "raw": redact(repr(msg))[:600],
     }
 
 
@@ -169,14 +193,21 @@ def main(argv=None) -> int:
     import shioaji as sj
 
     api = sj.Shioaji(simulation=True)
-    # Tech: refuse to continue unless the client itself reports simulation mode.
-    # Why:  §7.2's rule, unchanged — the safety argument for placing orders at all
-    #       rests on this being a simulation account, and an assumption is not an
-    #       assertion. Every probe in this directory checks it the same way.
-    if getattr(api, "simulation", None) is not True:
-        print("ABORT: api.simulation is not True — refusing to place orders.",
+    # Tech: refuse to continue only when the client reports simulation mode as an
+    #       explicit False; None — the attribute being absent — passes.
+    # Why:  §7.2 MEASURED that the SDK does not expose the mode: shioaji 1.7.2 has
+    #       no `simulation` attribute at all, so this reads back as None even
+    #       though the line above asked for simulation. Testing `is not True`
+    #       therefore aborted every run of this probe before it placed anything.
+    #       The constructor argument is the only guarantee there is; the check can
+    #       only catch the case where something actively contradicts it. Same form
+    #       as `v72_probe` and `relogin_probe`, which this was meant to match.
+    reported = getattr(api, "simulation", None)
+    if reported is False:
+        print("ABORT: api.simulation is False — refusing to place orders.",
               file=sys.stderr)
         return 3
+    print(f"  api.simulation = {reported!r}")
     api.login(api_key=api_key, secret_key=secret_key)
 
     contract, note = resolve_txf(api, args.contract)

@@ -6,6 +6,8 @@ here is that the probe *reads and reports* an answer faithfully — a probe whos
 own summariser is wrong produces a measurement-shaped argument, which is worse
 than no probe (SHIOAJI_PLAN §2.19's four wrong turns).
 """
+from collections import UserDict
+
 import pytest
 
 from forecast_eval.live.ioc_probe import (
@@ -36,7 +38,23 @@ def test_redaction_leaves_everything_else_readable():
 
 # ---- reading a callback message --------------------------------------------
 
-def test_the_fields_the_adapter_dispatches_on_are_extracted():
+def test_the_nested_operation_block_is_where_the_fields_are_read_from():
+    # The shape the venue actually sends, and the one `_handle_order` reads:
+    # op_type / op_code / op_msg live under `operation`, not at the top level.
+    # This case is here because the flat one below was invented rather than
+    # copied from the adapter, so it passed while the live probe reported None
+    # for every field of every message (measured 2026-08-24).
+    msg = {"operation": {"op_type": "Cancel", "op_code": "00", "op_msg": ""},
+           "order": {"order_type": "IOC", "price_type": "LMT", "quantity": 1},
+           "status": {"status": "Cancelled"}}
+    f = message_facts(msg)
+    assert f["op_type"] == "Cancel"
+    assert f["op_code"] == "00"
+    assert f["order_type"] == "IOC"
+    assert f["status"] == "Cancelled"
+
+
+def test_a_flat_message_is_still_read():
     msg = {"op_type": "Cancel", "op_code": "00", "op_msg": "",
            "order": {"order_type": "IOC", "price_type": "LMT", "quantity": 1},
            "status": {"status": "Cancelled"}}
@@ -45,6 +63,22 @@ def test_the_fields_the_adapter_dispatches_on_are_extracted():
     assert f["op_code"] == "00"
     assert f["order_type"] == "IOC"
     assert f["status"] == "Cancelled"
+
+
+def test_a_mapping_that_is_not_a_dict_is_still_read():
+    # MEASURED 2026-08-24: the SDK hands the callback a mapping that fails
+    # `isinstance(msg, dict)`. The probe fell back to raw-only and reported
+    # op_type=None for three live IOCs and a cancelled ROD — indistinguishable
+    # from the venue reporting nothing, which is the exact question being asked.
+    msg = UserDict({"operation": {"op_type": "New", "op_code": "00"},
+                    "order": UserDict({"order_type": "IOC"}),
+                    "status": UserDict({"status": "PendingSubmit"})})
+    assert not isinstance(msg, dict)
+    f = message_facts(msg)
+    assert f["op_type"] == "New"
+    assert f["op_code"] == "00"
+    assert f["order_type"] == "IOC"
+    assert f["status"] == "PendingSubmit"
 
 
 def test_a_message_of_an_unexpected_shape_still_reports_its_repr():

@@ -28,6 +28,20 @@ measured before anything is built.
 | **Q3** | how long until it arrives? The ladder's retry interval cannot be shorter, or attempt N+1 races attempt N's expiry |
 | **Q4** | is it consistent, or was 2026-08-12 a one-off? |
 
+## What it measured — 2026-08-24, day session
+| | Answer |
+|---|---|
+| **Q1** | **No.** The only callback is the submission ack, `operation.op_type='New'` / `op_code='00'`. Nothing follows it through 10 s and an `update_status()` |
+| **Q2** | Moot — there is no expiry message to carry anything |
+| **Q3** | Ack in 0.029–0.043 s; a *cancel* reports in 0.109 s, so the reporting path is ~100 ms when the venue uses it |
+| **Q4** | Consistent — 3/3, twice |
+
+So `has_pending()` would stay True forever on the callback path, `IOC_TTL_SECONDS`
+is load-bearing, and the ladder is unchanged
+([SHIOAJI_PLAN §2.6](../../SHIOAJI_PLAN.md), *MEASURED 2026-08-24*). It proves the
+venue never **pushes** an expiry; whether `trade.status` shows one after
+`update_status()` is untested and unused.
+
 ## Running it
 **It must run inside a trading session.** Off-hours the venue *rejects* an order
 rather than expiring it, and "rejected because the market is closed" is a
@@ -52,9 +66,11 @@ cancellation does, the adapter may already retire it and the ladder needs no
 change at all. That is the cheapest possible outcome.
 
 ## Safety
-- **`simulation=True` is asserted, not assumed** — the probe refuses to place
-  anything otherwise. §7.2's rule, unchanged, and every probe here checks it the
-  same way.
+- **`simulation=True` is passed to the constructor, and that is the guarantee.**
+  `api.simulation` reads back as `None` — shioaji 1.7.2 has no such attribute
+  (§7.2) — so the guard aborts only on an explicit `False` and can never
+  actually fire, exactly as in [v72_probe](v72_probe.md). It read `is not True`
+  until 2026-08-24, which aborted every run before an order was placed.
 - **Every order is unfillable by construction**: a BUY priced 200 points *below*
   the market, one lot. An IOC there cannot fill — it can only expire, which is
   the thing being measured. 200 points on a ~45 000 index is 0.4 %: far outside
