@@ -11,28 +11,88 @@ stray `git init` at `day/` was removed, and **day's environment was rebuilt and
 matched to night** — §0's facts, §2's merge shape and §5's M-steps have moved,
 and §2.1 is new. M0–M2 are done; the migration itself (M3+) has not started.
 
-Nothing has been built, no decisions taken, no run made. Five decisions in §6 are
-the user's and are not assumed anywhere above them.
+**Updated 2026-08-24 (later) — all five decisions taken, and the git facts
+re-measured.** The user has settled **D1 = Shape A**, **D2 = probe first**,
+**D3 = hold**, **D4 = mixing RPT and `kbars` is acceptable**, and **D5 = day's
+July work stays on its branch, with no cross-tree transport of any kind**.
+
+Re-measuring both trees for that update also found that three of the git facts
+this plan was built on were wrong or had gone stale, and that the RPT datasets
+were rebuilt on 2026-08-24. Those corrections are in §0, §2 and the new §2.2 —
+which also records the night baseline re-run on the new tape (**Calmar 16.3122**,
+185 trades reproducing bit-identically) and the forecast-grid alignment trap found
+on the way.
+
+**Naming.** §5's work steps are now **W0–W9**; **D1–D5** now means only the §6
+decisions. The two lists used to share letters, which made the cross-references
+between them ambiguous.
+
+**Updated 2026-08-31 — D3's hold is lifted; the migration is proceeding.**
+Reasoning: progress had stalled over a week on time-cost testing concerns, and
+the user decided to complete the port first and validate DAY and NIGHT in
+parallel rather than wait further. §5's `HELD` note is superseded — see there.
+W0–W3 and W4b were already done (2026-08-24/25, offline, no market); W4 (C6)
+is done as of today. **One thing this decision does not resolve on its own:**
+DAY and NIGHT will eventually both place orders through the same Shioaji
+simulation account, and nothing before W9 forces that question — see the note
+against W9 in §5.
+
+**Updated 2026-09-01 — W5a's blocker written into §5, and two prerequisites
+found that are not W-steps.** §5 now carries `TAPE_REBUILD_PLAN.md`'s
+sequencing constraint at the point of use; until 2026-09-01 it lived only in
+C4a's superseded note, where nothing reading the order of work would find it.
+Two further constraints, both measured today and both recorded against §5
+rather than as new steps:
+
+- **The GPU is a shared resource with the NIGHT soak, and every live-CLI run
+  takes it.** `LiveRuntime.__init__` calls `config.build_forecaster()`
+  unconditionally (`live/runtime.py:174`), so a `--broker dryrun` start-up
+  loads the model exactly as a soak does — W6's banner check and W7's parity
+  are GPU work, not just W5. The NIGHT soak restarts **2026-09-01 14:50**
+  (`SHIOAJI_PLAN.md`, "SCHEDULED"), and holds the card until stopped.
+- **`results.tsv` rows need a commit that exists.** The tree is 15 modified
+  files and 9 untracked paths ahead of `7d1af99`, including whole modules
+  (`live/soak_epoch.py`, `live/seed_cache.py`, `tools/`). W5a and W5b both end
+  in a pinned row, and the `commit` column is what traces that row back to the
+  code that produced it. Committing is therefore a prerequisite of W5, not
+  housekeeping.
 
 ---
 
 ## 0. What `day/forecast_eval` actually is — measured, not assumed
 
-**It is this repository's own ancestor, one whole subsystem behind.** Both folders
-are clones of the same GitHub remote (`smolsquirrel936/forecast_eval`), and the
-day tree's HEAD is a commit that `night/` already contains.
+**It is this repository's own ancestor, one whole subsystem behind** — but it did
+not split where this plan first recorded. **Corrected 2026-08-24:** `2716f49` is
+*not* an ancestor of night. Measured:
+`git merge-base --is-ancestor 2716f49 night` → **false**. Night branched earlier,
+at `aae8473`, and never took the commits that followed it on
+`autoresearch_result_1`.
 
 | | |
 |---|---|
-| Day HEAD | `7fd3fa6` "Saved" — **2026-08-24** (was `2716f49`, 2026-07-23) |
-| Its relation to night | **diverged.** `2716f49` is an ancestor of night's `bb692d6`; `7fd3fa6` is **not in night** |
-| Night ahead by | **24 commits**, **+25 028 / −1 792 lines across 138 files** (measured from `2716f49`) |
-| Day ahead by | **1 commit**, +1 577 / −205 across 18 files — the July research work, committed 2026-08-24 |
+| Day HEAD | `ed0a1ba` "fix: --data is required…" — **2026-08-24** (was `7fd3fa6`, before that `2716f49`) |
+| **True merge base** | **`aae8473`** "Merge branch 'Strategy_2_1_7'" — *not* `2716f49` |
+| Night ahead by | **27 commits** from `aae8473` (recorded below as 24, which was measured from the wrong base) |
+| Day ahead by | **7 commits** from `aae8473`: `8b9f83c`, `b5c8c5c`, `0f80b80`, `e405adf`, `2716f49`, `7fd3fa6`, `ed0a1ba` |
 | Day branch | `autoresearch_result_1` (also carries `Strategy_2_1_7`, `main`) |
-| Shared remote | `origin` → `smolsquirrel936/forecast_eval`, both trees |
-| Working trees | **both clean** |
+| Shared remote | `origin` → `smolsquirrel936/forecast_eval` — but it carries **neither** working branch, see below |
+| Working trees | **both clean**; day's 114 tests pass |
 
-What night gained in those 24 commits is exactly what this port would need: the
+**`origin` is not a transport between the trees, and will not become one.** It
+holds only `main` (`196f5f0`) and `Strategy_2_1_7`, last pushed **2026-06-10**,
+and the repository is **public**. Night's `night` branch has never been pushed,
+and neither have day's `7fd3fa6`/`ed0a1ba`.
+
+**DECIDED 2026-08-24 (D5): no cross-tree transport of any kind** — not a push to
+GitHub, not a local path remote. The two trees stay independent. A push would
+have published 106 new files to a public repo, including the whole `live/`
+package, `SHIOAJI_PLAN.md`, `docs/live/` and `results.tsv`'s complete tuning
+ledger. (It would not have leaked credentials: `SHIOAJI_API_KEY` /
+`SHIOAJI_SECRET_KEY` come from the environment, `person_id` and `account_id` are
+digested before they are written — `live/cli.py:116-142` — and `outputs/` is
+gitignored at `.gitignore:219` with zero artifacts tracked.)
+
+What night gained in those 27 commits is exactly what this port would need: the
 entire `live/` package (25 modules), `results.tsv` and the whole `edit:`/`keep:`
 night tuning chain, `SHIOAJI_PLAN.md`, and `docs/live/` (22 pages).
 
@@ -78,71 +138,97 @@ logging_io.py +13 forecaster/toto2.py −(rewrite)  tests/test_confidence_placem
 ```
 
 This is July research work that was never carried across, and it is the only
-content in the folder not reproducible from night. **It is now safe** — a commit
+content in the folder not reproducible from night. **It is safe** — commits
 rather than a dirty tree, so it can be merged, cherry-picked or reverted.
 
-**The cost is that the branches have diverged.** `7fd3fa6` is not in night, so the
-fast-forward that was available on 2026-08-23 is gone; Shape B is now a real
-merge. That is the better shape of the two — collisions resolve at commit level
-instead of being clobbered in a working tree — but it is no longer free.
-Decision **D5** is now about *where these 18 files should end up*, not about
-rescuing them.
+**Updated 2026-08-24: day has since added a second commit, and night made the
+same fix independently.** Day's `ed0a1ba` — "fix: `--data` is required; drop the
+`DEFAULT_DATA` session default", touching `real_data.py` and `.python-version` —
+has an exact counterpart in night's `8065a35`: same message, same two files,
+**no shared ancestry**. Git cannot see that they are the same change, so they
+collide. Take one side wholesale rather than merging hunks. This also closes
+§2.1's open item 3.
+
+**And the day-only content is wider than `7fd3fa6`.** Because the split is at
+`aae8473` and not `2716f49` (§0), `0f80b80` (the baked EXP91 / EXP227 winning
+config) and `e405adf` (SMA trend-filter WIP) are absent from night too.
+
+**D5 is settled: the work stays where it is.** Shape A removed the merge, and the
+2026-08-24 decision against any cross-tree transport (§0) removes the
+cherry-pick too. `7fd3fa6` and `ed0a1ba` remain on `autoresearch_result_1` in
+`day/forecast_eval` as the record. If night ever wants day's `reports.py` or
+`threshold.py` work, it is rewritten there, not moved.
 
 ---
 
 ## 1. The consequence — two shapes, and the migration is only one of them
 
-**Shape A — the day deployment is hosted in `night/forecast_eval`.**
+> **DECIDED 2026-08-24 — D1 = Shape A.** The day deployment is hosted in
+> `night/forecast_eval`; `day/forecast_eval` stays the research tree it already
+> is. **There is therefore no migration.** §2's merge and §5's M-steps are not
+> being done, and are kept below only as the record of what Shape B would have
+> cost — corrected, because parts of that record were wrong.
+
+**Shape A — the day deployment is hosted in `night/forecast_eval`. ✅ CHOSEN**
 The live stack is already there, the session is already a parameter, and the port
 is the C-item work in §5 plus `--config day`. `day/forecast_eval` stays what it
 is: an older research tree. No merge, no collision, nothing to reconcile.
 
-**Shape B — `day/forecast_eval` becomes the day deployment.**
-Then the *first* task is not the port at all: it is bringing 24 commits and
-25 000 lines of `live/` across, resolving the collision in §2 — and after that,
+**Shape B — `day/forecast_eval` becomes the day deployment. ❌ not chosen**
+Then the *first* task is not the port at all: it is bringing 27 commits and
+25 000 lines of `live/` across, resolving the collision in §2 — and after that,
 every C-item in §5 still has to be done, identically. **Shape B is Shape A plus a
 merge.** The merge is a hosting decision, not migration progress.
 
-A third possibility worth naming so it is not chosen by accident: **the folder
-layout implies Shape B, and picking it for that reason alone would be paying the
-merge cost to get a copy of a codebase whose design already makes the session a
-parameter** (§2.12: "no module names a session"). Two trees is the fork that
-`SessionPolicy` exists to make unnecessary.
+A third possibility, named so it could not be chosen by accident: **the folder
+layout implies Shape B, and picking it for that reason alone would have been
+paying the merge cost to get a copy of a codebase whose design already makes the
+session a parameter** (§2.12: "no module names a session"). Two trees is the fork
+that `SessionPolicy` exists to make unnecessary. That is the reasoning D1
+followed.
 
 ---
 
-## 2. The merge collision, if Shape B
+## 2. The merge collision — **moot under Shape A; kept as the record**
 
-**Updated 2026-08-24: the fast-forward is gone.** Day's `7fd3fa6` is not in
-night, so the branches have diverged and this is a three-way merge against the
-common ancestor `2716f49`. Of the 12 tracked files that commit touched, **9 are
-also changed by night since the split**:
+> D1 chose Shape A, so this merge is not happening. The section is corrected
+> rather than deleted, because it is also the measurement of what a **cherry-pick
+> for D5** runs into, file for file.
 
-```
-compare_models.py   forecaster/toto2.py   logging_io.py   metrics.py
-real_data.py        reports.py            squirrel_note.md
-strategy/threshold.py                     tests/test_metrics.py
-```
+**Corrected 2026-08-24: the base is `aae8473`, and the collision is bigger than
+first recorded.** Measuring `aae8473..ed0a1ba` (day) against `aae8473..night`,
+**14 files are touched on both sides**, not 9 — and eight of them are conflict
+kinds that stop a merge outright rather than producing mergeable hunks:
 
-Only **`run.py`, `trader.py`, `tests/test_confidence_placement.py`** are clear of
-it — and that is not luck: SHIOAJI_PLAN's standing ground rule is that
-`run.py`, `execution.py`, `trader.py` and `portfolio.py` stay unmodified, and 24
-commits later they still are.
+| Kind | Files |
+|---|---|
+| **modify/delete** — git halts and asks | `compare_models.py` — night **deleted** it, day modified it |
+| **add/add** — both sides created the path independently; every one conflicts | `.python-version`, `README.md`, `strategy/volmultitf.py`, `strategy/wiring.py`, `tests/test_reports.py`, `tests/test_volmultitf.py`, `txt.txt` |
+| content | `logging_io.py`, `metrics.py`, `real_data.py`, `reports.py`, `strategy/threshold.py`, `tests/test_metrics.py` |
 
-The formerly-untracked files are a second, quieter problem: night tracks all of
-them, and one — `main.py` — night **deleted on purpose** (`docs/DOCS_PLAN.md`
-records it as a 91-byte print stub removed as a coverage gap). Now that
-`7fd3fa6` commits it, a merge re-adds it as a genuine change rather than an
-untracked-file collision, which is easier to miss.
+`run.py`, `trader.py`, `execution.py` and `portfolio.py` are clear of it — and
+that is not luck: SHIOAJI_PLAN's standing ground rule is that those four stay
+unmodified, and 27 commits later they still are.
 
-`strategy/threshold.py` is the collision that matters most: it is where the night
-tuning chain did its work (`min_trend_ticks`, `path_momentum`, the band), and
-day's +122 lines are a different edit to the same file. **Resolving that one
+**Three corrections to the earlier reading of this list:**
+
+- **`main.py` is a day-only add, not a night deletion.** Night never had it at
+  `aae8473` and does not have it now, so git sees a clean add with nothing to
+  conflict against — it would arrive **silently**, which is the opposite of the
+  flagged collision this section first predicted.
+- **`strategy/wiring.py` is an add/add**, and it is precisely the seam
+  `live/config.py` names as the autoresearch entry point for C1. A careless
+  resolution there breaks the tuning seam, not just a file.
+- **`real_data.py` and `.python-version` carry the independent-duplicate fix**
+  from §0.2 — the same change made twice with no shared ancestry.
+
+`strategy/threshold.py` remains the collision that matters most: it is where the
+night tuning chain did its work (`min_trend_ticks`, `path_momentum`, the band),
+and day's +122 lines are a different edit to the same file. **Resolving that one
 wrong silently changes the strategy** — and the night side of it is load-bearing
 for `live/config.py`'s pinned Calmar.
 
-Both working trees are clean, so the merge is now a normal one with no dirty
-state on either side.
+Both working trees are clean.
 
 ### 2.1 Environment gaps in `day/` — found 2026-08-24, **mostly CLOSED the same day**
 
@@ -158,9 +244,11 @@ environment half is now done; what remains is data and documentation.
 | `shioaji` | **1.7.2, pinned `==` in pyproject + lock** ✅ | 1.7.2, pinned `==` ✅ |
 | `torch`, `toto2` | 2.13.0+cu130 (`cp312`), 2.0.0 ✅ | identical |
 | site-packages | 179 packages, **11 minor transitive bumps** vs night | 179 |
-| `real_data.DEFAULT_DATA` | **still dangling** — see below | UNC path, valid |
-| `UV_SETUP.md`, `AGENTS.md` | **still absent** | present at `night/` |
-| `CLAUDE.md` | **still 2026-06-11**, predates all live work | current |
+| `real_data.DEFAULT_DATA` | **removed — `--data` is now required** ✅ (`ed0a1ba`) | same fix, `8065a35` |
+| `UV_SETUP.md` | **present, byte-identical to night's** ✅ | present at `night/` |
+| `AGENTS.md` | **still absent** | present at `night/` |
+| `CLAUDE.md` | **still 2026-06-11** — verified: 0 mentions of `live/` | current (2026-08-23) |
+| test suite | **114 tests, all passing** | 744 |
 
 **What was wrong, and what it cost to find.** Three defects, none visible from
 the version numbers alone:
@@ -190,9 +278,9 @@ typing_inspection) are transitive and minor. `huggingface_hub` 1.28.0 vs 1.27.0
 is the only one with a plausible path to a trade decision, since it fetches the
 Toto-2 checkpoint. **The instrument for this already exists and is better than
 matching version strings: §2.13's reproduction check** — re-run the pinned config
-and assert the trades and net PnL reproduce bit-identically, ~4 minutes. It
-cannot run in `day/` until there is a pinned day config and a valid data path,
-so it becomes the acceptance test for D5's output.
+and assert the trades and net PnL reproduce bit-identically, ~4 minutes. Under
+Shape A it runs in `night/`, and it is step **W5**'s acceptance test — but see
+**§2.2: its baseline no longer exists** and must be re-established first.
 
 **Still open:**
 
@@ -218,23 +306,122 @@ so it becomes the acceptance test for D5's output.
 
    If 3.13 is wanted later, it is a deliberate environment change on night gated
    by a §2.13 re-run — not a side effect of this port.
-3. **`real_data.DEFAULT_DATA` is dangling — STILL OPEN.** It resolves to
-   `day/dataset/RPT/TXF_RPT_minute.csv` and **there is no `dataset/` under
-   `day/`** — night's code uses the UNC `\\DESKTOP-SQUIRRE\dataset\RPT\…` path
-   instead. Every run in `day/` must pass `--data` explicitly until this is
-   reconciled, and C1's tuning run must name the day CSV anyway.
+3. ~~`real_data.DEFAULT_DATA` is dangling~~ **CLOSED 2026-08-24** — day's
+   `ed0a1ba` drops the default outright and makes `--data` required, so there is
+   no dangling path left to reconcile. Night made the same change independently
+   as `8065a35` (§0.2).
+4. ~~`UV_SETUP.md` absent from `day/`~~ **CLOSED — it was never absent.** It is
+   present and byte-identical to night's copy; the §2.1 table row above was
+   simply wrong.
+5. **`AGENTS.md` absent from `day/` — OPEN.**
+6. **`day/forecast_eval/CLAUDE.md` is 2026-06-11 — OPEN.** Verified: it mentions
+   `live/` **zero** times.
 
-`CLAUDE.md` being three months stale is not a runtime problem but is an agent
-problem: it documents neither `live/`, nor the uv/cu130 notes, nor the
-folder-scope rule.
+The two documentation items are not runtime problems but are agent problems:
+day's `CLAUDE.md` documents neither `live/`, nor the uv/cu130 notes, nor the
+folder-scope rule. Under Shape A they matter less — no live work happens in
+`day/` — but any agent sent into that tree still reads them.
+
+### 2.2 The RPT datasets were rebuilt on 2026-08-24 — **re-baselined on the new tape**
+
+Found while verifying this plan on 2026-08-24, and not known to any section above
+it. `dataset/RPT/` was regenerated at **03:53**, with `.bak` copies of the
+previous files left beside the new ones:
+
+| file | rows before → after | coverage ends |
+|---|---|---|
+| `TXF_RPT_minute_night.csv` | 1 733 348 → **1 787 913** | 2026-05-15 → **2026-08-21** |
+| `TXF_RPT_minute_day.csv` | 1 124 790 → **1 145 145** | 2026-05-15 → **2026-08-21** |
+
+`PINNED.source_dataset` is `\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_night.csv`, which resolves to this
+same, now-changed file — verified by identical size and mtime. So §2.13's
+bit-identical reproduction check lost the tape its recorded numbers came from
+(§2.13 states 1 733 348 bars, which is exactly the `.bak` row count).
+
+> **DECIDED 2026-08-24 — the day port works on the new tape, and the night
+> baseline was re-run on it.** Results below. **W4b is DONE.**
+
+#### The alignment trap — the first re-run was invalid, and finding out why is the real finding
+
+The obvious re-run — same command, new file — **does not measure what it looks
+like it measures.** `--lookback-frac 0.30` sets warmup as a *fraction*, so a
+longer tape moves the warmup end: 520 004 → **536 373** bars. Forecasts fire at
+`warmup + k×stride` with `stride=30`, and **16 369 mod 30 = 19**, so every
+forecast lands 19 bars off the original grid. Measured: **0 shared forecast
+timestamps** out of 40 443 old / 41 716 new.
+
+Over the **identical calendar window on identical data** (2020-04-06 →
+2026-05-08):
+
+| | trades | net PnL |
+|---|---|---|
+| original pinned run | 174 | **+40 310.44** |
+| frac-0.30 run on the new tape | 187 | **+30 209.82** |
+| | | **−10 100.62** |
+
+**A 19-bar phase shift costs 10 100 points — 25 % of six years of net PnL, and
+Calmar 13.6742 → 8.7651.** Nothing about the strategy changed; only *when* the
+30-bar forecast clock happens to tick. Read naively, that run would have looked
+like three months of decay. It is not: the added months were the best-behaved
+stretch in it (+3 012.31 over 25 trades, hit rate 0.560).
+
+**This belongs to the live deployment, not to the day port.** A live run's grid
+is set by whenever it starts, so the pinned 13.6742 is one draw from a
+distribution at least this wide. Recorded here because this is where it was
+found; it should be carried into `SHIOAJI_PLAN.md` as a robustness item.
+
+#### The valid re-baseline
+
+Re-run with `--lookback-frac 0.290844409`, chosen so
+`int(f × 1 787 913) = 520 004` — the original warmup exactly, so the forecast
+grid matches bar-for-bar and the new tape is a **strict superset**:
+
+| | recorded (`results.tsv`, `e44a047`) | new tape, aligned |
+|---|---|---|
+| trades | 185 | **208** (+23) |
+| net PnL (pts) | 39 075.6312 | **+46 603.2099** |
+| max drawdown (pts) | −2 856.9506 | **−2 856.9506** — unchanged |
+| Calmar (net/\|dd\|) | 13.6742 | **16.3122** |
+
+**The reproduction check passes.** The first 185 trades are identical to the
+original run — entry and exit timestamps, sides, prices — with a net delta of
+**0.0000000000** (max per-trade difference 1.4e−14, float repr only). That
+simultaneously clears §2.1's 11 transitive package deltas: the environment drift
+changes nothing that reaches a trade decision.
+
+**The pinned config improved on the extended tape.** The 23 added trades
+(2026-05-13 → 2026-08-20) contribute **+7 527.58**, the worst drawdown still sits
+in the old period so `max_dd` is untouched, and the run now beats buy-and-hold by
++11 835.43 (it trailed by −1 552.35 in the mis-aligned run).
+
+**Consequences for the plan:**
+
+- **`results.tsv` needs two new columns, not one** — session (W0) *and* dataset
+  vintage. A row's Calmar is meaningless without both.
+- **Warmup must be recorded in bars, not as a fraction.** `--lookback-frac` is
+  not reproducible across tapes of different length; it is the mechanism that
+  invalidated the first re-run. W5a/W5b must pin warmup in bars, or the day
+  search will be uncomparable to itself the next time the dataset grows.
+- **W5a's transfer probe compares against 16.3122, not 13.6742**, and must use
+  the day tape's own aligned warmup.
+- Re-pinning `PINNED` to the new numbers is **not** done here — that is a night
+  deployment change with a soak and the 2026-09-15 roll in flight, and it is the
+  user's call.
+
+Runs: `outputs/real_data_night_newtape_20260824/` (frac 0.30, invalid — kept as
+the evidence for the alignment trap) and
+`outputs/real_data_night_newtape_aligned_20260824/` (the valid one).
+
+**Data for the day side is ready:** `TXF_RPT_minute_day.csv`, 73 MB,
+1 145 145 rows, current to 2026-08-21.
 
 ---
 
 ## 3. What ports free — verified by reading
 
-These are properties of the **night** codebase, which is where `live/` exists.
-Under Shape A they are already true; under Shape B they become true on the day
-the merge lands.
+These are properties of the **night** codebase, which is where `live/` exists —
+and under Shape A, which D1 chose, that is where the day deployment lives too. So
+they are already true today; nothing has to be ported to make them so.
 
 | | Why it ports | Evidence |
 |---|---|---|
@@ -253,8 +440,9 @@ the merge lands.
 ## 4. What does not port — the substance of the port itself
 
 **These are all night-tree file references.** In `day/forecast_eval` today, C2,
-C3, C5, C6 and C7 name files that do not exist — which is §0's point, not a
-separate problem.
+C3, C5, C6 and C7 name files that do not exist — which was §0's point, not a
+separate problem. **Under Shape A it stops mattering:** all of this work happens
+in `night/`, where those files do exist.
 
 ### C1 — no tuned DAY configuration exists · **BLOCKING · research**
 
@@ -274,8 +462,13 @@ row. **Mechanism:** there is no autoresearch entry point — `live/config.py`
 records that `strategy/wiring.py` is that seam and *"its entrypoint no longer
 exists"*, and the winning night config came from **`real_data.py` CLI flags**,
 which is what the `edit:`/`keep:` commit pairs are. A DAY search is the same loop
-against `--data <day file>`. **This work needs `results.tsv` and the tuning loop,
-so it happens wherever those live — today, only `night/`.** Scope: decision D2.
+**This work needs `results.tsv` and the tuning loop, so it happens wherever those
+live — which, under Shape A, is `night/` and only `night/`.**
+
+**Scope: settled by D2 — probe first.** A transfer baseline (night-pinned
+parameters over the day file, unchanged, one ~4-minute run) comes before any
+search, and its Calmar and median hold decide whether the full `edit:`/`keep:`
+loop is worth launching. Sequenced as W5a → W5b.
 
 ### C2 — the entry point cannot express a DAY deployment · build, small
 
@@ -297,18 +490,200 @@ whether this port happens.**
 **Proposed:** derive from the fill's timestamp (`classify_session`) or the policy,
 plus the regression test that fails on the literal.
 
-### C4 — `ROLL_AT = 15:30` was measured for a night strategy · **measurement**
+### C4 — `ROLL_AT = 15:30` was measured for a night strategy · **MEASURED 2026-08-24 (W2) — decision pending**
 
 `live/roll.py:183-190` derives it from the expiring month's final *night* session
-opening at 15:00 the day before its last trading day, whose first half hour is the
-most liquid stretch either month sees. For a DAY deployment 15:30 is **outside
-the traded session** — the clock still fires, so the ladder runs, unwatched and
-priced off a tape the run is not following. The DAY analogue is presumably the
-first half hour after 08:45; **presumably is not measured.**
+opening at 15:00 the day before its last trading day, whose first half hour the
+comment calls "the most liquid stretch either month sees". For a DAY deployment
+15:30 is **outside the traded session** — the clock still fires, so the ladder
+runs, unwatched and priced off a tape the run is not following.
 
-**Proposed:** re-derive from the RPT day file (per-minute volume on both months
-across the last three rolls) and carry `ROLL_AT` on the policy or config so two
-deployments cannot share the wrong one. Offline.
+#### The source the plan named cannot answer this
+
+W2 was specified as "re-derive from the RPT day file (per-minute volume on both
+months)". **That file cannot do it.** `TXF_RPT_minute_day.csv` is
+front-month-continuous — one contract per minute, measured 2026-08-23 and
+recorded in `real_data.load_minute_bars`' own docstring. On the roll date
+2026-08-18 it holds 300 day-session rows, **all `202608`**; the incoming month is
+absent. `TXF_RPT_ticks.csv` is the same series at tick resolution and is equally
+front-month-only.
+
+The raw TAIFEX `dataset/RPT/extracted_data/Daily_*.rpt` files carry **every**
+listed month and are the only source here that can. Measured from them, product
+`TX`, the three most recent rolls (2026-06-16, 2026-07-14, 2026-08-18 — last
+trading day minus `ROLL_LEAD_DAYS`), volume bucketed by half hour. A roll is two
+orders that must both fill, so the column that decides is the **thinner leg**:
+
+**DAY session 08:45–13:45 — the C4 question**
+
+| clock | expiring | incoming | both | thinner leg | share |
+|---|---|---|---|---|---|
+| **08:45** | 67 392 | 17 554 | 84 946 | **17 554** | 15.8 % |
+| 09:15 | 54 888 | 17 530 | 72 418 | 17 530 | 13.5 % |
+| 09:45 | 47 384 | 16 784 | 64 168 | 16 784 | 12.0 % |
+| 10:15 | 42 312 | 15 992 | 58 304 | 15 992 | 10.9 % |
+| 10:45 | 24 746 | 10 350 | 35 096 | 10 350 | 6.5 % |
+| 11:15 | 29 608 | 11 118 | 40 726 | 11 118 | 7.6 % |
+| 11:45 | 23 682 | 8 714 | 32 396 | 8 714 | 6.0 % |
+| 12:15 | 23 924 | 10 650 | 34 574 | 10 650 | 6.4 % |
+| 12:45 | 26 698 | 11 282 | 37 980 | 11 282 | 7.1 % |
+| **13:15** | 49 256 | 26 734 | 75 990 | **26 734** | 14.2 % |
+
+The peak is **13:15–13:45**, the closing stretch — but `ROLL_WINDOW` is an hour,
+and an hour from 13:15 runs 30 minutes past a 13:45 close. **The most liquid
+moment is the one a DAY deployment cannot use.** The best window that fits
+wholly inside the session is the open: 08:45–09:45 carries 35 084 on the thinner
+leg and leaves ~4 h of session behind a failed roll.
+
+#### The validation did not validate — night's own justification does not hold
+
+Running the same method over the night roll day, which should have reproduced
+15:00–15:30 as "the most liquid stretch either month sees":
+
+| clock | expiring | incoming | thinner leg | share |
+|---|---|---|---|---|
+| 15:00 | 9 476 | 2 484 | 2 484 | 4.5 % |
+| **15:30** ← `ROLL_AT` | 6 336 | 1 422 | 1 422 | 2.9 % |
+| 16:00 | 9 404 | 1 970 | 1 970 | 4.3 % |
+| 21:30 | 20 584 | 3 556 | 3 556 | 9.1 % |
+| **22:00** | 25 596 | 5 108 | **5 108** | 11.6 % |
+| 22:30 | 21 226 | 3 190 | 3 190 | 9.2 % |
+| 23:00 | 15 894 | 3 964 | 3 964 | 7.5 % |
+
+*(28 buckets measured; the seven that matter are shown.)*
+
+**15:00–15:30 is the 6th busiest bucket, not the busiest.** 22:00 is 2.1× more
+liquid on the thinner leg and 2.7× on the expiring month, and the actual roll
+window 15:30–16:30 carries 3 392 against 22:00–23:00's 8 298 — **2.4× worse**.
+No metric in the table picks 15:30: not the thinner leg, not the expiring month,
+not the combined.
+
+What *does* justify 15:30 is the other half of the existing comment, on
+`ROLL_WINDOW`: an hour from 15:30 leaves "~13 h clear of the moment the contract
+stops trading". That is a **runway** argument, and it stands. The liquidity
+claim beside it does not.
+
+**Proposed, and the decision this needs:** carry `ROLL_AT` on the policy or
+config so two deployments cannot share the wrong one — that part is settled and
+unaffected.
+
+#### DECIDED 2026-08-25 — **DAY `ROLL_AT` = 12:45; NIGHT stays at 15:30**
+
+**NIGHT: unchanged.** The liquidity claim in `roll.py`'s comment does not survive
+the measurement above, but the runway argument does, and the first live roll is
+2026-09-15. Left as-is deliberately, not by omission.
+
+**DAY: 12:45 — one hour before the 13:45 close**, so `ROLL_WINDOW` fills exactly
+the remainder of the session and cannot overrun it.
+
+**The window-total table above is the wrong metric, and is kept only as the
+liquidity survey it is.** `RollSchedule.due` gates when a roll may *start*;
+`cli.py:827` blocks re-entry the moment `roll_state` is set, and the fills are
+worked by `advance_roll_ladder`, which is **not** bounded by `ROLL_WINDOW`. So
+the rest of the hour is a retry budget for `_roll_evidence`, not for fills. What
+decides is (a) the market at the execution moment, and (b) what is left of the
+session behind it.
+
+**Measured at the ladder's actual execution span** (first 2 min: 50 s per leg,
+two legs), per roll day:
+
+| `ROLL_AT` | incoming lots/min | intra-minute range | session left | retry tape |
+|---|---|---|---|---|
+| 08:45 | 276 | **132.2 pts** | 300 min | decaying |
+| 09:00 | 404 | 86.3 pts | 285 min | decaying |
+| 09:15 | 231 | 87.2 pts | 270 min | decaying |
+| 11:00 | 102 | 52.8 pts | 165 min | flat |
+| **12:45** | **145** | **26.8 pts** | **60 min** | **rising** |
+| 13:15 | 130 | 29.2 pts | 30 min | rising, window overruns |
+
+**The volatility column is what settles it.** `ROLL_LADDER_MAX_TICKS` is 25 and
+`tick_size` is 1.0, so the ladder's entire escalation budget is **25 points**. At
+08:45 the front month's mean intra-minute range is 132 points — the price moves
+five times the ladder's whole budget inside one minute, and a 25-tick limit is
+noise against it. At 12:45 the range is 26.8 points, so the cap is ~93 % of a
+minute's range and each rung buys real certainty. 12:45 is the **calmest** moment
+of the session, 4.9× calmer than the open.
+
+**Depth is not a constraint anywhere.** `PINNED.max_position` is 1, so the roll
+is one lot per leg against 145 lots/min — every candidate is orders of magnitude
+deeper than needed. Choosing on volume was choosing on the wrong axis.
+
+**12:45's retry path improves rather than decays.** If the first ladder pass does
+not fill, the tape ahead of it ramps steadily into the close — 458 → 650 → 1 276
+→ 2 194 → 2 904 → 5 084 lots/min over 13:37–13:44 — and that ramp is continuous
+trade, not a single closing auction (measured minute by minute). From 08:45 the
+tape fades the other way: 1 741 → 966 → 665 → 325 on the expiring month.
+
+**The cost, stated plainly.** 60 minutes of session behind the roll instead of
+300, and `roll_window_lapsed` fires at 13:45 — exactly as the market shuts, with
+no same-day intervention possible. **The backstop is the next day**, not the
+remainder of this one: `ROLL_LEAD_DAYS` is 1, and the expiring month still trades
+its last trading day. **Measured: 08:45 → 13:29:58**, ~4 h 45 m and ~50 000 lots
+across the three most recent expiries.
+
+> **Correction to SHIOAJI_PLAN §2.6**, which says the expiring contract "traded a
+> normal day session to 13:44:59" on its last trading day. It does not: the
+> **expiring** month stops at **13:30**, while the incoming month runs to
+> 13:44:59 (2026-08-19: `202608` last print 13:29:58, `202609` 13:44:59). The
+> 13:44:59 figure in §2.6 belongs to the month the alias had already rolled to.
+> Nothing in the code depends on the wrong number — `RollWatch` watches the
+> alias, not the clock — but the lapse backstop is 15 minutes shorter than that
+> sentence implies.
+
+**Also noticed, not acted on:** TAIFEX lists a calendar-spread instrument
+(`202608/202609`, 2 174 prints on 2026-08-19) — the purpose-built way to roll
+both legs as one trade, with no leg risk. This system does not use it and W2 does
+not propose starting; recorded so it is not re-discovered from scratch.
+
+Measurement scripts: `tools/roll_at_measure.py` (per-bucket, two-month) and the
+execution-moment/volatility figures in this section. Offline.
+
+### C4a — `front_month_at` splices 1 d 8.5 h before the tape does · **FOUND 2026-08-25 · silent · NIGHT**
+
+Found while wiring C4's per-policy `ROLL_AT`, because the two share `roll_at`.
+
+`collapse_front_month` states the requirement exactly: the cache splice "has to
+be the same rule the live stream switches on — otherwise the warm-up context and
+the tape would disagree for **a day and a half every month**, and nothing would
+detect it", and names the evaluated convention as "spliced by *calendar*,
+switching **one day after each expiry**".
+
+`front_month_at` does not implement that. It flips at
+`roll_at(month)` = last trading day − `ROLL_LEAD_DAYS` at `ROLL_AT`, which is one
+day *before* expiry. Measured against `TXF_RPT_minute_night.csv`, every month
+from 202601 to 202608:
+
+| | tape switches | `front_month_at` flips | gap |
+|---|---|---|---|
+| 202606→202607 | 2026-06-18 00:00 | 2026-06-16 15:30 | **1 d 8 h 30 m** |
+| 202607→202608 | 2026-07-16 00:00 | 2026-07-14 15:30 | **1 d 8 h 30 m** |
+| 202608→202609 | 2026-08-20 00:00 | 2026-08-18 15:30 | **1 d 8 h 30 m** |
+
+Identical every month — 1 d 8 h 30 m, which is the gap the comment predicted, to
+the hour. (January and February show 15 d and 6 d because of New Year and Lunar
+New Year; the tape's rule is "the session after the expiry", not "+24 h".)
+
+**What it costs:** for ~1.5 days each month the backfilled warm-up context is
+taken from a different delivery month than the evaluated series used at the same
+timestamps. It is not an error anywhere — both months are real, both print, and
+the frame is well-formed. It is exactly the "nothing would detect it" case.
+
+**Not fixed here, and C4's change was kept clear of it.** `front_month_at` is
+pinned to the module default and is **not** policy-keyed, so giving DAY a 12:45
+`ROLL_AT` did not move any deployment's splice. Fixing it means changing the
+warm-up context of the pinned NIGHT deployment, three weeks before the first
+live roll — the user's call, not a side effect. A test asserts the splice did
+not move (`test_the_cache_splice_rule_was_not_moved_by_this_change`).
+
+**Superseded 2026-08-25 by `TAPE_REBUILD_PLAN.md`.** Investigating this found a
+larger defect underneath it: the tape holds the expiring contract past its
+13:30 death on the last trading day, so **~540 night bars and 15 day bars are
+missing every month** — data the live path's own fallback would have filled.
+That reverses the fix. The code's rule is the one a live deployment can execute
+(a roll must precede expiry); the tape's cannot be reproduced live. So the
+**tape** is rebuilt to splice at `roll_at`, not the code changed to match the
+tape. C4a then dissolves rather than being fixed. Two decisions and the
+sequencing constraint — it must land before W5 — are in that plan.
 
 ### C5 — `outputs/bars_cache.csv` is shared across deployments · build, small
 
@@ -344,8 +719,11 @@ night-sized number. The cache is the only other source and **starts empty**, so 
 first DAY run is short ~2 months of context and cannot recover except by waiting.
 
 **Proposed:** seed the day cache offline from `TXF_RPT_minute_day.csv` in the
-cache's four-column schema (~40 lines, testable). Mixes two bar sources in one
-context window, which V1c only ever compared on a single session — decision D4.
+cache's four-column schema (~40 lines, testable). It mixes two bar sources in one
+context window, which V1c only ever compared on a single session.
+
+> **DECIDED 2026-08-24 — D4: acceptable.** The seeder is in scope (step W3); the
+> port does not wait ~2 months for a cache to fill from live.
 
 ### C8 — `forced_close=False` inherits a night-measured risk profile · **research**
 
@@ -362,70 +740,168 @@ instead of 05:00. V4's aggressive order type is a prerequisite, not a nice-to-ha
 
 ## 5. Order of work
 
-**Shape A** — nothing precedes D0.
-**Shape B** — everything below is preceded by:
+**D1 chose Shape A, so nothing precedes W0.** The M-steps are **not being done**
+and are kept only as the record of what Shape B would have cost — corrected,
+because M3–M5 as written would not have run:
 
 ```
 M0  [DONE 2026-08-24] day's July work committed as 7fd3fa6 -> verified: both trees clean
 M1  [DONE 2026-08-24] shioaji installed + pinned ==1.7.2   -> verified: imports clean, both trees pinned
 M2  [DONE 2026-08-24] day venv rebuilt, uv-managed 3.12.13 -> verified: pyvenv.cfg home is uv, not conda
-M3  fetch night's branch into day/ (shared origin)         -> verify: merge base is 2716f49
-M4  resolve the 9-file collision (2)                       -> verify: 744 tests green in day/
-M5  reconcile real_data.DEFAULT_DATA + CLAUDE.md (2.1)     -> verify: a bare run finds its data
+M3  [NOT DOING - Shape A] fetch night's branch into day/   -- as written it could not run: origin carries
+                                                              NEITHER branch (0). And the merge base is
+                                                              aae8473, not 2716f49 -- the stated
+                                                              verification was a false fact.
+M4  [NOT DOING - Shape A] resolve the collision            -- 14 files, not 9: 1 modify/delete,
+                                                              7 add/add, 6 content (2)
+M5  [NOT DOING - Shape A] reconcile DEFAULT_DATA + CLAUDE.md -- the DEFAULT_DATA half is already closed
+                                                              by ed0a1ba; the CLAUDE.md half is open (2.1)
 ```
 
-M0–M2 are done; **M3 onward is the actual migration and none of it has started.**
-Note M1/M2 were worth doing regardless of D1: the conda-sourced venv and the
-floating `shioaji` spec were defects in their own right, and the pin now protects
-the night tree too.
+M0–M2 were worth doing regardless of D1: the conda-sourced venv and the floating
+`shioaji` spec were defects in their own right, and the pin now protects the
+night tree too.
 
-Then, in either shape:
+**The work itself — all of it in `night/forecast_eval`:**
+
+> **CURRENT STAGE, 2026-09-01: W4 is the last step done. W5a is next in the
+> list and is blocked; W6 and W7 are the available work.**
+>
+> | | |
+> |---|---|
+> | Done | W0, W1, W2, W3, **W4**, W4b — all offline, no market |
+> | Blocked | **W5a** — the tape rebuild, plus that plan's D1/D2 untaken (below) |
+> | Available now | **W6**, **W7** — neither reads the tape; code and tests are CPU-only, but their *verification* runs need the GPU (see the header) |
+> | Not started | W5b (downstream of W5a), W8, W9 — the last two need a market |
+> | Prerequisite for any pinned row | commit the tree (header) |
+>
+> Nothing here is waiting on a decision except W5a. The port has not begun to
+> touch the entry point yet — **no day deployment exists**; what is built so far
+> is the per-policy machinery (`SessionPolicy`, cache keying, `ROLL_AT`,
+> warm-up derivation, the RPT seeder) that a DAY deployment would stand on.
 
 ```
-D0  Session-tag results.tsv + a DAY row schema             -> verify: test_live_config green with two pins
-D1  C3 (rolled-leg session) + C5 (cache path)              -> verify: new tests fail against the old literals
-D2  C4 - re-derive ROLL_AT from the RPT day file           -> verify: a measured table here, like 2.6's
-D3  C7 - cache seeder from TXF_RPT_minute_day.csv          -> verify: seeded cache passes warm_up's policy check
-D4  C6 - policy-derived warm-up window                     -> verify: DAY asks ~85d, NIGHT still 30d
-D5  C1 - tune on the day file, real_data.py (scope: D2)    -> verify: a pinned row + reproduction, 2.13-style
-D6  C2 - `--config day` at the entry point                 -> verify: dryrun banner shows DAY provenance
-D7  offline parity for DAY, V0-style                       -> verify: live loop = run_backtest, bit-identical
-D8  5-minute dryrun inside a real DAY session   [MARKET]   -> verify: start-up, warm-up, banner, first bar
-D9  soak                                        [MARKET]   -> verify: V5's terms, applied to DAY
+W0  [DONE 2026-08-24] session-tag results.tsv + schema     -> verified: a Calmar-99 DAY row leaves the
+    + dataset vintage + warmup_bars columns (2.2)             NIGHT pin untouched; 5 new tests
+W1  [DONE 2026-08-24] C3 rolled-leg + C5 cache path        -> verified: 3 + 4 tests fail against the old
+                                                              literals, pass with the fix
+W2  [DONE 2026-08-25] C4 ROLL_AT on the policy           -> verified: DAY 12:45 (window ends exactly at
+                                                              the 13:45 close), NIGHT 15:30 unchanged;
+                                                              9 new tests. C4a found, NOT fixed.
+W3  [DONE 2026-08-24] C7 cache seeder             [D4 ok] -> verified: 30 000 DAY bars seeded, 0 outside
+                                                              the DAY policy; 10 new tests
+W4  [DONE 2026-08-31] C6 - policy-derived warm-up window    -> verified: SessionPolicy.bars_per_session()
+    (NIGHT=840, DAY=300 min/session) + LiveConfig.warmup_       (round(target_bars / bars_per_session * 7/5),
+    days_default() replace the flat 30-day constant             target_bars = context + stride*500 = 18008)
+                                                              NIGHT reproduces 30 exactly (unchanged CLI
+                                                              default), DAY computes 84 (~85 quoted); wired
+                                                              into cli.py's --warmup-days default; 2 new tests
+W4b [DONE 2026-08-24] re-baseline on the NEW tape (2.2)   -> verified: 185 trades reproduce bit-identically;
+                                                              208 trades, Calmar 16.3122 on the new tape
+W5a [BLOCKED on the tape rebuild - see below]              -> verify: one ~4-min run vs Calmar 16.3122;
+    [D2] TRANSFER PROBE - night-pinned params over the day       pin warmup in BARS, not a fraction (2.2)
+    file, aligned warmup. Decides whether W5b is worth it.
+W5b C1 - full edit:/keep: search on the day file, only if  -> verify: a pinned row + reproduction, 2.13-style
+    the probe warrants it
+W6  C2 - `--config day` at the entry point                 -> verify: dryrun banner shows DAY provenance
+W7  offline parity for DAY, V0-style                       -> verify: live loop = run_backtest, bit-identical
+W8  5-minute dryrun inside a real DAY session   [MARKET]   -> verify: start-up, warm-up, banner, first bar
+                                                              [DOES NOT touch the shared Shioaji account —
+                                                              dryrun never calls a broker order API]
+W9  soak                                        [MARKET]   -> verify: V5's terms, applied to DAY
+                                                              [DOES touch the shared account — same
+                                                              contract/account as the NIGHT soak. Unresolved:
+                                                              separate simulation credentials for DAY, or
+                                                              sequence the two soaks instead of running both
+                                                              --broker shioaji at once. Decide before W9, not
+                                                              during it — see SHIOAJI_PLAN.md's own account-
+                                                              conflation history (the 6-lot startup_refused).]
 ```
 
-D0–D4 need no market. **D5 is the long pole**; everything downstream waits on it.
-C3 is worth doing on its own merits whatever is decided here.
+W0–W5 need no market. **W5 is the long pole**; everything downstream waits on it.
+C3 (inside W1) is worth doing on its own merits whatever is decided here, and
+**W4b is a prerequisite for trusting W5b's acceptance test at all** (§2.2).
+
+> **W5 is blocked on `TAPE_REBUILD_PLAN.md`, and that plan's constraint is not
+> resolved by lifting D3's hold.** Recorded here because §5 is the sequencing
+> document and, until 2026-09-01, the constraint lived only in C4a's superseded
+> note where nothing reading this list would find it.
+>
+> That plan states it as §4: *"This lands before `DAY_SESSION_PLAN.md` W5, or
+> W5 is wasted."* The reason is measured, not stylistic — the evaluated tape
+> keeps the expiring contract past its 13:30 death on the last trading day, so
+> **~540 night bars and 15 day bars are missing at every roll**, and the
+> rebuild re-attributes **~6.3 %** of night bars and adds ~60 000 more. **That
+> invalidates W4b's Calmar 16.3122 — which is precisely the number W5a's
+> acceptance test compares against.** Run W5a first and its verdict is measured
+> against a baseline scheduled for replacement, so a "no" cannot be
+> distinguished from a tape artefact and a "yes" has to be re-run anyway.
+>
+> **Two things gate the rebuild itself and are the user's, not assumed here** —
+> `TAPE_REBUILD_PLAN.md` §6's **D1** (re-tune NIGHT now, or validate the new
+> tape in parallel and leave the pin alone through the 2026-09-15 roll — that
+> plan recommends the latter) and **D2** (whether the combined
+> `TXF_RPT_minute.csv` survives). Neither has been taken.
+>
+> **The order that follows from this:** rebuild T0–T4 → re-run W4b on the new
+> tape → W5a → W5b. Alternatively W5a runs now as an explicitly *provisional*
+> probe, on the stated understanding that its number is re-measured after the
+> rebuild regardless of the answer. Either is defensible; what is not is
+> running W5a without recording which of the two was chosen. **W4, W6 and W7
+> are unaffected** — none of them reads the tape — so they can proceed in
+> parallel with the rebuild if progress is wanted meanwhile.
+
+> **SUPERSEDED 2026-08-31 — D3's hold is lifted.** *(Original, kept for the
+> record: "HELD 2026-08-24 — D3. None of W0–W9 starts until the user says so.
+> This is the plan of record, not a queue in progress.")* The user directed
+> the migration to proceed after progress stalled over a week on time-cost
+> testing concerns. W4 above is the first step done under this direction.
+> **W5a is next in the list but is not unblocked by this** — lifting D3
+> removed the *hold*, not the tape-rebuild *prerequisite*; see the blocking
+> note above. W6 and W7 are the steps that can proceed with nothing pending.
 
 ---
 
-## 6. Decisions needed — the user's, not assumed
+## 6. Decisions — **all five taken 2026-08-24**
 
-- **D1 — which tree hosts the day deployment?** Shape A (`night/`, one codebase,
-  the session stays a parameter) or Shape B (`day/`, paying §2's merge first). The
-  folder layout suggests B; the design argues A. **Recommendation: A**, with
-  `day/` kept as the research tree it already is.
-- **D2 — how much re-tuning?** A full `edit:`/`keep:` search on the day file, or
-  first a cheap **transfer baseline**: night-pinned parameters over
-  `TXF_RPT_minute_day.csv` unchanged, read the Calmar and the median hold. One
-  ~4-minute run, and it answers whether the search is worth launching.
-- **D3 — sequencing.** DOCS_PLAN's 2026-08-11 decision was "after V5". V5 is not
-  passed and the first live roll is 2026-09-15. Does the offline half (D0–D4)
-  start now in parallel, or wait?
-- **D4 — RPT-seeded cache.** Acceptable to mix RPT and `kbars` in one context
-  window, or does the port wait ~2 months for a cache to fill from live?
-- **D5 — where day's July research work ends up.** ~~Deadline~~ **safe since
-  2026-08-24**: it is commit `7fd3fa6` on `autoresearch_result_1`. The open
-  question is now direction — merge night into day (Shape B), cherry-pick the
-  parts still wanted into night (Shape A), or leave it on its branch as a record.
-  Note it collides with 9 files night also changed, `strategy/threshold.py` worst
-  of all.
+- **D1 — which tree hosts the day deployment?** **DECIDED: Shape A.**
+  `night/forecast_eval` hosts it, the session stays a parameter, and
+  `day/forecast_eval` stays the research tree it already is. §2's merge is not
+  happening; §5's M3–M5 are cancelled.
+- **D2 — how much re-tuning?** **DECIDED: probe first.** Run the cheap transfer
+  baseline — night-pinned parameters over `TXF_RPT_minute_day.csv` unchanged, one
+  ~4-minute run — and read the Calmar and the median hold before deciding whether
+  to launch a full `edit:`/`keep:` search. Sequenced as W5a → W5b.
+- **D3 — sequencing.** **DECIDED: hold.** The offline half does not start now;
+  work begins when the user says so. (Context unchanged: V5 is not passed and the
+  first live roll is 2026-09-15.)
+- **D4 — RPT-seeded cache.** **DECIDED: acceptable.** Mixing RPT and `kbars` in
+  one context window is fine. W3's seeder is in scope, and the port does not wait
+  ~2 months for a cache to fill from live.
+- **D5 — where day's July research work ends up. DECIDED: it stays where it is.**
+  Shape A already removed the merge. The user has now also ruled out **any**
+  cross-tree transport — no push to GitHub, and no local remote between the two
+  folders — which closes the cherry-pick option too. Day's July work therefore
+  remains commits `7fd3fa6` and `ed0a1ba` on `autoresearch_result_1` in
+  `day/forecast_eval`, as the record.
+
+  **Consequences, so they are not rediscovered later:**
+
+  - §2's 14-file collision list is now purely historical. Nothing will ever be
+    resolved against it.
+  - Night does **not** get day's `reports.py`, `metrics.py` or `threshold.py`
+    work. If any of it is wanted in night later, it is rewritten there, not moved.
+  - The work exists in exactly one place, on one disk, with no second copy —
+    `origin` last saw this repository on 2026-06-10. That is a durability fact,
+    not an argument to publish; a backup that is not a git remote satisfies it.
+  - `origin` (public, `main` at `196f5f0`) stays as it is. Neither working branch
+    is on it and neither is going on it.
 
 ---
 
 ## 7. Not covered here
 
-The day-session **backtest result** itself (that is D5's output); anything about
+The day-session **backtest result** itself (that is W5's output); anything about
 real money (V4's fill gap is a hard gate for either session); and the porting
 *guide* that `docs/DOCS_PLAN.md` records as debt — this plan's eventual
-deliverable, which cannot be written as a procedure until D8 has been run once.
+deliverable, which cannot be written as a procedure until W8 has been run once.

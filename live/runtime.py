@@ -281,8 +281,32 @@ class LiveRuntime:
         return self.loop._last_price
 
 
+    def _settlement_session(self, timestamp: Any) -> str:
+        # Tech: the session a synthetic roll settlement is booked to, derived
+        #       from the deployment's policy and the fill's own timestamp.
+        # Why:  DAY_SESSION_PLAN C3. This used to be the literal "NIGHT", which
+        #       is correct for exactly one deployment and silently wrong for the
+        #       other: on a DAY run every rolled round-trip accrued into
+        #       `realized_pnl_by_session["NIGHT"]`, a session the run never
+        #       traded. Nothing raises — the numbers are simply filed under the
+        #       wrong heading.
+        #
+        #       A single-session policy answers unconditionally, ahead of the
+        #       label. That is deliberate: `ROLL_AT` can fall outside the traded
+        #       session (C4 — 15:30 is outside a DAY session), and booking the
+        #       closing leg to whatever session the clock happened to land in
+        #       would split one round-trip across two buckets. The opening leg
+        #       was this deployment's; so is the close.
+        sessions = self.policy.sessions
+        if len(sessions) == 1:
+            return next(iter(sessions))
+        # Tech: a multi-session policy has no single answer, so the timestamp
+        #       decides; "UNKNOWN" matches `metrics.build_trades`' own fallback
+        #       for a fill it cannot classify.
+        return self.policy.label(timestamp) or "UNKNOWN"
+
     def settle_rolled_leg(self, *, price: float, timestamp: Any,
-                          session: str = "NIGHT") -> Optional[dict]:
+                          session: Optional[str] = None) -> Optional[dict]:
         """Close the expiring contract's position in both mirrors, at `price`."""
         # Tech: apply a synthetic fill on the closing side for the whole position,
         #       through the same two calls `LiveLoop` makes for a venue fill, then
@@ -306,6 +330,11 @@ class LiveRuntime:
         fill = FillEvent(timestamp=timestamp, side=side, fill_price=float(price),
                          quantity=abs(held), fee=0.0)
         pnl_before = self.portfolio.realized_pnl
+        # Tech: derive the session unless the caller named one explicitly.
+        # Why:  C3 — see `_settlement_session`. The parameter is kept so a test
+        #       can force a value, but no production caller passes it.
+        if session is None:
+            session = self._settlement_session(timestamp)
         self.portfolio.apply_fill(fill, session=session)
         self.trader.on_fill(side, abs(held), fill_price=float(price),
                             bar_idx=-1, timestamp=timestamp)
@@ -317,6 +346,7 @@ class LiveRuntime:
         self.roll_fills.add(timestamp)
         settled = {
             "position": held,
+            "session": session,
             "settled_at": float(price),
             "realized_points": round(self.portfolio.realized_pnl - pnl_before, 2),
             "price_is_estimated": True,

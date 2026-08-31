@@ -56,6 +56,7 @@ from forecast_eval.live.relogin import (                          # noqa: E402
 from forecast_eval.live.roll import (                             # noqa: E402
     Roll, RollSchedule, RollWatch, front_month_at, roll_at)
 from forecast_eval.live.runtime import LiveRuntime                # noqa: E402
+from forecast_eval.live import soak_epoch                         # noqa: E402
 from forecast_eval.live.startup import (                          # noqa: E402
     RestartBlocked, RestartGuard, RestartPolicy,
 )
@@ -200,7 +201,33 @@ def _preflight_orders(args: Any) -> Optional[str]:
     if not args.i_understand_this_places_orders:
         return ("--broker shioaji places simulated orders. Re-run with "
                 "--i-understand-this-places-orders to confirm.")
+    # Tech: exactly one of --fresh-start / --resume, always.
+    # Why:  SHIOAJI_PLAN.md's "Open items" §3 — retention across a restart was
+    #       neither always-fresh nor always-recover, it was just whatever
+    #       `adopt_position` happened to do, with no record of which the
+    #       operator meant. Explicit and required on every order-placing
+    #       launch, matching how `--i-understand-this-places-orders` itself
+    #       replaced an absence rather than a default.
+    if args.fresh_start and args.resume:
+        return "--fresh-start and --resume are mutually exclusive — pick one."
+    if not args.fresh_start and not args.resume:
+        return ("--broker shioaji needs --fresh-start or --resume: state "
+                "retention across a restart must be a deliberate choice.")
     return None
+
+
+def _resolves_soak_epoch(args: Any) -> bool:
+    # Tech: whether this launch resolves — and so may *write* — a soak epoch.
+    #       Exactly the launches `_preflight_orders` accepts, and no others.
+    # Why:  `soak_epoch.resolve` writes on both branches, and it runs ~100 lines
+    #       before `_preflight_orders` gets to refuse anything. Inlined in
+    #       `main`, the two conditions were free to disagree, and they did: the
+    #       inline guard caught the both-flags case and missed the neither-flag
+    #       one, so a launch that was about to be refused still minted a phantom
+    #       `soak_epoch.json`. A seam here is the same remedy `_rails_config`
+    #       exists for — a condition that is read once in `main` cannot be
+    #       tested, and a wrong one looks exactly like a right one.
+    return args.broker == "shioaji" and (args.fresh_start != args.resume)
 
 
 def _rails_config(args: Any, cfg: Any) -> RailsConfig:
@@ -246,13 +273,33 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--flatten-aggression-ticks", type=int, default=5,
                     help="How far through the touch a FLATTEN close is priced "
                          "(--broker shioaji only)")
+    ap.add_argument("--fresh-start", action="store_true",
+                    help="Start a new soak epoch. --broker shioaji requires "
+                         "exactly one of --fresh-start / --resume; the two are "
+                         "mutually exclusive. Refuses at start-up unless the "
+                         "account is already flat — flatten with "
+                         "`python -m forecast_eval.live.flatten` first; this "
+                         "flag never places an order itself.")
+    ap.add_argument("--resume", action="store_true",
+                    help="Continue the current soak epoch across a restart. "
+                         "--broker shioaji requires exactly one of "
+                         "--fresh-start / --resume; the two are mutually "
+                         "exclusive. Carries the soak id forward so "
+                         "session.jsonl files across restarts can be read as "
+                         "one soak; bootstraps the first epoch if none exists "
+                         "yet.")
     ap.add_argument("--contract", default="TXFR1")
     ap.add_argument("--duration-minutes", type=float, default=None,
                     help="Stop after this long. Default: run until the session "
                          "ends or Ctrl-C.")
-    ap.add_argument("--warmup-days", type=int, default=30,
+    ap.add_argument("--warmup-days", type=int,
+                    default=PINNED.warmup_days_default(),
                     help="Calendar days of history to request for the context "
-                         "and emitter priming (needs ~21 night sessions)")
+                         "and emitter priming. Default is derived from the "
+                         "pinned policy's bars-per-session (DAY_SESSION_PLAN "
+                         "C6), not a flat constant — currently "
+                         f"{PINNED.warmup_days_default()} for "
+                         f"{sorted(PINNED.policy.sessions)}")
     ap.add_argument("--out", type=Path, default=None,
                     help="Output dir; default outputs/live_<timestamp>")
     ap.add_argument("--state-file", type=Path, default=None,
@@ -288,6 +335,23 @@ def build_parser() -> argparse.ArgumentParser:
                          "without us. A polling interval, not a threshold — a "
                          "wrong guess costs one ~40 ms query.")
     return ap
+
+
+def _bars_cache_path(out_dir: Path, policy: Any) -> Path:
+    # Tech: the bar cache, keyed by the deployment's session policy.
+    # Why:  C5. One `bars_cache.csv` was shared by every deployment, so a DAY run
+    #       wrote DAY bars into the file a NIGHT run reads back as model context.
+    #       `warm_up` rejects the mixture rather than trading it, so this was
+    #       never silent — but it blocks whichever soak starts second, and the
+    #       cache is the only source for months the venue has delisted (§2.8
+    #       Finding D), so what it costs is context that cannot be refetched.
+    #
+    #       The pre-C5 `bars_cache.csv` is NOT adopted automatically. It holds
+    #       NIGHT bars, and auto-adopting it would hand them to whichever
+    #       deployment ran first — a DAY run inheriting a night cache is the
+    #       exact corruption this function exists to prevent. That file was
+    #       renamed to `bars_cache_night.csv` once, by hand, on 2026-08-24.
+    return out_dir / f"bars_cache_{policy.cache_slug()}.csv"
 
 
 def _warmup_contracts(api: Any, front: Any) -> list:
@@ -345,9 +409,39 @@ def main(argv=None) -> int:
         alerter.fatal("startup_refused", str(exc), gate="RestartGuard")
         return 3
 
+    # Tech: resolve the soak epoch from --fresh-start/--resume, only for the
+    #       order-placing broker — dryrun/sim have no venue ledger for a soak
+    #       id to ever get reconciled against. Skipped unless *exactly one*
+    #       flag is set, which is the only combination `_preflight_orders`
+    #       accepts moments later, once the broker exists.
+    # Why:  soak_epoch.py / SHIOAJI_PLAN.md "Open items" §3. This has to
+    #       happen before the recorder exists so the epoch id can go in its
+    #       `meta` record — the one place every session.jsonl is
+    #       self-identifying without a second file to cross-reference. But
+    #       `resolve` *writes* on both of its branches — `fresh_start=True`
+    #       retires whatever epoch is on disk, and `--resume` with nothing on
+    #       disk bootstraps one — and neither may fire for a launch that is
+    #       about to be refused anyway. An invalid combination would otherwise
+    #       destroy a real epoch's continuity, or mint a phantom epoch, for a
+    #       run that never traded a single bar.
+    #
+    #       MEASURED 2026-08-31: guarding only the both-flags case left the
+    #       neither-flag case — equally refused, 100 lines later — writing a
+    #       first-ever `soak_epoch.json` on its way to that refusal. The next
+    #       `--fresh-start` then retired the phantom into `retired[]`, and the
+    #       next `--resume` adopted it as the soak's identity. `!=` is the one
+    #       condition `_preflight_orders` already enforces, so the two cannot
+    #       drift apart again.
+    epoch = None
+    if _resolves_soak_epoch(args):
+        epoch = soak_epoch.resolve(state_file.parent / "soak_epoch.json",
+                                   fresh_start=args.fresh_start,
+                                   now=datetime.now())
+
     recorder = Recorder(out / "session.jsonl", simulation=True,
                         meta={"config": cfg.describe(), "broker": args.broker,
-                              "contract": args.contract})
+                              "contract": args.contract,
+                              "soak_id": epoch.soak_id if epoch else None})
     alerter.recorder = recorder
     capture = None if args.no_capture else TickCapture(out / "ticks.csv")
 
@@ -465,6 +559,27 @@ def main(argv=None) -> int:
         print(_broker_banner(args, contract_note))
         print(cfg.describe())
 
+        # Tech: --fresh-start refuses a non-flat account, before adopt_position
+        #       ever runs. It only checks — it never places an order.
+        # Why:  soak_epoch.py / SHIOAJI_PLAN.md "Open items" §3. Without this,
+        #       `--fresh-start` would still silently adopt whatever the venue
+        #       holds, since `adopt_position` below runs unconditionally either
+        #       way — making the flag mean "start a new soak id" but not
+        #       "start clean," which is the one thing an operator reaching for
+        #       it actually wants. `flatten.py` stays the only path that closes
+        #       a position; this is a check, not a second implementation of it.
+        if args.broker == "shioaji" and args.fresh_start:
+            held = rt.broker.broker_position_detail()
+            if held is not None and held.signed_qty != 0:
+                alerter.fatal(
+                    "startup_refused",
+                    f"--fresh-start refuses a non-flat account: holds "
+                    f"{held.signed_qty:+d} lot(s) @ {held.avg_price:.2f}. "
+                    f"Flatten with `python -m forecast_eval.live.flatten`, "
+                    f"then restart with --fresh-start again.",
+                    gate="fresh_start")
+                return 5
+
         # Tech: adopt whatever the account is already holding, before any bar
         #       reaches the loop; an unadoptable position stops the run here.
         # Why:  §2.20. This is the restart path: the strategy holds for days, so a
@@ -499,7 +614,7 @@ def main(argv=None) -> int:
         #       venue delists and cannot serve any more (§2.8 Finding D).
         bars = rt.fetch_warmup_bars(api, _warmup_contracts(api, contract),
                                     start.isoformat(), end.isoformat(),
-                                    cache_path=out.parent / "bars_cache.csv",
+                                    cache_path=_bars_cache_path(out.parent, rt.policy),
                                     front_month_at=front_month_at)
         print(f"backfill: {len(bars)} bars in {time.time()-t0:.1f}s "
               f"[{bars['timestamp'].iloc[0]} .. {bars['timestamp'].iloc[-1]}]"
@@ -545,9 +660,21 @@ def main(argv=None) -> int:
             recorder.record("session_down", wall=datetime.now())
 
         def _on_session_event(resp_code, event_code, info, event):
+            # Tech: the venue's `event` argument is recorded as `venue_event`,
+            #       not `event`.
+            # Why:  MEASURED 2026-08-31 — `Recorder.record(self, event, **fields)`
+            #       takes the record's *name* as its first parameter, so passing
+            #       `event=` as well raised `TypeError: got multiple values for
+            #       argument 'event'` on every single venue session event. The
+            #       Shioaji Rust layer swallows callback exceptions, so nothing
+            #       ever halted and nothing was logged on this side: 14 raises in
+            #       `shioaji.log` since 2026-08-13 and **zero** `session_event`
+            #       records in any `session.jsonl` ever written. A silent hole in
+            #       the trail, in the one channel that reports what the venue
+            #       itself said about the session.
             recorder.record("session_event", resp_code=resp_code,
                             event_code=event_code, info=str(info)[:200],
-                            event=str(event))
+                            venue_event=str(event))
 
         def _register_callbacks():
             # Tech: clear then re-register every callback this process owns.
@@ -849,10 +976,10 @@ def main(argv=None) -> int:
         #       driven by it can never roll a position; it can only settle one.
         #       This fires while both months trade.
         schedule = RollSchedule(month=contract_month(contract),
-                                recorder=recorder)
+                                recorder=recorder, policy=cfg.policy)
         lapsed_reported: set = set()
         print(f"roll: {schedule.month} until "
-              f"{roll_at(schedule.month):%Y-%m-%d %H:%M}")
+              f"{roll_at(schedule.month, cfg.policy):%Y-%m-%d %H:%M}")
 
         # Tech: the token scheduler, seeded with the start-up login's timestamp.
         # Why:  §2.24 — the session token expires 24 h after login and the SDK has

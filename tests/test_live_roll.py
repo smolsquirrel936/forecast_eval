@@ -9,7 +9,7 @@ Three things are covered here, in the order a roll exercises them: noticing it
 (`RollWatch`), warming up across it (the spliced backfill), and carrying the
 position through it (`LiveRuntime`).
 """
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 import pandas as pd
 import pytest
@@ -347,12 +347,15 @@ class Alerter:
         self.sent.append(("fatal", kind))
 
 
-def _rolling_runtime():
-    """A warm NIGHT runtime holding one long lot, as a roll would find it."""
+def _rolling_runtime(policy=None, start="2026-08-18 16:00"):
+    """A warm runtime holding one long lot, as a roll would find it.
+
+    Defaults to NIGHT; `policy`/`start` let the DAY mirror be built the same
+    way, which is what C3's regression needs."""
     from forecast_eval.tests.test_live_runtime import _bars, _runtime
     rec = Recorder()
-    rt = _runtime(recorder=rec, alerter=Alerter())
-    rt.warm_up(_bars(60, start="2026-08-18 16:00"))
+    rt = _runtime(policy, recorder=rec, alerter=Alerter())
+    rt.warm_up(_bars(60, start=start))
     rt.trader.position = 1
     rt.trader.entry_price = 17500.0
     rt.portfolio.position = 1
@@ -629,3 +632,193 @@ def test_the_second_leg_starts_its_ladder_from_the_bottom():
     rt._roll_state = "switch"
     rt.resume_roll()
     assert rt._ladder_attempt == 0
+
+
+# ---- C3: the settled leg's session (DAY_SESSION_PLAN W1) --------------------
+#
+# `settle_rolled_leg` booked to the literal "NIGHT". That is right for one
+# deployment and silently wrong for the other: on a DAY run the rolled
+# round-trip accrued into `realized_pnl_by_session["NIGHT"]`, corrupting the
+# day/night split with no error anywhere. These fail against the literal.
+
+def _booked_to(rt):
+    """Which session buckets actually received PnL.
+
+    Both keys are pre-seeded to 0.0, so membership proves nothing — only a
+    non-zero value does."""
+    return {k for k, v in rt.portfolio.realized_pnl_by_session.items() if v != 0.0}
+
+
+def test_a_night_deployment_books_the_settled_leg_to_night():
+    rt, _rec = _rolling_runtime()
+    rt.settle_rolled_leg(price=17600.0, timestamp=datetime(2026, 8, 19, 14, 55))
+    assert _booked_to(rt) == {"NIGHT"}
+
+
+def test_a_day_deployment_books_the_settled_leg_to_day():
+    """The regression. Against the old literal this books to NIGHT — a session
+    the run never traded — and nothing raises."""
+    rt, _rec = _rolling_runtime(SessionPolicy.day(), start="2026-08-18 09:00")
+    rt.settle_rolled_leg(price=17600.0, timestamp=datetime(2026, 8, 19, 9, 30))
+    assert _booked_to(rt) == {"DAY"}
+    assert rt.portfolio.realized_pnl_by_session["NIGHT"] == 0.0
+
+
+def test_the_settled_leg_follows_the_deployment_not_the_clock():
+    """C4's interaction: `ROLL_AT` is 15:30, which is outside a DAY session. The
+    closing leg still belongs to the DAY round-trip its opening leg started —
+    booking it by the wall clock would split one trade across two buckets."""
+    rt, _rec = _rolling_runtime(SessionPolicy.day(), start="2026-08-18 09:00")
+    at_1530 = datetime(2026, 8, 19, 15, 30)
+    from forecast_eval.environment import classify_session
+    assert classify_session(at_1530) == "NIGHT", "precondition: 15:30 is a NIGHT time"
+    rt.settle_rolled_leg(price=17600.0, timestamp=at_1530)
+    assert _booked_to(rt) == {"DAY"}
+
+
+def test_the_settlement_records_the_session_it_booked():
+    """The trail has to say where the PnL went, or the attribution is only
+    checkable by re-deriving it."""
+    rt, rec = _rolling_runtime(SessionPolicy.day(), start="2026-08-18 09:00")
+    rt.settle_rolled_leg(price=17600.0, timestamp=datetime(2026, 8, 19, 9, 30))
+    _event, fields = [e for e in rec.events if e[0] == "roll_leg_settled"][0]
+    assert fields["session"] == "DAY"
+
+
+def test_an_explicit_session_still_wins():
+    """The parameter is kept so a caller can force a value; no production caller
+    does."""
+    rt, _rec = _rolling_runtime()
+    rt.settle_rolled_leg(price=17600.0, timestamp=datetime(2026, 8, 19, 14, 55),
+                         session="DAY")
+    assert _booked_to(rt) == {"DAY"}
+
+
+# ---- C5: the bar cache is keyed by policy (DAY_SESSION_PLAN W1) -------------
+#
+# `cli.py` hardcoded one `outputs/bars_cache.csv` for every deployment, so a DAY
+# run wrote DAY bars into the file a NIGHT run reads back as model context.
+# These fail against the shared literal.
+
+def test_two_deployments_do_not_share_a_bar_cache(tmp_path):
+    from forecast_eval.live.cli import _bars_cache_path
+    night = _bars_cache_path(tmp_path, SessionPolicy.night())
+    day = _bars_cache_path(tmp_path, SessionPolicy.day())
+    assert night != day, (
+        "a DAY run would write its bars into the file the NIGHT run reads"
+    )
+    assert night.parent == day.parent == tmp_path
+
+
+def test_the_cache_name_states_which_deployment_owns_it(tmp_path):
+    """The filename has to be readable on its own — an operator looking at
+    `outputs/` should not have to infer which run wrote which cache."""
+    from forecast_eval.live.cli import _bars_cache_path
+    assert _bars_cache_path(tmp_path, SessionPolicy.night()).name == "bars_cache_night.csv"
+    assert _bars_cache_path(tmp_path, SessionPolicy.day()).name == "bars_cache_day.csv"
+
+
+def test_a_multi_session_policy_gets_its_own_cache_too(tmp_path):
+    from forecast_eval.live.cli import _bars_cache_path
+    both = _bars_cache_path(tmp_path, SessionPolicy.both())
+    assert both.name == "bars_cache_day_night.csv"
+    assert both != _bars_cache_path(tmp_path, SessionPolicy.night())
+    assert both != _bars_cache_path(tmp_path, SessionPolicy.day())
+
+
+def test_the_pre_c5_cache_is_not_adopted_automatically(tmp_path):
+    """The legacy `bars_cache.csv` holds NIGHT bars. Auto-adopting it would give
+    them to whichever deployment ran first — a DAY run inheriting a night cache
+    is the corruption C5 exists to prevent, arriving by a different door."""
+    from forecast_eval.live.cli import _bars_cache_path
+    legacy = tmp_path / "bars_cache.csv"
+    legacy.write_text("timestamp,price,volume,contract" + chr(10), encoding="utf-8")
+    day = _bars_cache_path(tmp_path, SessionPolicy.day())
+    assert not day.exists()
+    assert legacy.exists(), "the legacy file must be left alone, not consumed"
+
+
+def test_cache_slug_is_stable_and_filesystem_safe():
+    assert SessionPolicy.night().cache_slug() == "night"
+    assert SessionPolicy.day().cache_slug() == "day"
+    assert SessionPolicy.both().cache_slug() == "day_night"
+    # order-independent: the slug is derived from a set
+    assert SessionPolicy.of(["NIGHT", "DAY"]).cache_slug() == "day_night"
+
+
+# ---- C4: ROLL_AT is carried per deployment (DAY_SESSION_PLAN W2) ------------
+#
+# 15:30 was measured for a NIGHT strategy and is OUTSIDE a DAY session: the
+# clock still fires, so the ladder runs against a tape the run is not
+# following. DECIDED 2026-08-25 -- DAY 12:45 (one hour before the 13:45 close,
+# so ROLL_WINDOW fills the session exactly), NIGHT unchanged at 15:30.
+
+def test_the_two_deployments_do_not_share_a_roll_time():
+    assert SessionPolicy.day().roll_at_time() != SessionPolicy.night().roll_at_time()
+
+
+def test_night_keeps_the_measured_1530():
+    from forecast_eval.live.roll import roll_at
+    assert roll_at("202609", SessionPolicy.night()) == datetime(2026, 9, 15, 15, 30)
+
+
+def test_day_rolls_at_1245():
+    from forecast_eval.live.roll import roll_at
+    assert roll_at("202609", SessionPolicy.day()) == datetime(2026, 9, 15, 12, 45)
+
+
+def test_the_day_roll_window_fits_inside_the_day_session():
+    """The point of 12:45. ROLL_WINDOW is an hour and the session closes 13:45,
+    so the window ends exactly at the close -- it can neither overrun onto a
+    dead tape nor leave the schedule firing after hours."""
+    from forecast_eval.live.roll import roll_at, ROLL_WINDOW
+    start = roll_at("202609", SessionPolicy.day())
+    end = start + ROLL_WINDOW
+    assert start.time() == time(12, 45)
+    assert end.time() == time(13, 45)
+    assert end.date() == start.date()
+
+
+def test_the_night_roll_instant_is_inside_the_night_session():
+    from forecast_eval.live.roll import roll_at
+    from forecast_eval.environment import classify_session
+    assert classify_session(roll_at("202609", SessionPolicy.night())) == "NIGHT"
+
+
+def test_a_day_deployment_would_have_rolled_outside_its_session_before_this():
+    """The defect, stated as a test: night's 15:30 is not a DAY moment at all."""
+    from forecast_eval.environment import classify_session
+    assert classify_session(datetime(2026, 9, 15, 15, 30)) == "NIGHT"
+    assert classify_session(datetime(2026, 9, 15, 12, 45)) == "DAY"
+
+
+def test_the_schedule_uses_its_policys_time():
+    from forecast_eval.live.roll import RollSchedule
+    day = RollSchedule(month="202609", policy=SessionPolicy.day())
+    assert day.due(datetime(2026, 9, 15, 12, 45))
+    assert not day.due(datetime(2026, 9, 15, 15, 30)), (
+        "a DAY schedule must not come due at NIGHT's roll time"
+    )
+    night = RollSchedule(month="202609", policy=SessionPolicy.night())
+    assert night.due(datetime(2026, 9, 15, 15, 30))
+    assert not night.due(datetime(2026, 9, 15, 12, 45))
+
+
+def test_a_schedule_with_no_policy_keeps_the_module_default():
+    """Back-compat: every existing call site behaves exactly as before."""
+    from forecast_eval.live.roll import RollSchedule, roll_at, ROLL_AT
+    assert roll_at("202609") == roll_at("202609", SessionPolicy.night())
+    assert ROLL_AT == time(15, 30)
+    assert RollSchedule(month="202609").due(datetime(2026, 9, 15, 15, 30))
+
+
+def test_the_cache_splice_rule_was_not_moved_by_this_change():
+    """`front_month_at` shares `roll_at` only by history -- it is the bar-cache
+    splice, not the roll schedule. Threading a policy into it would move a live
+    deployment's warm-up context as a side effect of a day-session decision, so
+    it is pinned to the module default here."""
+    from forecast_eval.live.roll import front_month_at
+    assert front_month_at(datetime(2026, 9, 15, 15, 29)) == "202609"
+    assert front_month_at(datetime(2026, 9, 15, 15, 31)) == "202610"
+    # ...and 12:45 does NOT move it, which is what "not policy-keyed" means
+    assert front_month_at(datetime(2026, 9, 15, 12, 46)) == "202609"

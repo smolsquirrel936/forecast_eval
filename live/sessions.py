@@ -46,6 +46,15 @@ VALID_SESSIONS = ("DAY", "NIGHT")
 #       unreachable without this.
 WEEKDAYS = frozenset(range(5))
 
+# Tech: minutes of trading in one occurrence of each session.
+# Why:  DAY_SESSION_PLAN C6 — NIGHT (15:00 -> 05:00) is 14 h = 840 min; DAY
+#       (08:45 -> 13:45) is 5 h = 300 min. The raw fact the warm-up-window
+#       derivation (`LiveConfig.warmup_days_default`) needs. Carried as data
+#       here rather than derived from session boundary times parsed elsewhere,
+#       since nothing else in this module reaches into `environment.py` for
+#       the boundaries either — `classify_session` is a black box to it.
+MINUTES_PER_SESSION = {"NIGHT": 840, "DAY": 300}
+
 
 @dataclass(frozen=True)
 class SessionPolicy:
@@ -146,6 +155,52 @@ class SessionPolicy:
         if moment.time() < self.trading_day_start:
             d = d - timedelta(days=1)
         return d.isoformat()
+
+    def roll_at_time(self) -> time:
+        # Tech: the time of day this deployment swaps delivery months.
+        # Why:  DAY_SESSION_PLAN C4. 15:30 was measured for a NIGHT strategy and
+        #       is *outside* a DAY session, so a DAY deployment sharing it would
+        #       run its roll ladder against a tape it is not following. Carried
+        #       on the policy so the two cannot share one value.
+        #
+        #       DAY = 12:45, one hour before the 13:45 close, so `ROLL_WINDOW`
+        #       fills exactly the rest of the session and cannot overrun it.
+        #       MEASURED 2026-08-25 over the three most recent rolls: 12:45 is
+        #       the calmest stretch of the day session (26.8 pts mean
+        #       intra-minute range against 132.2 at the open), which is what
+        #       matters when the ladder's whole escalation budget is 25 ticks.
+        #       Depth is not the constraint at `max_position=1`.
+        #
+        #       NIGHT keeps 15:30 on the runway argument in `roll.py`. (The
+        #       liquidity claim beside it does not survive measurement — 15:30 is
+        #       the 6th busiest half hour, not the busiest — but the first live
+        #       roll is 2026-09-15 and this is not the change to make first.)
+        if self.sessions == frozenset({"DAY"}):
+            return time(12, 45)
+        return time(15, 30)
+
+    def bars_per_session(self) -> int:
+        # Tech: sum `MINUTES_PER_SESSION` across `self.sessions`.
+        # Why:  DAY_SESSION_PLAN C6. A `both()` policy trades one NIGHT *and*
+        #       one DAY occurrence per calendar day, so its bars are the two
+        #       stacked, not either alone — the same reasoning `roll_at_time`
+        #       and `cache_slug` apply to their own per-policy values.
+        return sum(MINUTES_PER_SESSION[s] for s in self.sessions)
+
+    def cache_slug(self) -> str:
+        # Tech: a filesystem-safe name for this policy, for artefacts that must
+        #       not be shared between deployments.
+        # Why:  DAY_SESSION_PLAN C5. `outputs/bars_cache.csv` was one path for
+        #       every deployment, so a DAY run wrote DAY bars into the file a
+        #       NIGHT run reads back as its model context. `warm_up` does raise
+        #       on it (`runtime.py`'s policy check), so it is not silent — but it
+        #       blocks whichever soak starts second, and the cache is the only
+        #       source for months the venue has delisted (§2.8 Finding D), so the
+        #       collision costs context that cannot be refetched.
+        #
+        #       Derived from the policy rather than passed in, so a new
+        #       deployment cannot forget to change it.
+        return "_".join(sorted(x.lower() for x in self.sessions))
 
     def same_session_instance(self, a: Any, b: Any) -> bool:
         # Tech: True when two timestamps fall in the same *occurrence* of the same

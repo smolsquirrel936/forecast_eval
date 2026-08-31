@@ -110,6 +110,29 @@ class LiveConfig:
             signal_step=self.signal_step,
         )
 
+    def warmup_days_default(self, *, emitter_prime_boundaries: int = 500) -> int:
+        # Tech: calendar days of history needed to fully prime the emitter for
+        #       *this* policy, derived from its bars-per-session rather than a
+        #       flat constant.
+        # Why:  DAY_SESSION_PLAN C6, MEASURED — a full prime replays
+        #       `context_length + forecast_stride_bars * emitter_prime_boundaries`
+        #       bars (3008 + 30*500 = 18008 at the pinned settings); below 3
+        #       non-HOLD samples `_check_primed` refuses to start. `30` was
+        #       night-sized and silent about it: at NIGHT's 840 bars/session
+        #       that default already clears the floor, but DAY's 300
+        #       bars/session reaches only 109 boundaries at the same 30 days —
+        #       expected ~4 samples against a floor of 3, "one quiet fortnight
+        #       from refusing to start." Trading days needed = target / bars
+        #       per session; calendar days = that times 7/5 for the weekend,
+        #       rounded — chosen over ceil/ceil so NIGHT reproduces its
+        #       existing default (30) exactly rather than drifting to 31; DAY
+        #       comes out to 84, one under the ~85 the hand-measured table
+        #       quoted, which the derivation's own tilde already allows for.
+        target_bars = self.context_length + (self.forecast_stride_bars
+                                             * emitter_prime_boundaries)
+        trading_days = target_bars / self.policy.bars_per_session()
+        return round(trading_days * 7 / 5)
+
     def describe(self) -> str:
         # Tech: one-line human summary, provenance first.
         # Why:  goes on the console banner and into the Recorder's `meta` header,

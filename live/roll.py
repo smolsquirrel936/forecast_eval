@@ -209,8 +209,11 @@ def last_trading_day(yyyymm: str) -> date:
     return date(y, m, weds[2])
 
 
-def roll_at(yyyymm: str) -> datetime:
-    """The instant the run switches off delivery month `yyyymm`."""
+def roll_at(yyyymm: str, policy: Any = None) -> datetime:
+    """The instant the run switches off delivery month `yyyymm`.
+
+    `policy` supplies the time of day; without one the module default applies,
+    which is NIGHT's 15:30."""
     # Tech: `ROLL_AT` on the day `ROLL_LEAD_DAYS` before the last trading day.
     # Why:  both failure modes of the naive third Wednesday are survivable, which
     #       is why no holiday table is carried (§2.6). If a holiday pushes the
@@ -219,12 +222,26 @@ def roll_at(yyyymm: str) -> datetime:
     #       `RollWatch` catches the expiry, which is exactly the path that
     #       already exists. A holiday table would replace two survivable errors
     #       with one silent dependency that has to be maintained for ever.
-    return datetime.combine(last_trading_day(yyyymm), ROLL_AT) - timedelta(
+    at = ROLL_AT if policy is None else policy.roll_at_time()
+    return datetime.combine(last_trading_day(yyyymm), at) - timedelta(
         days=ROLL_LEAD_DAYS)
 
 
 def front_month_at(ts: Any) -> str:
-    """Which delivery month a timestamp belongs to, under the roll schedule."""
+    """Which delivery month a timestamp belongs to, under the roll schedule.
+
+    **Deliberately not policy-keyed, and deliberately not changed when DAY got
+    its own `ROLL_AT` (2026-08-25).** This is the *bar cache splice* rule, not
+    the roll schedule; they share `roll_at` only by history. Threading a policy
+    through here would have moved a live deployment's warm-up context as a side
+    effect of a day-session decision.
+
+    It also does not currently do what the comment below claims — see
+    `DAY_SESSION_PLAN.md` §4 C4a. MEASURED 2026-08-25 against
+    `TXF_RPT_minute_night.csv`: this rule flips **1 day 8 h 30 m before** the
+    tape actually splices, every month from 202601 to 202608. Left as-is
+    pending a decision, because changing it moves the pinned deployment's
+    context."""
     # Tech: a timestamp belongs to its own calendar month until that month's
     #       roll instant, and to the following month afterwards.
     # Why:  this is the splice rule the bar cache uses, and it has to be the
@@ -253,6 +270,11 @@ class RollSchedule:
     #       plan be tested against a clock with no venue at all.
     month: str
     recorder: Any = None
+    # Tech: the deployment's policy, which supplies `ROLL_AT`.
+    # Why:  C4 — 15:30 is outside a DAY session, so a schedule with no policy
+    #       would run a DAY deployment's roll against a tape it is not
+    #       following. `None` keeps the module default (NIGHT's 15:30).
+    policy: Any = None
 
     def __post_init__(self) -> None:
         self._rolled: set = set()
@@ -266,7 +288,7 @@ class RollSchedule:
         #       firing again for the rest of the window.
         if self.month in self._rolled:
             return False
-        start = roll_at(self.month)
+        start = roll_at(self.month, self.policy)
         return start <= now < start + ROLL_WINDOW
 
     def lapsed(self, now: datetime) -> bool:
@@ -275,7 +297,7 @@ class RollSchedule:
         #       the run is now relying on `RollWatch` catching the expiry, which
         #       settles the position instead of trading it.
         return (self.month not in self._rolled
-                and now >= roll_at(self.month) + ROLL_WINDOW)
+                and now >= roll_at(self.month, self.policy) + ROLL_WINDOW)
 
     def done(self, month: str, to_month: str, now: datetime) -> None:
         # Tech: mark the month rolled and adopt the new one.

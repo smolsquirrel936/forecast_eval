@@ -28,41 +28,153 @@ This is a correction of a real habit: a 45-minute shakedown was proposed for the
 §2.20 resume fix when every line it touches runs before the first bar. Ten
 minutes covered it.
 
-## ▶ NEXT SESSION — START HERE (written 2026-08-23, updated 2026-08-24)
+## ▶ NEXT SESSION — START HERE (written 2026-08-23, updated 2026-09-01)
 
-**746 tests green. §2.24 is PROVEN LIVE. §2.6 — the contract roll — was found by
+**801 tests green. §2.24 is PROVEN LIVE. §2.6 — the contract roll — was found by
 a dead soak and is now built, tested and undemonstrated.** Nothing offline is
-blocking. **The probe and the shakedown are both done (2026-08-24); what is left
-is the soak — step 2 below.**
+blocking. **The probe, the shakedown, and now V5's full checklist are all done
+(2026-08-31) — the soak passed every item and was stopped cleanly on
+2026-09-01 06:40 (below). What's left is V4's fill-gap number, which only time
+(not attention) produces — see "What comes after V5" below before assuming the
+next step is documentation. **Nothing is accruing while the soak is down**, so
+the restart below is the standing next action.**
 
-### ⏱ IN FLIGHT — the V5 soak, launched 2026-08-24 ~14:45
-
-*(Written at 10:15 that morning, so the launch was still ahead. **Confirm it
-actually went out** before trusting the rest of this section.)*
+### ⏰ SCHEDULED — restart 2026-09-01 (Tue) 14:50, segment 3
 
 ```powershell
-uv run python -m forecast_eval.live.cli --broker shioaji --i-understand-this-places-orders --warmup-days 90
+uv run python -m forecast_eval.live.cli --broker shioaji `
+  --i-understand-this-places-orders --resume --warmup-days 90
 ```
 
-**Start the next session by asking how it is doing** — the console tail, the
-summary block if it has stopped, or `outputs/live_<ts>/session.jsonl`. Read it
-against these expectations before concluding anything:
+**Why 14:50 and not later.** It is the first start-up positioned to catch the
+**14:55 relogin and 14:59 verify anchors before the 15:00 open** — the
+"verified before open" data point that the 2026-08-24 attempt lost when
+`startup_refused` pushed its relaunch past 15:00, and that segment 2's 20:39
+start missed again. §2.24's anchors are unconditional (no token-age gate), so
+they fire however new the token is; expect `relogins 1` and `session_verified 1`
+**before** the first bar of the session, and treat a `verify_failed` there as
+the FATAL the window exists to raise. ~10 minutes of head-room also leaves room
+for the ~30 s login + ~35 s warm-up without racing the open.
 
-- **14:55 and 14:59, inside the first 15 minutes.** The anchors are
-  *unconditional* — `ReloginScheduler.check` has no token-age gate, so an anchor
-  window fires however new the token is. That is the whole reason for a 14:45
-  launch. Expect `relogins 1` and `session_verified 1` **before** the 15:00 open;
-  a `verify_failed` there is the FATAL this window exists to raise (§2.6).
-- **At 15:00.** `bars` starts rising, `off_session_dropped` stops, and
-  `feed_checks` begins — it is gated on `policy.includes`, so it reads 0 for the
-  entire pre-open stretch by design.
-- **Zero orders is the expected first night, not a failure.** Only 3.74 % of
-  signals are non-HOLD and the measured rate is **0.18–0.37 orders/night**; the
-  49 h soak produced 56 signals and **0** orders. Judge the run by uptime,
-  `alerts_fatal`, and `halted` — not by trade count.
-- **Still owed by V5:** 5 unattended days, a kill-restart against a *strategy*
-  position, a weekend, and V4's fill gap accruing in the same run.
-- **2026-09-15 15:30** is the first time `live/roll.py` executes for real.
+**`--resume`, not `--fresh-start`** — the account is **not flat** (LONG 1 @
+44555, open since 08-25 00:04), so `--fresh-start` is refused by design. No
+restart backoff is owed: segment 2 stopped cleanly (`consecutive_failures: 0`).
+
+**This launch is a first in three ways, so read its opening records rather than
+assuming they match segment 2's:**
+
+1. **First under the soak-epoch mechanism** (item 3). It mints
+   `outputs/soak_epoch.json` and the first-ever `meta.soak_id`; from here
+   restarts stitch. The two existing directories stay unstitched — nothing
+   assigns a `soak_id` retroactively.
+2. **First running the 2026-09-01 fixes.** `session_event` records can now
+   land in `session.jsonl` **for the first time in this project's history**
+   (item 3's `venue_event` fix). Calibrate the expectation before reading it
+   as a result: the historical rate is **1–2 raises per run, usually one
+   within a minute of start-up** (segment 2's single one came at 20:39:57), so
+   these are occasional venue notices, not a stream — an empty session is
+   weak evidence either way. **The reliable check is `shioaji.log`:** it must
+   stop accruing `Recorder.record() got multiple values` entirely. One more of
+   those means the fix did not reach the running process.
+3. **First carrying W0–W4 of `DAY_SESSION_PLAN.md`.** All are NIGHT-neutral by
+   construction — W1's cache path is the one already in use
+   (`bars_cache_night.csv`), W2 left NIGHT's `ROLL_AT` at 15:30, and W4's
+   derived warm-up default reproduces NIGHT's old flat 30 exactly — but this
+   is the first live run to prove it rather than argue it. `--warmup-days 90`
+   is passed explicitly, as in both prior segments, so the default is not
+   exercised either way.
+
+**Expected at 15:00:** `bars` starts rising, `off_session_dropped` stops,
+`feed_checks` begins (0 before the open by design, being gated on
+`policy.includes`). **Zero orders is the expected first night**, not a failure
+— 0.18–0.37 orders/night measured. Judge it by uptime, `alerts_fatal` and
+`halted`.
+
+**Next fixed date after this: 2026-09-15 15:30**, the first real contract roll
+(§2.6, `live/roll.py`, built and still undemonstrated).
+
+### ⏱ THE V5 SOAK — **all checklist items PASSED; stopped 2026-09-01 06:40**
+
+**MEASURED 2026-08-31 20:40**, against `outputs/live_20260831_203923/session.jsonl`
+and `outputs/live_20260824_150112/session.jsonl` (the segment before it) plus
+`outputs/live_restart.json`.
+
+**V5 checklist — complete:**
+- ✅ 5 unattended trading days (Mon–Fri nights, zero intervention, 08-24→08-28)
+- ✅ weekend — crossed live (Sat/Sun 08-29/30), zero intervention
+- ✅ V4 fill gap accruing in the same run — 3 live-vs-shadow comparisons, slippage −10, −33, 0 pts
+- ✅ **kill-restart against an open strategy position — PASSED 2026-08-31.**
+  `night.venv` python (PID 53208, launcher stub) and its worker child (PID
+  23152) hard-killed (`Stop-Process -Force`, no `finally` block ran — genuine
+  crash, not a graceful stop) while holding the real LONG 1 @ 44555 opened
+  08-25 00:04. `RestartGuard` detected the unclean death correctly
+  (`consecutive_failures: 1`, scored once off a 6-day healthy run, not
+  amplified) and required its 60 s backoff, which was honored (waited ~5 min).
+  Relaunched 20:39:23 — `adopt_position` recovered **exactly**:
+  `position_adopted position=1 entry_price=44555.0`, bit-for-bit the original
+  fill, no re-open, no double order (`outputs/live_20260831_203923/session.jsonl:3-4`).
+  This is the first time §2.20 has been proven against a position the
+  *strategy itself* opened, not a lot a probe left behind.
+
+**Segment 1** (`live_20260824_150112`, 08-24 15:01:12 → 08-31 ~20:33, ~7d 5h,
+ended by the deliberate kill above): SHORT 1 @ 44893 (08-24 20:03) → closed BUY
+@ 44520 (08-24 23:34, **+373 pts**) → LONG 1 @ 44555 (08-25 00:04). 0 FATAL, 0
+halts, 0 broker anomalies over the whole segment; two short feed WARNs, both
+self-healed in under 90 s; relogin anchors clean at 08:40/14:55 every day.
+
+**Segment 2** (`live_20260831_203923`, 08-31 20:39:23 → 09-01 06:40:39,
+**~10 h, ended by a deliberate Ctrl-C**, not a kill): held the same LONG 1 @
+44555 throughout, ran the night session to its 05:00 close and on into the dead
+zone, 0 orders, 0 FATAL/halt/anomaly. **The graceful-stop path is now
+demonstrated too**, and it is visibly the opposite of segment 1's kill:
+`guard.end()` ran, so `live_restart.json` reads `run_in_flight: false`,
+`scored: true`, `consecutive_failures: 0` — an operator-driven restart pays no
+backoff, exactly as `startup.py::end` documents. Both summary blocks
+(`relogin_summary`, `fill_gap_summary`) were written, which the killed segment
+never got to do. Launched *before* `--fresh-start`/`--resume` existed (item 3),
+so it carries no `soak_id`; the restart after it is the first that can.
+
+**Bookkeeping note:** the process restarted, so `outputs/` now has two
+directories for what is trading-wise one continuous position — there is still
+no soak-ID/session-stitching mechanism (open item 3, below) to represent that
+as a single run. Read the two segments together by hand until that's built.
+
+**Next dates:** the 14:50 restart above, then **2026-09-15 15:30** — the first
+real contract roll.
+
+### ▶ What comes after V5
+
+V5's own pass criterion (§4, Phase V5: "5 consecutive days unattended,
+restarts recover to correct position and context, no stale orders left
+working") is now met — checklist above. That does **not** mean the next step
+is Phase INT yet:
+
+1. **V4's fill-gap number is a *separate*, slower gate — "hard gate before
+   real money" (§4, Phase V4), independent of V5 passing.** Currently **3**
+   `fill_gap_order` samples. The measured table (§4, "orders/night vs.
+   stride") puts the pinned config at 0.18–0.37 orders/night — **~55–108
+   nights for 20 samples**, the rough size needed for a real slippage
+   distribution rather than 3 anecdotes. This keeps accruing automatically as
+   long as the soak keeps running with `--broker shioaji` — no separate action
+   needed, just time. **Do not stop the soak once V5's checklist is done; V4
+   is why it keeps running.** (The 2026-09-01 06:40 stop was deliberate and
+   bounded — taken in the 05:00–15:00 dead zone, to land the item-3 guard fix
+   and the `session_event` fix before a long run started on top of them. It
+   cost 0 fill-gap samples, since the stopped segment produced none. Restart
+   with `--resume`; every hour down after that is a sample not taken.)
+2. **Once both gates are satisfied, Phase INT — Integration (§4) is next:**
+   document the live path in `SPEC.md` (new §11) and `CLAUDE.md`; write the
+   day-session porting guide (`docs/DOCS_PLAN.md` already tracks it as a task
+   page); add `shioaji` to `UV_SETUP.md`'s install steps; decide whether
+   `real_data.py` gains a `--live` flag or the live CLI stays separate
+   (recommended: stays separate, so a research entrypoint never grows a
+   network/broker path by accident).
+3. **Real-money deployment is gated on both V4 and V5, plus a decision this
+   plan has not yet recorded anywhere: what "real money" actually means
+   operationally** (production Shioaji credentials, capital at risk, who signs
+   off) — `prod_audit.py` exists to verify a token *cannot* reach production,
+   which is a safety check, not a deployment plan. That plan does not exist
+   yet and is not implied by anything built so far.
 
 ### Open items carried in, as of 2026-08-24
 
@@ -78,6 +190,126 @@ against these expectations before concluding anything:
    as the string they assert gets redacted; a synthetic `A123456789` matches the
    same `[A-Z][0-9]{9}` pattern and would test identically. Rewriting the files
    does not rewrite the history.
+3. **BUILT 2026-08-31 — state retention across a restart is now an explicit
+   operator choice.** `--fresh-start`/`--resume` ([soak_epoch.md](docs/live/soak_epoch.md),
+   `live/soak_epoch.py`) are required together with `--i-understand-this-places-orders`
+   on every `--broker shioaji` launch — `_preflight_orders` (`cli.py`) refuses
+   otherwise, and refuses both at once. `--resume` carries the `soak_id` on
+   disk forward (or mints the first one, if none exists); `--fresh-start`
+   mints a new one and *retires* the old one into the same file's `retired`
+   list rather than discarding it, and separately refuses at start-up unless
+   the account is already flat (a check, not a flatten — `flatten.py` remains
+   the only order-placing path). The id lands in `session.jsonl`'s
+   `meta.soak_id`. 801 tests green, including 7 new in
+   `tests/test_live_soak_epoch.py` and 9 in `tests/test_live_cli.py` (4 for the
+   flag combinations, 5 more for the guard defect below).
+
+   **MEASURED 2026-08-31, same day, by hand:** a manual sanity check (not the
+   automated suite) minted `--resume` then `--fresh-start` back to back and
+   found the two ids identical — `_new()`'s id was second-resolution
+   (`%Y%m%d_%H%M%S`), and both calls landed in the same wall-clock second. A
+   fresh-start could silently retire an epoch into one indistinguishable from
+   itself. Fixed to microsecond resolution; regression test
+   `test_fresh_start_within_the_same_second_still_mints_a_distinct_id` covers
+   it. The automated suite alone had not caught this — every test there
+   advanced the clock by at least a day between calls.
+
+   **MEASURED 2026-09-01 — the guard deciding *whether* to resolve an epoch
+   disagreed with the one that refuses the launch, and minted phantom
+   epochs.** `soak_epoch.resolve` runs ~100 lines before `_preflight_orders`
+   gets to refuse anything, and it **writes on both branches** —
+   `--fresh-start` retires what is on disk, `--resume` bootstraps when there is
+   nothing. `cli.py` guarded that call with `not (fresh_start and resume)`,
+   which skips the both-flags launch but **not the neither-flag one** — equally
+   refused, and the exact shape of the in-flight soak's own command line. With
+   no `soak_epoch.json` yet on disk, such a launch bootstrapped a real epoch on
+   its way to the refusal; the next `--fresh-start` then retired that phantom
+   into `retired[]`, and the next `--resume` adopted it as the soak's identity.
+   Never fired in anger — `soak_epoch.json` did not yet exist when it was
+   found. Fixed by extracting `cli.py::_resolves_soak_epoch` and keying it on
+   `fresh_start != resume`, the same condition `_preflight_orders` enforces; a
+   parametrized test now asserts the two agree across all four flag
+   combinations, so they cannot drift apart again. The seam exists for the
+   reason `_rails_config` does: a condition read once inside `main` cannot be
+   tested, and a wrong one looks exactly like a right one.
+
+   **FIXED 2026-09-01 — every venue session event had been silently dropped
+   since 2026-08-13.** `cli.py::_on_session_event` called
+   `recorder.record("session_event", …, event=str(event))`, but
+   `Recorder.record(self, event, **fields)` takes the record's *name* as its
+   first parameter — so the venue's `event` argument collided with it and
+   raised `TypeError: got multiple values for argument 'event'` on **every**
+   session event. Shioaji's Rust layer swallows callback exceptions, so nothing
+   halted and nothing was logged on this side: **14 raises in `shioaji.log`
+   since 2026-08-13, and zero `session_event` records in any `session.jsonl`
+   ever written** — including the 7-day soak's. The channel that reports what
+   the venue itself said about the session has never once been readable.
+   Recorded as `venue_event` now. This is the §2.19 failure shape again (a
+   recorder writing something the venue never confirmed, or here never writing
+   it at all) and the reason to distrust an unexercised logging path: the trail
+   looked complete because the absent record had no placeholder.
+
+   **Not built yet, still downstream of this:** the `list_profit_loss`
+   reconciliation against `soak_id` (item 3's original motivation — see
+   history below) and the session-trail stitching across `outputs/live_<ts>/`
+   directories that share one `soak_id`. The marker exists now; nothing reads
+   it back yet except `session.jsonl`'s own header.
+
+   **Operational note — the 2026-09-01 14:50 restart is the first launch under
+   this mechanism**, and the command and reasoning are in "SCHEDULED" at the
+   top of this file rather than repeated here. In short: both soak segments
+   predate the mechanism and carry no `soak_id`, `outputs/soak_epoch.json`
+   does not exist yet, and the account is **not flat** (LONG 1 @ 44555), so
+   `--fresh-start` is refused by design and `--resume` is the correct flag —
+   it bootstraps the first epoch while `adopt_position` recovers the lot, as
+   it already did on 08-31. The two existing directories stay unstitched —
+   nothing retroactively assigns a `soak_id` — so the bookkeeping note above
+   applies to them and only to them.
+
+   **History — the original gap and the decisions taken (2026-08-24),
+   preserved for context.** Surfaced 2026-08-24 chasing the 6-lot
+   `startup_refused` (above) and the `list_profit_loss` attribution gap it led
+   to. Two scenarios want different behavior and there is currently no way to
+   pick between them:
+   - **All bugs fixed, operator wants a clean soak** — no continuity; today's
+     probe/soak noise must not bleed into the next reading.
+   - **The process died mid-soak and must continue** — position, PnL and the
+     session trail should all read as one unbroken soak across the restart.
+
+   **What already happens, unconditionally, with no flag:** `cli.py:492-496`
+   calls `rt.adopt_position()` on *every* launch — it always tries to adopt
+   whatever the venue holds (refusing above `max_position`, per the FATAL
+   above), there is no way to ask it not to. `RestartGuard`/`live_restart.json`
+   (`cli.py:335,358`) is a crash-loop rate limiter, not a continuity marker.
+   Every launch gets a fresh `outputs/live_<ts>/session.jsonl` — nothing links
+   one run's file to the previous run's.
+
+   **DECIDED 2026-08-24** (mechanism, not yet built):
+   - **Trigger: an explicit flag on every launch**, e.g. `--fresh-start` /
+     `--resume` — not auto-detected. Matches the existing
+     `--i-understand-this-places-orders` pattern of the operator stating
+     intent rather than the system inferring it, and keeps the choice
+     auditable in `session.jsonl`'s `meta` record.
+   - **`--resume` restores, beyond the position `adopt_position` already
+     recovers:** (a) a **soak-epoch marker**, so `list_profit_loss`
+     reconciliation and the cumulative PnL shown to the operator treat
+     pre-/post-restart as one soak rather than two, and (b) a **shared soak
+     ID** linking this run's `session.jsonl` to the prior run's, so V3/V4
+     offline analysis can stitch multiple `outputs/live_<ts>/` directories
+     into one trail instead of treating each as isolated. Neither exists
+     today.
+   - **`--fresh-start` refuses unless the account is already flat — it does
+     not flatten.** `flatten.py` stays the *only* path that places a closing
+     order outside the strategy; `--fresh-start` only checks, and on a stray
+     position points at `flatten.py` the same way `adopt_position`'s
+     `startup_refused` does today. Explicitly rejected: folding an
+     auto-flatten into `--fresh-start`, since that would duplicate
+     `flatten.py`'s retry/verify loop and place an order from a code path
+     that currently only ever reads.
+
+   Resolved by the build above: the marker lives at `outputs/soak_epoch.json`,
+   beside `live_restart.json`, and `--fresh-start` retires rather than
+   discards — see the built section above for exactly how.
 
 **The IOC probe is DONE (2026-08-24, day session).** ✅ **The venue reports
 nothing when an IOC expires** — the only callback is the `New`/`00` submission
@@ -110,6 +342,12 @@ The second run measured `--warmup-days 90` before committing the soak to it — 
 ```powershell
 uv run python -m forecast_eval.live.cli --broker shioaji --i-understand-this-places-orders --warmup-days 90
 ```
+
+> **STALE as a copy-paste command since 2026-08-31 — `_preflight_orders` now
+> also refuses this exact line.** It is accurate as a record of what was run
+> on 2026-08-24, before `--fresh-start`/`--resume` existed (item 3, "Open
+> items"). Add `--resume` (continuing the current soak) or `--fresh-start`
+> (account already flat, starting a new one) before running it again.
 
 **`--warmup-days 90` is deliberate.** At the default 30 the priming window is 124
 boundaries and roughly **1 start in 6** would refuse on `<3` emitter samples; 90

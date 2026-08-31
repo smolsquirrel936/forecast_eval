@@ -26,6 +26,14 @@ def test_named_constructors():
     assert SessionPolicy.both().sessions == frozenset({"DAY", "NIGHT"})
 
 
+def test_bars_per_session():
+    """DAY_SESSION_PLAN C6 — NIGHT is 14h/840min, DAY is 5h/300min; a `both()`
+    policy trades one occurrence of each per calendar day, so it stacks."""
+    assert SessionPolicy.night().bars_per_session() == 840
+    assert SessionPolicy.day().bars_per_session() == 300
+    assert SessionPolicy.both().bars_per_session() == 1140
+
+
 def test_empty_policy_is_rejected():
     """An empty policy filters every bar away and looks exactly like a dead
     feed — far cheaper to catch here than at 15:00 on a live night."""

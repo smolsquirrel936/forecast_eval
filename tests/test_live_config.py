@@ -31,6 +31,31 @@ def _pinned_row():
     pytest.fail(f"no results.tsv row for pinned commit {PINNED.source_commit}")
 
 
+def _session_of(config):
+    """The single session a config's policy trades."""
+    # Tech: a config pins one deployment, so its policy names exactly one
+    #       session; anything else has no single row to be "best" within.
+    # Why:  `results.tsv` is now session-tagged, and every comparison below is
+    #       scoped by this. A `both()` policy would make "the best row" undefined
+    #       rather than merely wrong, so it fails here instead of silently
+    #       picking one.
+    assert len(config.policy.sessions) == 1, (
+        f"a pinned config must trade exactly one session, got "
+        f"{sorted(config.policy.sessions)}"
+    )
+    return next(iter(config.policy.sessions))
+
+
+def _rows_for(session):
+    return [r for r in _rows() if r["session"] == session]
+
+
+def _best_row(rows, session):
+    """The highest-Calmar row *within one session*, or None if there are none."""
+    scoped = [r for r in rows if r["session"] == session]
+    return max(scoped, key=lambda r: float(r["calmar"])) if scoped else None
+
+
 def _flag(text, name):
     """Pull `--name <value>` out of a recorded command string."""
     m = re.search(rf"{name}\s+(-?[\d.]+)", text)
@@ -53,10 +78,18 @@ def test_pinned_row_is_still_the_best_known_config():
     """Fails when research finds something better. That is deliberate: promoting
     a new config to live should be an explicit act, not a silent inheritance.
     To resolve, re-pin `PINNED` to the new row on purpose."""
-    rows = _rows()
-    best = max(rows, key=lambda r: float(r["calmar"]))
+    # Tech: compare only within the pinned config's own session.
+    # Why:  DAY_SESSION_PLAN C1. On Calmar a DAY row and a NIGHT row are not
+    #       comparable, so an unscoped `max` would let a day-session result
+    #       re-pin the *night* deployment — the failure would read as "research
+    #       found something better" while actually meaning "a different
+    #       deployment was tuned". Scoping is what makes a second pin possible
+    #       at all.
+    session = _session_of(PINNED)
+    assert _rows_for(session), f"results.tsv has no {session} rows to compare against"
+    best = _best_row(_rows(), session)
     assert best["commit"] == PINNED.source_commit, (
-        f"results.tsv now has a better row: {best['commit']} "
+        f"results.tsv now has a better {session} row: {best['commit']} "
         f"calmar={best['calmar']} vs pinned {PINNED.source_commit} "
         f"calmar={PINNED.source_calmar}. Re-pin live/config.py deliberately."
     )
@@ -144,6 +177,23 @@ def test_warmup_is_not_pinned_because_it_is_not_a_strategy_property():
     assert a.warmup_bars == 100 and b.warmup_bars == 3008
 
 
+def test_warmup_days_default_is_policy_derived_not_a_flat_constant():
+    """DAY_SESSION_PLAN C6 — the old flat 30-day default was night-sized and
+    silent about it: at DAY's 300 bars/session it reaches only 109 boundaries,
+    expected ~4 non-HOLD samples against the 3-sample floor `_check_primed`
+    refuses below. Reproduces the pinned run's own numbers exactly."""
+    assert PINNED.warmup_days_default() == 30   # unchanged from the old default
+    day_cfg = LiveConfig(
+        source_commit=PINNED.source_commit, source_calmar=PINNED.source_calmar,
+        source_dataset=PINNED.source_dataset, source_note=PINNED.source_note,
+        policy=SessionPolicy.day(), checkpoint=PINNED.checkpoint,
+        context_length=PINNED.context_length,
+        forecast_horizon_bars=PINNED.forecast_horizon_bars,
+        forecast_stride_bars=PINNED.forecast_stride_bars,
+    )
+    assert day_cfg.warmup_days_default() == 84   # DAY_SESSION_PLAN quoted ~85
+
+
 # ---- misc -------------------------------------------------------------------
 
 def test_config_is_frozen():
@@ -157,3 +207,78 @@ def test_describe_carries_provenance_for_the_log_banner():
     assert "13.6742" in text
     assert "Toto-2.0-1B" in text
     assert "NIGHT" in text
+
+
+# ---- results.tsv schema (DAY_SESSION_PLAN W0) --------------------------------
+#
+# A row is: commit, session, dataset, warmup_bars, calmar, net_pnl,
+# max_drawdown, status, description.
+#
+# `session`     NIGHT or DAY — which deployment the row belongs to. Calmar is
+#               not comparable across the two, so every comparison is scoped by
+#               it and a second pin is possible without disturbing the first.
+# `dataset`     "<file>@<coverage-end>" — the tape vintage. The RPT files are
+#               regenerated in place, so a filename alone does not identify the
+#               data a number came from (DAY_SESSION_PLAN §2.2).
+# `warmup_bars` the warmup length in BARS, not as a fraction. `--lookback-frac`
+#               is not reproducible across tapes of different length: on a
+#               longer file the same fraction moves the forecast grid and the
+#               run is no longer comparable to itself (§2.2's alignment trap).
+
+VALID_SESSIONS = {"NIGHT", "DAY"}
+
+
+@pytest.mark.skipif(not RESULTS.exists(), reason="results.tsv not present")
+def test_every_row_carries_session_dataset_and_warmup():
+    for r in _rows():
+        assert r["session"] in VALID_SESSIONS, (
+            f"row {r['commit']} has session={r['session']!r}; "
+            f"expected one of {sorted(VALID_SESSIONS)}"
+        )
+        assert "@" in r["dataset"], (
+            f"row {r['commit']} dataset={r['dataset']!r} names no vintage; "
+            f"expected '<file>@<coverage-end>'"
+        )
+        assert r["warmup_bars"].isdigit() and int(r["warmup_bars"]) > 0, (
+            f"row {r['commit']} warmup_bars={r['warmup_bars']!r} is not a bar count"
+        )
+
+
+@pytest.mark.skipif(not RESULTS.exists(), reason="results.tsv not present")
+def test_pinned_row_session_matches_the_pinned_policy():
+    """The row and the policy must name the same session. This is the pairing
+    C2 exists to protect: a policy changed without the strategy is the
+    2026-08-11 defect, and it starts with these two disagreeing."""
+    assert _pinned_row()["session"] == _session_of(PINNED)
+
+
+@pytest.mark.skipif(not RESULTS.exists(), reason="results.tsv not present")
+def test_pinned_row_dataset_matches_the_pinned_source():
+    """`PINNED.source_dataset` is a path; the row names a file plus a vintage.
+    The filenames must agree — a pin whose row was measured on a different tape
+    has no provenance at all."""
+    row_file = _pinned_row()["dataset"].split("@")[0]
+    assert row_file.lower() in PINNED.source_dataset.lower().replace("\\", "/")
+
+
+def test_a_day_row_cannot_repin_the_night_deployment():
+    """The regression for the unscoped `max`. A DAY row that beats every NIGHT
+    row must leave the NIGHT pin alone; before W0 it would have been picked as
+    "the best known config" and failed the drift guard against a result from a
+    different deployment."""
+    rows = [
+        {"commit": "night_a", "session": "NIGHT", "calmar": "13.6742"},
+        {"commit": "night_b", "session": "NIGHT", "calmar": "10.5482"},
+        {"commit": "day_x", "session": "DAY", "calmar": "99.0000"},
+    ]
+    assert _best_row(rows, "NIGHT")["commit"] == "night_a"
+    assert _best_row(rows, "DAY")["commit"] == "day_x"
+    # and the unscoped comparison this replaced would have picked the DAY row
+    assert max(rows, key=lambda r: float(r["calmar"]))["commit"] == "day_x"
+
+
+def test_best_row_is_none_when_a_session_has_no_rows():
+    """A DAY pin before any DAY tuning has happened must fail loudly, not
+    silently compare against NIGHT."""
+    rows = [{"commit": "night_a", "session": "NIGHT", "calmar": "13.6742"}]
+    assert _best_row(rows, "DAY") is None

@@ -32,6 +32,7 @@ not a source of truth for live and is deliberately left untouched.
 | `build_emitter()` | method | a **fresh** `ThresholdEmitter` per call |
 | `build_forecaster(*, warmup_bars)` | method | `Toto2Forecaster`; imports torch lazily |
 | `describe()` | method | one-line banner, provenance first |
+| `warmup_days_default(*, emitter_prime_boundaries=500)` | method | calendar-day `--warmup-days` default, derived from `policy.bars_per_session()` — NIGHT 30, DAY 84 — DAY_SESSION_PLAN C6 |
 
 ## What is pinned, and to what
 `results.tsv` row **`e44a047`** — Calmar **13.6742**, 185 trades, net **+39 075.63**

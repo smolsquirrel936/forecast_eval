@@ -2,7 +2,7 @@
 
 **Role:** The live entry point — logs in, subscribes, and turns callbacks into a single-threaded event stream. **No orders are sent.**
 **Pipeline:** Shioaji quote thread → queue → **cli worker** → [LiveRuntime](runtime.md).
-**Depends on:** [live/runtime.py](runtime.md), [live/config.py](config.md), [live/startup.py](startup.md), [live/recorder.py](recorder.md), [live/capture.py](capture.md), [live/broker/dryrun.py](broker/dryrun.md)   **Used by:** run by hand (V3)
+**Depends on:** [live/runtime.py](runtime.md), [live/config.py](config.md), [live/startup.py](startup.md), [live/soak_epoch.py](soak_epoch.md), [live/recorder.py](recorder.md), [live/capture.py](capture.md), [live/broker/dryrun.py](broker/dryrun.md)   **Used by:** run by hand (V3)
 
 ```powershell
 $env:SHIOAJI_API_KEY="..."; $env:SHIOAJI_SECRET_KEY="..."
@@ -24,6 +24,8 @@ live half and V3's shadow parity are both read back from.
 |---|---|---|
 | `--broker {dryrun,sim,shioaji}` | `dryrun` | `dryrun` records intended orders; `sim` shares the fill model without the order log; **`shioaji` places simulated orders** and needs the flag below |
 | `--i-understand-this-places-orders` | off | **Required** with `--broker shioaji` |
+| `--fresh-start` | off | Start a new [soak epoch](soak_epoch.md). **Required with `--broker shioaji`** (with `--resume`, exactly one). Refuses at start-up unless the account is already flat — never flattens itself |
+| `--resume` | off | Continue the current [soak epoch](soak_epoch.md). **Required with `--broker shioaji`** (with `--fresh-start`, exactly one). Bootstraps the first epoch if none exists yet |
 | `--flatten-aggression-ticks` | `5` | how far through the touch a FLATTEN close is priced before going IOC (`shioaji` only) |
 | `--contract` | `TXFR1` | resolved by attribute, falling back to key lookup |
 | `--duration-minutes` | none | stop after this long; otherwise runs until Ctrl-C |
@@ -44,7 +46,7 @@ live half and V3's shadow parity are both read back from.
 | `2` | credentials not in the environment |
 | `3` | [RestartGuard](startup.md) refused to start (backoff, backfill cap, or quota headroom) |
 | `4` | **flatten incomplete** — a position was still open after a `FLATTEN` halt |
-| `5` | refused before the first bar — no acknowledgement flag, or a held position that cannot be adopted (above `max_position`, or an `ExitRule` is configured) |
+| `5` | refused before the first bar — no acknowledgement flag, neither/both of `--fresh-start`/`--resume`, `--fresh-start` against a non-flat account, or a held position that cannot be adopted (above `max_position`, or an `ExitRule` is configured) |
 
 ## Start-up order (each step gates the next)
 1. **`RestartGuard.begin`** — *before* login, before any query. Every start
@@ -56,8 +58,10 @@ live half and V3's shadow parity are both read back from.
    rather than erroring.
 4. **Resolve the contract**, printing the resolved `code` and `delivery_month`,
    and the date the run plans to roll off it ([roll.md](roll.md)).
-5. **Adopt any held position** (§2.20) — before the backfill, so an unadoptable
-   one costs seconds instead of a full warm-up.
+5. **`--fresh-start` refuses a non-flat account** ([soak_epoch.md](soak_epoch.md))
+   — a check only, never a flatten — then **adopt any held position** (§2.20),
+   before the backfill, so an unadoptable one costs seconds instead of a full
+   warm-up.
 6. **Backfill → `warm_up`** — from *every listed month up to the front one*,
    merged with the local bar cache and spliced on the roll calendar, so a warm-up
    that spans a roll is the series the model was evaluated on (see
@@ -115,6 +119,12 @@ there degrades to `[front]`, which is exactly the old behaviour.
   by a mistake at 3 a.m." V4 needs it, and re-adding it as one word among three
   would spend that protection for nothing, so `--i-understand-this-places-orders`
   now carries it.
+- **...and a third, orthogonal one: exactly one of `--fresh-start` /
+  `--resume`.** Not a bigger acknowledgement gate — a separate question,
+  "does this restart continue the soak or start a new one", that used to have
+  no answer at all: [`adopt_position`](runtime.md) ran unconditionally either
+  way, with no record of which the operator meant. See
+  [soak_epoch.md](soak_epoch.md).
 - **Simulation is hardcoded, not a flag.** §7.2 measured that `api.simulation`
   reads back as `None`: the SDK does not expose the mode, so it cannot be
   verified after the fact and the constructor argument is the only guarantee.
@@ -168,4 +178,4 @@ there degrades to `[front]`, which is exactly the old behaviour.
   and a clean restart ladder.
 
 ## Related
-[live/runtime.py](runtime.md) · [live/roll.py](roll.md) · [live/startup.py](startup.md) · [live/recorder.py](recorder.md) · [live/capture.py](capture.md) · [live/broker/dryrun.py](broker/dryrun.md) · [SHIOAJI_PLAN.md](../../SHIOAJI_PLAN.md)
+[live/runtime.py](runtime.md) · [live/roll.py](roll.md) · [live/startup.py](startup.md) · [live/soak_epoch.py](soak_epoch.md) · [live/recorder.py](recorder.md) · [live/capture.py](capture.md) · [live/broker/dryrun.py](broker/dryrun.md) · [SHIOAJI_PLAN.md](../../SHIOAJI_PLAN.md)

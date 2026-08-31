@@ -20,6 +20,7 @@ anchoring all read this object.
 | `holidays` | field | dates closed despite being a weekday. Empty by default |
 | `trading_day(ts)` | method | ISO date of the trading day it belongs to |
 | `same_session_instance(a, b)` | method | same *occurrence* of the same session? |
+| `bars_per_session()` | method | 1-min bars one occurrence of every traded session contributes (NIGHT 840, DAY 300, summed for `both()`) — DAY_SESSION_PLAN C6 |
 | `trading_day(ts, start)` | function | module-level helper for callers with no policy |
 
 ## Why it exists

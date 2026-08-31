@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from forecast_eval.live import cli
+from forecast_eval.live import cli, soak_epoch
 from forecast_eval.live.config import PINNED
 from forecast_eval.live.recorder import Recorder
 from forecast_eval.live.runtime import LiveRuntime
@@ -36,9 +36,82 @@ def test_selecting_shioaji_alone_is_refused():
     assert refusal and "i-understand-this-places-orders" in refusal
 
 
-def test_both_flags_together_are_accepted():
+def test_both_flags_together_are_not_enough_on_their_own():
+    """`--broker shioaji` + `--i-understand-this-places-orders` used to be
+    sufficient by themselves; state retention (below) now also gates this."""
     args = _order_args()
+    refusal = cli._preflight_orders(args)
+    assert refusal and "--fresh-start" in refusal and "--resume" in refusal
+
+
+# ---- state retention across a restart is also a deliberate choice -----------
+
+def test_shioaji_with_fresh_start_alone_is_accepted():
+    args = cli.build_parser().parse_args(
+        ["--broker", "shioaji", "--i-understand-this-places-orders",
+         "--fresh-start"])
     assert cli._preflight_orders(args) is None
+
+
+def test_shioaji_with_resume_alone_is_accepted():
+    args = cli.build_parser().parse_args(
+        ["--broker", "shioaji", "--i-understand-this-places-orders",
+         "--resume"])
+    assert cli._preflight_orders(args) is None
+
+
+def test_fresh_start_and_resume_together_are_refused():
+    args = cli.build_parser().parse_args(
+        ["--broker", "shioaji", "--i-understand-this-places-orders",
+         "--fresh-start", "--resume"])
+    refusal = cli._preflight_orders(args)
+    assert refusal and "mutually exclusive" in refusal
+
+
+# ---- a refused launch must not touch the epoch on disk ----------------------
+#
+# MEASURED 2026-08-31. `soak_epoch.resolve` runs ~100 lines before
+# `_preflight_orders` refuses anything, and it *writes* on both branches:
+# `--fresh-start` retires the epoch on disk, `--resume` bootstraps one when
+# there is none. So the guard deciding whether to call it has to agree with the
+# preflight exactly. It did not — it caught both-flags and missed neither-flag,
+# and the neither-flag launch minted a phantom epoch on its way to being
+# refused. These two tests pin the agreement rather than the symptom.
+
+@pytest.mark.parametrize("flags", [
+    [],                              # neither — refused
+    ["--fresh-start"],               # accepted
+    ["--resume"],                    # accepted
+    ["--fresh-start", "--resume"],   # both — refused
+])
+def test_only_a_launch_the_preflight_accepts_resolves_an_epoch(flags):
+    """The guard and the refusal are one condition, so they cannot drift."""
+    args = cli.build_parser().parse_args(
+        ["--broker", "shioaji", "--i-understand-this-places-orders", *flags])
+    accepted = cli._preflight_orders(args) is None
+    assert cli._resolves_soak_epoch(args) is accepted
+
+
+def test_a_refused_launch_never_writes_a_first_ever_epoch_file(tmp_path):
+    """The regression itself, on disk: no epoch file, a launch that will be
+    refused, and nothing left behind for the next `--fresh-start` to retire or
+    the next `--resume` to adopt as the soak's identity."""
+    path = tmp_path / "soak_epoch.json"
+    for flags in ([], ["--fresh-start", "--resume"]):
+        args = cli.build_parser().parse_args(
+            ["--broker", "shioaji", "--i-understand-this-places-orders", *flags])
+        assert cli._preflight_orders(args) is not None, "expected a refusal"
+        if cli._resolves_soak_epoch(args):            # what `main` guards on
+            soak_epoch.resolve(path, fresh_start=args.fresh_start,
+                               now=datetime(2026, 8, 31, 20, 39, 23))
+        assert not path.exists(), f"{flags or ['(neither)']} minted an epoch"
+
+
+def test_neither_flag_matters_for_offline_brokers():
+    """dryrun/sim have no venue ledger — the choice is meaningless there."""
+    for name in ("dryrun", "sim"):
+        args = cli.build_parser().parse_args(["--broker", name])
+        assert args.fresh_start is False and args.resume is False
 
 
 # ---- the staleness window is reachable without editing code (§2.21) ---------
