@@ -1214,7 +1214,7 @@ V1c only ever compared on a single session — and it is now also covered from t
 other side by [tools/roll_parity.py](docs/tools/roll_parity.md), which shows the
 RPT tape and the live warm-up path agree bar for bar at every roll (§2.4).
 
-### C8 — `forced_close=False` inherits a night-measured risk profile · **OPEN · research · the only C item still open**
+### C8 — `forced_close=False` inherits a night-measured risk profile · **ANSWERED 2026-09-02 · keep `False`, for a different reason than was recorded**
 
 §2.12 settled it on measured facts: median hold **4 d 11 h**, 89 % of trades
 spanning more than one calendar day. Those are properties of the *night* config;
@@ -1224,6 +1224,69 @@ the DAY equivalent is unknown until C1 produces one. A DAY position held with
 The `FLATTEN` weakness is worse here: a flatten is `LMT`+`ROD`, ROD is cancelled
 at session end, and a DAY session hands that failure a **13:45 close every day**
 instead of 05:00. V4's aggressive order type is a prerequisite, not a nice-to-have.
+
+#### Measured 2026-09-02, from the T7 pinned run's own `trades.csv` — no GPU
+
+C1 has produced a DAY configuration, so "the DAY equivalent is unknown" no longer
+holds. Four measurements, all arithmetic over artefacts that already existed:
+
+| | NIGHT (T5) | **DAY (T7 pin)** |
+|---|---|---|
+| median hold | 4 d 00 h | **20 d** (p90 57 d, max 173 d) |
+| spanning > 1 calendar day | 90 % | **100 %** |
+
+**The two deployments are not alike, and `live/config.py` said they were.** Its
+comment gave "median hold is 4 days here too" as the reason for
+`forced_close=False`. It is five times that, and *every* DAY trade is multi-day.
+Corrected in place.
+
+**Where the money comes from — the finding that decides C8.** Splitting each
+trade's price path into the part accrued inside DAY sessions and the part accrued
+across the 13:44→08:45 boundary (the decomposition reconstructs the ledger's gross
+exactly, 10 157.0 pts both ways):
+
+| | points | share |
+|---|---|---|
+| accrued **inside** the day sessions it trades | 1 075.0 | **10.6 %** |
+| accrued **overnight and over weekends** | 9 082.0 | **89.4 %** |
+
+**This is not a day-session strategy.** It *enters* in the day session and earns
+almost everything while the market is shut to it. The risk C8 was written about —
+"a DAY position rides the night session and the weekend unmanaged" — is not a side
+effect of an inherited default. It **is** the strategy.
+
+**And forced-closing is unaffordable independently.** The 67 trades span **1 318
+day sessions**, median 14 each. Closing at every 13:45 turns 67 round trips into
+~1 318, and fees from 409 pts (**4.0 %** of gross) to roughly **8 045 pts — 79 %
+of gross**. That figure is an upper bound, not a measurement of a run: it assumes
+the emitter re-enters every morning, and a real `forced_close=True` pass would
+sometimes HOLD instead.
+
+> **What this does not license.** 89.4 % is a decomposition of *realized* gross,
+> not a counterfactual. A `forced_close=True` variant would not simply forfeit
+> 89.4 % — it would be a different strategy with different entries. The defensible
+> claim is narrower and enough for C8: **the edge as realized lives overnight, and
+> a variant that is flat overnight cannot collect it this way.** Running the real
+> comparison needs a Toto2 precompute (~110 s of GPU) and the card is held by the
+> NIGHT soak; it would quantify a variant nobody would deploy, so it is not
+> queued.
+
+#### The consequence that belongs to W9, not here
+
+DAY holds a position for **44 620 h** over the common eval window. NIGHT is
+*also* positioned for **66 %** of that time **in the same direction**, and 22 % in
+the opposite one. At `max_position=1` each, running both deployments is therefore
+**two contracts of same-direction exposure two-thirds of the time** — not two
+independent strategies, and not a hedge. W9's open question about the shared
+Shioaji account was recorded as operational (separate simulation credentials, or
+sequence the soaks); this makes it a **risk** question first: the combined book is
+what neither backtest measured. Neither `results.tsv` row is a claim about the
+pair.
+
+**Verdict: keep `forced_close=False`** — now on DAY's own measured facts rather
+than on NIGHT's. The `FLATTEN` weakness above stands unchanged and is the reason
+V4's aggressive order type remains a prerequisite: the position is overnight
+either way, so an emergency flatten is the only lever, and it is the weak one.
 
 ---
 
@@ -1253,15 +1316,16 @@ night tree too.
 
 **The work itself — all of it in `night/forecast_eval`:**
 
-> **CURRENT STAGE, 2026-09-02: W0–W7 are done and so are C1–C7. What is left is
-> W8, W9 and C8 — two of the three need a live market.**
+> **CURRENT STAGE, 2026-09-02: W0–W7 are done and so is every C item, C8
+> included. What is left is W8 and W9 — and both need a live market.**
 >
 > | | |
 > |---|---|
 > | Done | W0, W1, W2, W3, **W4**, W4b, **W5a**, **W5b**, **W6**, **W7** — all offline, no market |
 > | ~~Done but PROVISIONAL~~ **resolved** | **W5a**, **W5b** — re-measured on the rebuilt tape by `TAPE_REBUILD_PLAN.md` T7. Conclusions survive, every number changed: probe 0.2671 → **0.4129**, pinned cell 4.6805 → **1.6937**, night baseline 16.3122 → **3.6006**. `results.tsv` rows **and `PINNED_DAY` now carry them** (§2.3) — one vintage, no longer two |
 > | Collisions closed | **C1**–**C7**, each marked in §4 with the step that closed it. C4a **dissolved** rather than being fixed — the tape adopted the code's rule (T2) — and its sequel is §2.4 |
-> | Available now, no market | **C8** — the last open collision. `forced_close=False` carries a *night*-measured risk profile, and the DAY equivalent has never been measured |
+> | ~~Available now~~ **answered 2026-09-02** | **C8** — measured on DAY's own trades, no GPU. Keep `forced_close=False`, but not for the recorded reason: **89.4 % of the pinned cell's gross accrues overnight and over weekends**, only 10.6 % inside the sessions it trades, and closing daily would turn 67 round trips into ~1 318 (fees 4 % → ~79 % of gross). The unmanaged overnight exposure is not an inherited default — it **is** the strategy |
+> | Surfaced by C8, belongs to W9 | Running both deployments is **two contracts of same-direction exposure 66 % of DAY's holding time**. The shared-account question is a risk question before it is an operational one |
 > | Not started | W8, W9 — both need a market, and W8 needs Shioaji credentials the W6 check did not have |
 > | Fixed 2026-09-02 | §2.4 — the DAY warm-up spliced at 15:30 while the deployment rolled at 12:45, on 183 of 183 rolls that traded. **W8 was held for this** and is now unblocked |
 >
