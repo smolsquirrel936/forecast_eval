@@ -108,6 +108,7 @@ Three invariants make this honest (all enforced in code + tests):
 | [live/ioc_probe.py](live/ioc_probe.md) | IOC-expiry probe | does an expired IOC report anything? the question that blocks the roll's retry ladder |
 | [live/alerts.py](live/alerts.md) | `Alerter` | the one door everything needing a human goes through; where a Telegram sink attaches |
 | [live/startup.py](live/startup.md) | `RestartGuard` | the rails that survive the process dying |
+| [live/prices.py](live/prices.md) | `soak_price_series` | the report's price line across every segment of a soak, cached by run |
 | [live/recorder.py](live/recorder.md) | JSONL audit trail | what a live session writes down, and why per-line flush |
 | [live/artifacts.py](live/artifacts.md) | `ArtifactWriter` | a live run's directory in the backtest's own schema — same `write_all`, so `generate_report` reads a soak |
 | [live/capture.py](live/capture.md) | `TickCapture` | the raw feed, written before any filter can touch it |

@@ -510,7 +510,8 @@ def main(argv=None) -> int:
     #       drift because there is only one writer. `params.json` goes down now
     #       rather than at shutdown, so a run that dies in its first minute still
     #       says what it was trying to be.
-    artifacts = ArtifactWriter(out)
+    artifacts = ArtifactWriter(out, policy=cfg.policy,
+                               soak_id=epoch.soak_id if epoch else None)
     # Tech: the deployment's fill ledger, keyed by policy and scoped to the soak.
     # Why:  see `live/ledger.py` — a restart adopts the position but not its
     #       history, so `trades.csv` mis-paired every trade on a resumed run.

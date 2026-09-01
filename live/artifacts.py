@@ -25,6 +25,7 @@ from typing import Any, Mapping, Optional
 
 from ..logging_io import write_all, write_params
 from .capture import price_series
+from .prices import soak_price_series
 
 # Tech: the shortest gap between two artifact writes.
 # Why:  the stride is 30 bars — one forecast and one signal every 30 minutes —
@@ -89,8 +90,16 @@ class ArtifactWriter:
 
     def __init__(self, out_dir: Any, *,
                  min_interval_seconds: float = MIN_INTERVAL_SECONDS,
-                 ext: str = ARTIFACT_EXT):
+                 ext: str = ARTIFACT_EXT,
+                 policy: Any = None, soak_id: Optional[str] = None):
         self.out_dir = Path(out_dir)
+        # Tech: the deployment and soak this run belongs to, for the price line.
+        # Why:  both are optional so the writer still works standalone (the tests
+        #       drive it from a bare `LiveLoop`); without a policy there is no
+        #       `prices_<slug>.csv` to key, so it falls back to this run's own
+        #       capture — which is what it did before the soak-wide line existed.
+        self.policy = policy
+        self.soak_id = soak_id
         self.min_interval = float(min_interval_seconds)
         self.ext = ext
         self._last_write = 0.0
@@ -153,11 +162,11 @@ class ArtifactWriter:
             #       took a reader to notice rather than a failure. The capture is
             #       sitting in this same directory. Loading it only under
             #       `report` keeps a 20 MB read off the once-a-minute path.
+            result = runtime.loop.result()
             written = write_all(
-                runtime.loop.result(), self.out_dir, ext=self.ext,
+                result, self.out_dir, ext=self.ext,
                 auto_report=report,
-                report_ticks=(price_series(self.out_dir / "ticks.csv")
-                              if report else None),
+                report_ticks=(self._price_line(result) if report else None),
                 roll_fills=(getattr(runtime, "roll_fills", None) or None),
             )
         except Exception:                                  # noqa: BLE001 — see Why
@@ -168,6 +177,26 @@ class ArtifactWriter:
         self._last_counts = counts
         self.writes += 1
         return written
+
+    def _price_line(self, result: Any):
+        # Tech: the soak's price series when a soak is known, else this run's own
+        #       capture; the fills' timestamps are handed over as `cover`.
+        # Why:  a restart opens a new directory, so a per-run chart shows minutes
+        #       of prices under fills that span weeks — and a `--resume` replays
+        #       fills executed in an *earlier* directory, which the current
+        #       capture cannot reach at all. `cover` is what pulls those runs in:
+        #       a capture spanning a fill we are charting is, by definition, the
+        #       one holding that fill's prices.
+        try:
+            return soak_price_series(
+                self.out_dir.parent, policy=self.policy, soak_id=self.soak_id,
+                cover=[f.timestamp for f in result.fills],
+                run_dir=self.out_dir)
+        except Exception:                              # noqa: BLE001 — see Why
+            # Why:  the chart background is the least important thing here. Any
+            #       failure degrades to this run's own capture, and then to no
+            #       line at all, rather than costing the artifacts.
+            return price_series(self.out_dir / "ticks.csv")
 
     def summary(self) -> dict:
         return {"artifact_writes": self.writes,

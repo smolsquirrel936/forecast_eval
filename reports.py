@@ -853,20 +853,23 @@ def main(argv=None) -> int:
     #       drawn against an empty axis, and the panel still renders, so it reads
     #       as "this run had no prices" rather than "nobody passed any".
     #
-    #       Imported here rather than at module scope: `live` depends on this
-    #       module, not the other way round, and the fallback is a convenience of
-    #       the CLI rather than a property of `generate_report`. A tree without
-    #       the live package still renders reports.
+    #       The series spans the whole soak, not this directory — a restart opens
+    #       a new one, and a resumed run charts fills executed in an earlier
+    #       segment (`live/prices.py`). Imported here rather than at module
+    #       scope: `live` depends on this module, not the other way round, and
+    #       the fallback is a convenience of the CLI rather than a property of
+    #       `generate_report`. A tree without the live package still renders.
     ticks = None
     if args.data is None:
         try:
-            from .live.capture import price_series
-            ticks = price_series(args.run_dir / "ticks.csv")
+            from .live.prices import series_for_run_dir
+            ticks = series_for_run_dir(args.run_dir)
         except Exception:                              # noqa: BLE001 — see Why
             ticks = None
         if ticks is not None:
-            print(f"price background: {len(ticks):,} prints from "
-                  f"{args.run_dir / 'ticks.csv'}")
+            print(f"price background: {len(ticks):,} minute rows, "
+                  f"{ticks['timestamp'].min()} .. {ticks['timestamp'].max()} "
+                  f"(the whole soak, not just this run)")
 
     try:
         paths = generate_report(args.run_dir, data_path=args.data, ticks=ticks)
