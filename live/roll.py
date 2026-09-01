@@ -253,19 +253,30 @@ def roll_calendar(first_month: str, last_month: str, policy: Any = None):
     return [roll_at(m, policy) for m in months], months
 
 
-def front_month_at(ts: Any, policy: Any = None) -> str:
+def front_month_at(ts: Any, policy: Any) -> str:
     """Which delivery month a timestamp belongs to, under the roll schedule.
 
     A timestamp belongs to its own calendar month until that month's
     `roll_at`, and to the following month afterwards.
 
-    **`policy` defaults to None, which is NIGHT's 15:30 — the module default —
-    so the live deployment's warm-up context does not move.** This parameter was
-    added for TAPE_REBUILD_PLAN T0 and is deliberately opt-in: the reason this
-    function resisted being policy-keyed is that threading a policy through it
-    would have moved a *pinned* deployment's context as a side effect of a
-    day-session decision. Passing one is now how the **tape builder** asks for a
-    given deployment's splice; nothing on the live path passes one.
+    **`policy` is REQUIRED — there is no default.** It used to default to None,
+    meaning the module's `ROLL_AT` (NIGHT's 15:30), on the argument that
+    threading a policy through would move a *pinned* deployment's context as a
+    side effect of a day-session decision. That protected NIGHT and broke DAY,
+    and nothing could detect it: `live/cli.py` passed this function to the
+    warm-up backfill **unbound**, so a DAY run rolled its position at 12:45
+    (`RollSchedule`, policy-keyed and correct) while splicing its history at
+    15:30. MEASURED 2026-09-01 by `tools/roll_parity.py` — 183 of 183 DAY rolls
+    that traded, the 60 minutes 12:45–13:44 of each, `|Δclose|` median 27 points
+    and p95 183 (TAPE_REBUILD_PLAN §5.3).
+
+    The default is gone rather than merely corrected at that one call site,
+    because "the caller must say which deployment is asking" is the same repair
+    `fetch_bars` already made for the same class of bug: it once defaulted to
+    `("DAY",)` while the strategy was tuned on NIGHT, and nothing could detect
+    that either. Requiring the argument makes the mistake unrepresentable
+    instead of absent. Passing `None` still means the module default — the point
+    is that a caller has to *say so*.
 
     §0.3's divergence (this rule flipping 1 d 8 h 30 m before the tape spliced)
     is not fixed by changing this function — it is fixed by the tape adopting
@@ -290,12 +301,17 @@ def front_month_at(ts: Any, policy: Any = None) -> str:
     return _next_month(this_month)
 
 
-def front_month_series(timestamps: Any, policy: Any = None):
+def front_month_series(timestamps: Any, policy: Any):
     """`front_month_at` for a whole column, as a numpy array of month strings.
 
     Same rule, same answers — asserted against the scalar form over every minute
     of the tape's span. Vectorised because the tape builder applies it to
     288 943 166 tick rows, where a per-row Python call is not an option.
+
+    `policy` is required here for the same reason it is required above, and it
+    matters more: this is the form the **tape builder** calls, so a defaulted
+    argument here would splice a deployment's evaluated series on another
+    deployment's instant.
     """
     # Tech: the front month is the first one whose roll instant is still ahead,
     #       so a right-side `searchsorted` into the ascending roll calendar is

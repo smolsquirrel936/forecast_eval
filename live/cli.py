@@ -34,6 +34,7 @@ import sys
 import threading
 import time
 from datetime import date, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any, Optional
 
@@ -639,10 +640,27 @@ def main(argv=None) -> int:
         #       volume reproduces the offline loader's front-month-continuous
         #       series; the cache carries the month that just expired, which the
         #       venue delists and cannot serve any more (§2.8 Finding D).
+        #
+        #       Tech: the splice rule is bound to THIS deployment's policy before
+        #             it is handed over.
+        #       Why:  TAPE_REBUILD_PLAN §5.3, MEASURED. This argument used to be
+        #             the bare function, whose splice instant was the module
+        #             default — NIGHT's 15:30 — for every deployment. A DAY run
+        #             therefore rolled its position at 12:45 (`RollSchedule`,
+        #             built with `cfg.policy` below and always correct) while
+        #             splicing its *history* at 15:30, so the 60 minutes
+        #             12:45-13:44 of every roll day were warmed on the month it
+        #             had already stopped trading: 183 of 183 DAY rolls that
+        #             traded, `|dclose|` median 27 points and p95 183, about 6 %
+        #             of a DAY start-up's 3 008-bar context. Nothing downstream
+        #             could raise, because the live *stream* was right and only
+        #             the warm-up was wrong. NIGHT does not move by one bar --
+        #             `SessionPolicy.night().roll_at_time()` IS 15:30.
         bars = rt.fetch_warmup_bars(api, _warmup_contracts(api, contract),
                                     start.isoformat(), end.isoformat(),
                                     cache_path=_bars_cache_path(out.parent, rt.policy),
-                                    front_month_at=front_month_at)
+                                    front_month_at=partial(front_month_at,
+                                                           policy=cfg.policy))
         print(f"backfill: {len(bars)} bars in {time.time()-t0:.1f}s "
               f"[{bars['timestamp'].iloc[0]} .. {bars['timestamp'].iloc[-1]}]"
               if len(bars) else "backfill: EMPTY")

@@ -10,6 +10,7 @@ Three things are covered here, in the order a roll exercises them: noticing it
 position through it (`LiveRuntime`).
 """
 from datetime import date, datetime, time, timedelta
+from functools import partial
 
 import pandas as pd
 import pytest
@@ -33,6 +34,13 @@ from forecast_eval.live.roll import (
     roll_at,
 )
 from forecast_eval.live.sessions import SessionPolicy
+
+# The splice rule bound to NIGHT's policy, for the cases whose subject is the
+# rule rather than the deployment. `front_month_at` has required a policy since
+# TAPE_REBUILD_PLAN 5.3 -- an unbound one is what let a DAY run splice its
+# history at 15:30 while rolling its position at 12:45 -- and NIGHT's policy is
+# the module constant the old default meant, so nothing these cases assert moved.
+_night_front = partial(front_month_at, policy=SessionPolicy.night())
 
 
 class Recorder:
@@ -219,7 +227,7 @@ def test_the_calendar_beats_volume_at_the_roll_instant():
                   ("2026-09-15 15:31", 101.0, 900)], contract="202609")
     new = _frame([("2026-09-15 15:29", 200.0, 10),
                   ("2026-09-15 15:31", 201.0, 10)], contract="202610")
-    out = collapse_front_month([old, new], front_month_at=front_month_at)
+    out = collapse_front_month([old, new], front_month_at=_night_front)
     assert list(out["price"]) == [100.0, 201.0]
     assert list(out["contract"]) == ["202609", "202610"]
 
@@ -227,7 +235,7 @@ def test_the_calendar_beats_volume_at_the_roll_instant():
 def test_a_minute_the_front_month_did_not_print_is_filled_not_dropped():
     # Better filled from the other month than lost: the fallback is volume.
     old = _frame([("2026-09-15 15:31", 101.0, 900)], contract="202609")
-    out = collapse_front_month([old], front_month_at=front_month_at)
+    out = collapse_front_month([old], front_month_at=_night_front)
     assert list(out["price"]) == [101.0]
 
 
@@ -451,12 +459,12 @@ def test_the_roll_lands_in_the_expiring_contract_s_final_night_session():
 
 
 def test_the_front_month_follows_the_same_instant_the_stream_switches_on():
-    assert front_month_at(datetime(2026, 9, 15, 15, 29)) == "202609"
-    assert front_month_at(datetime(2026, 9, 15, 15, 30)) == "202610"
+    assert _night_front(datetime(2026, 9, 15, 15, 29)) == "202609"
+    assert _night_front(datetime(2026, 9, 15, 15, 30)) == "202610"
 
 
 def test_the_front_month_rolls_across_a_year_boundary():
-    assert front_month_at(datetime(2026, 12, 16, 20, 0)) == "202701"
+    assert _night_front(datetime(2026, 12, 16, 20, 0)) == "202701"
 
 
 def test_the_window_opens_at_the_roll_instant_and_closes_an_hour_later():
@@ -816,16 +824,28 @@ def test_a_schedule_with_no_policy_keeps_the_module_default():
     assert RollSchedule(month="202609").due(datetime(2026, 9, 15, 15, 30))
 
 
-def test_the_cache_splice_rule_was_not_moved_by_this_change():
-    """`front_month_at` shares `roll_at` only by history -- it is the bar-cache
-    splice, not the roll schedule. Threading a policy into it would move a live
+def test_the_splice_rule_requires_a_policy_and_night_is_still_the_old_default():
+    """This test used to assert the opposite, and the assertion was the defect.
+
+    It read: "threading a policy into `front_month_at` would move a live
     deployment's warm-up context as a side effect of a day-session decision, so
-    it is pinned to the module default here."""
-    from forecast_eval.live.roll import front_month_at
-    assert front_month_at(datetime(2026, 9, 15, 15, 29)) == "202609"
-    assert front_month_at(datetime(2026, 9, 15, 15, 31)) == "202610"
-    # ...and 12:45 does NOT move it, which is what "not policy-keyed" means
-    assert front_month_at(datetime(2026, 9, 15, 12, 46)) == "202609"
+    it is pinned to the module default". That protected NIGHT and broke DAY --
+    `live/cli.py` passed the function to the warm-up backfill **unbound**, so a
+    DAY run rolled its position at 12:45 and spliced its history at 15:30, for
+    183 of 183 DAY rolls that traded (TAPE_REBUILD_PLAN 5.3). The parameter is
+    required now, so that call cannot be written by omission.
+
+    What the old default protected is still true and is asserted here: NIGHT's
+    policy *is* the module constant, so the pinned deployment does not move."""
+    assert front_month_at(datetime(2026, 9, 15, 15, 29), NIGHT) == "202609"
+    assert front_month_at(datetime(2026, 9, 15, 15, 31), NIGHT) == "202610"
+    assert front_month_at(datetime(2026, 9, 15, 12, 46), NIGHT) == "202609"
+    # ...and DAY, which the old default answered wrong in silence, moves at 12:45
+    assert front_month_at(datetime(2026, 9, 15, 12, 46),
+                          SessionPolicy.day()) == "202610"
+    # omitting it is now unrepresentable rather than merely wrong
+    with pytest.raises(TypeError):
+        front_month_at(datetime(2026, 9, 15, 15, 29))
 
 
 # ---- the roll instant is set by the clearance-day constraint ----------------
@@ -925,9 +945,9 @@ def test_vectorised_rule_equals_the_scalar_one_at_every_splice(policy):
 def test_vectorised_rule_equals_the_scalar_one_across_the_whole_span():
     """Not just at the splices: every 6 h from 2017 to 2026."""
     ts = pd.date_range("2017-05-15", "2026-12-31", freq="6h")
-    got = front_month_series(ts)
+    got = front_month_series(ts, NIGHT)
     for t, g in zip(ts, got):
-        assert g == front_month_at(t)
+        assert g == _night_front(t)
 
 
 def test_the_rule_never_names_a_contract_that_has_stopped_trading():
@@ -938,7 +958,7 @@ def test_the_rule_never_names_a_contract_that_has_stopped_trading():
     prints to a contract that cannot produce them, which is Defect A (0.2) in
     rule form rather than in the data."""
     ts = pd.date_range("2017-05-15", "2026-12-31", freq="1h")
-    got = front_month_series(ts)
+    got = front_month_series(ts, NIGHT)
     for t, month in zip(ts, got):
         dies = datetime.combine(last_trading_day(month), time(13, 30))
         assert t.to_pydatetime() < dies, (
@@ -980,16 +1000,18 @@ def test_the_two_splice_points_disagree_by_2h45m_on_every_roll_date():
         assert gap == timedelta(hours=2, minutes=45)
 
 
-def test_default_policy_is_night_so_the_pinned_context_does_not_move():
-    """The reason this function resisted a policy parameter. Omitting it must
-    reproduce the module default exactly."""
+def test_night_policy_is_the_module_constant_so_the_pinned_context_does_not_move():
+    """The property the removed default existed to protect, kept as an explicit
+    assertion — this is what makes requiring the argument a no-op for NIGHT.
+    `None` still *means* the module constant; what changed is that a caller has
+    to say so."""
     for m in _all_months():
         assert roll_at(m) == roll_at(m, SessionPolicy.night())
     ts = pd.date_range("2020-01-01", "2026-12-31", freq="7h")
-    a = front_month_series(ts)
+    a = front_month_series(ts, None)
     b = front_month_series(ts, SessionPolicy.night())
     assert list(a) == list(b)
 
 
 def test_front_month_series_handles_an_empty_column():
-    assert len(front_month_series([])) == 0
+    assert len(front_month_series([], NIGHT)) == 0

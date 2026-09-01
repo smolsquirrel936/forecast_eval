@@ -55,7 +55,7 @@ schedule exists, and why the watcher stays behind it.
 | `RollSchedule(month, recorder=None)` | class | the calendar half; `due` / `lapsed` / `done` |
 | `last_trading_day(yyyymm)` | function | the third Wednesday |
 | `roll_at(yyyymm)` | function | 15:30 the day before it |
-| `front_month_at(ts)` | function | which month a timestamp belongs to — **the splice rule** |
+| `front_month_at(ts, policy)` | function | which month a timestamp belongs to — **the splice rule**; `policy` is required |
 | `MIN_RECHECK` / `ROLL_AT` / `ROLL_WINDOW` | constants | 5 min · 15:30 · 1 hour |
 
 ## When the scheduled roll fires, and why there
@@ -228,6 +228,18 @@ becomes a backstop and nothing about the ladder changes.
 it is deliberately the *same* rule the live stream switches on. If the two
 differed, the warm-up context and the tape would disagree for a day and a half
 every month and nothing would detect it.
+
+**`policy` is required, since 2026-09-02** — it used to default to the module's
+`ROLL_AT` (NIGHT's 15:30). The default was there to keep a pinned deployment's
+context from moving as a side effect of a day-session decision, and it did that,
+but `live/cli.py` then handed the *bare* function to the warm-up backfill, so
+**every** deployment spliced its history at 15:30 while `RollSchedule` rolled its
+position at the policy's own instant. A DAY run was therefore an hour apart from
+itself on every roll day: 183 of 183 rolls that traded, measured by
+[tools/roll_parity.py](../tools/roll_parity.md) (`TAPE_REBUILD_PLAN.md` §5.3).
+Requiring the argument is the same repair `fetch_bars` made for the same class of
+bug — see [backfill](backfill.md) — and it is a no-op for NIGHT, whose policy *is*
+15:30.
 
 **MEASURED 2026-08-23**, which is why the rule is a calendar and not volume: all
 four RPT tapes — including `TXF_RPT_minute_night.csv`, the one the pinned config

@@ -47,8 +47,12 @@ live stream are one rule, and the §0.3 divergence of 1 d 8 h 30 m is closed.
 It stays as the *tie-break*, because a minute the front month did not print is
 better filled from the other month than dropped.
 
-The rule passed in is [roll](roll.md)`.front_month_at`, deliberately the same
-instant the live stream switches on. At the roll moment the expiring month
+The rule passed in is [roll](roll.md)`.front_month_at` **bound to the running
+deployment's policy** (`live/cli.py`), deliberately the same instant the live
+stream switches on. It was passed *unbound* until 2026-09-02, which meant NIGHT's
+15:30 for every deployment and put a DAY run an hour apart from its own roll
+schedule on every roll day — `TAPE_REBUILD_PLAN.md` §5.3, and the reason
+`front_month_at` now requires a policy at all. At the roll moment the expiring month
 usually still has the larger volume, so a volume rule would keep feeding the
 cache a contract we had already stopped trading — the warm-up context and the
 tape would disagree for a day and a half every month, and nothing would detect it.
