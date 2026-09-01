@@ -260,9 +260,17 @@ def collapse_front_month(
     # Why:  MEASURED 2026-08-23. All three RPT files — the night file the pinned
     #       config was evaluated on included — carry **exactly one contract per
     #       minute**, so `load_minute_bars`'s highest-volume collapse never chose
-    #       anything: the evaluated series is spliced by *calendar*, switching one
-    #       day after each expiry. Volume was therefore never the convention, and
-    #       a calendar rule is the one that matches.
+    #       anything: the evaluated series is spliced by *calendar*. Volume was
+    #       therefore never the convention, and a calendar rule is the one that
+    #       matches.
+    #
+    #       UPDATED 2026-09-01 (TAPE_REBUILD_PLAN T2): it used to switch **one day
+    #       after each expiry**, which is not a rule any deployment could execute
+    #       — the roll must precede expiry to be tradeable. The rebuilt tapes
+    #       splice at `roll_at(month, policy)`, i.e. at *this* function's own
+    #       answer, so the 1 d 8 h 30 m divergence §0.3 measured is closed and the
+    #       tape and the live stream are now literally one rule. Still exactly one
+    #       contract per minute, re-verified on the new files.
     #
     #       It also has to be the same rule the live stream switches on. At the
     #       roll moment the expiring month usually still has the larger volume, so

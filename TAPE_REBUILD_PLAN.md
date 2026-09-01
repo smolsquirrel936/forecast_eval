@@ -31,6 +31,34 @@ The day tape was re-measured end-to-end against §0; the numbers confirm it, one
 new finding is added, and one cross-plan claim in §1 turns out not to hold as
 written. See **§0.5**.
 
+**Updated 2026-09-01 (T2/T3) — the three tapes are rebuilt and in place.**
+`dataset/RPT/TXF_RPT_minute_{day,night}.csv` and `TXF_RPT_minute.csv` are now the
+new vintage; the pre-rebuild bytes are in `_prerebuild_backup_20260901/`,
+verified identical before the overwrite. **Everything measured on the old tape is
+now measured on a file that no longer exists at that path** — `results.tsv`'s
+Calmar 13.6742 and W4b's 16.3122 included. T4 (the attributed diff) and T5 (the
+re-measure) are what make the new numbers readable; until then the plan's own
+figures above describe the *backup*, not `dataset/RPT/`. One choice §2 had left
+open had to be made to build at all — see **§2.4**.
+
+**Updated 2026-09-01 (T4) — the diff is measured and attributed; T0–T4 are
+done.** Four causes, not three: the rebuild also drops 1 297 out-of-session rows.
+The attribution is exact rather than estimated, and the headline number is not
+the one to quote — on the night tape `close` moves on 8.00 % of shared minutes
+and **about half of that is Defect C, not the splice**; on the day tape 69 % of
+the 18.17 % is. §3.1's estimate is corrected in place, and
+[docs/tools/diff_tapes.md](docs/tools/diff_tapes.md) holds the full table.
+**T5 next — one ~5-minute run of the pinned config on the new night tape.**
+
+**Updated 2026-09-01 (T5) — the number that replaces 16.3122 is 3.6006, and it
+comes with a confound T5 cannot resolve.** Same tree, same eval window, warmup
+recomputed from the target timestamp (520 004 → 538 790); a control run on the
+pre-rebuild tape reproduced 16.3122 exactly, so the change is the tape and not
+tree drift. But the forecast grid necessarily re-phased, and W4b measured phase
+*alone* moving Calmar 13.6742 → 8.7651. **§5.1** has the full table and says what
+that does and does not license. **T6 is not started** — re-pinning a mid-soak
+deployment to 3.6006 is a decision this run does not make on its own.
+
 **Status of the proposal:** the user proposed re-making the tape on a new rule
 rather than changing the code to match the old one. That direction is right —
 §1 is the evidence — but the specific instant proposed needs adjusting (§2.2).
@@ -387,6 +415,47 @@ of this section had it the other way round, on the pre-amendment 15:30.)
 > §3's diagram and T1–T3 should be rewritten to whichever is chosen. Left as-is
 > above so the choice is visible rather than silently assumed.
 
+### 2.4 The fallback — decided 2026-09-01, in T2, because it was not decided here
+
+§2.1 and §2.2 fix *when* the tape splices. They say nothing about a minute in
+which the front month **did not print at all**, and that turned out to be a
+separate choice with its own blast radius. §1 quotes `collapse_front_month`'s
+answer — "a minute the front month did not print is better filled from the other
+month than dropped" — as though adopting the live rule settled it. It does not,
+for two reasons found by measuring.
+
+**First, "the other month" is not symmetric.** `fetch_bars_continuous` fetches
+"the front month plus whatever earlier months are still listed", plus the cache
+that carries a delisted one. It **cannot reach the far month**. So a tape that
+filled from a later month would hold prices the live run has no way to observe —
+the same class of divergence §1 exists to close, introduced from the other side.
+Measured on the night tape:
+
+| fallback reach | bars filled | dates | |
+|---|---|---|---|
+| **earlier months only** | **10 240** | 216 — the post-roll windows | **chosen** |
+| any other month | 12 288 | 752, all times | 2 048 bars live cannot see |
+| none | 0 | — | re-opens the gap at every roll |
+
+**Second, the fallback is not free, and it is not what closes §0.2's holes.**
+Those bars carry the inter-month basis (§0.4: 84–325 points), so `|Δclose|` on
+them is **median 20 / p95 181** points against **median 2 / p95 12** on ordinary
+bars — one-bar spikes, ~47 minutes per roll window, ~9 000 of them across the
+tape. Against a band of 0.00045 that is a signal-sized artifact. It is kept
+anyway, because the live path produces it and §7's principle is that the tape
+adopts the code's rule.
+
+**What it does *not* buy is the holes.** Those close from the splice instant
+alone, exactly as §2.1 claimed — the last-trading-day bar counts are **identical**
+with and without the fallback (NIGHT median 834, short by 1 612 either way). §1's
+sentence implies otherwise and should be read as the parity argument it is, not
+as a data-completeness one.
+
+> **This is a live-path finding as much as a tape one.** The ~47 minutes a roll
+> where the incoming month is thin are filled, live, from the outgoing contract at
+> a basis-sized offset — into the warm-up context, silently. Nothing in
+> `SHIOAJI_PLAN.md` records it. Out of this plan's scope; worth its own look.
+
 ---
 
 ## 3. Scope — what has to be rebuilt
@@ -440,6 +509,28 @@ which matters now that D2 anticipates one.
 16.3122, were both measured on the current tape. A 6 % re-attribution plus
 60 000 new bars is a different series; the config has to be re-tuned against it,
 and `results.tsv` needs a new `dataset` vintage (the column already exists — W0).
+
+> **MEASURED 2026-09-01 (T4) — the estimate was half right, and the table above
+> should now be read as superseded.** `tools/diff_tapes.py` measured the night
+> tape directly:
+>
+> | | estimated | **measured** |
+> |---|---|---|
+> | bars newly filled | ~60 000 | **61 176** — right |
+> | bars re-attributed | ~112 000 (6.3 %) | **73 895 (4.00 %)** — overstated by ~½ |
+> | bars removed | not predicted | **82**, all out-of-session |
+>
+> And the thing the estimate could not have said, because C and D were not yet
+> known: on the night tape `close` moves on **8.00 %** of the minutes both tapes
+> carry, and **only about half of that is the splice** — 70 636 bars are the
+> front-month rule, 69 519 are Defect C alone, 2 784 are both. On the **day** tape
+> the split is worse: 18.17 % of closes move and **69 % of them are Defect C**,
+> which would have moved on any faithful rebuild whatever the splice rule was.
+>
+> The magnitudes separate the two cleanly and are worth carrying into T5: Defect C
+> moves a close by a median of **1 point**, the front-month rule by **31–43**.
+> `dclose` distributions and the per-roll table are in
+> [docs/tools/diff_tapes.md](docs/tools/diff_tapes.md).
 
 > **Understated, 2026-09-01.** These figures are the front-month rule alone. §0.6
 > adds two more causes measured since: **~14 % of `close` values** move on a
@@ -501,20 +592,39 @@ T1  [DONE 2026-09-01] build                             -> VERIFIED: applying th
     8 853 duplicates dropped, byte-identical asserted.      inside the bar's own high/low, so ordering
     Backup at _prerebuild_backup_20260901/.                 only); volume 0.172% (Defect D -- shipped
                                                            /rebuilt ratio exactly 2.000-3.000).
-T2  apply front_month_series per policy -> the three    -> verify: day + night reconcile to the combined
-    tapes [12:45, 12:45, 15:30]                            total; 0 bars on a dead contract
-T3  (folded into T2 -- the split IS the front-month     -> verify: the per-roll holes in 0.2 are gone
-    selection now, not a separate pass)
-T4  diff old vs new tape                                -> verify: a measured table -- bars changed,
-                                                           bars added, by roll, ATTRIBUTED TO THE THREE
-                                                           CAUSES (front-month rule / Defect C ordering /
-                                                           Defect D volume). Without the attribution the
-                                                           table cannot be read: 0.6 measures ~14% of
-                                                           closes moving for reasons unrelated to the
-                                                           splice.
-T5  re-run the pinned config on the NEW night tape      -> verify: the number that replaces 16.3122
-    [D1 = (a): re-measure only. The edit:/keep: chain          (and W4b's, which rests on the same run)
-    is NOT re-run; parameters stay, tape changes.]
+T2  [DONE 2026-09-01] apply front_month_series per      -> VERIFIED: 0 bars on a dead contract in all
+    policy -> the three tapes [12:45, 12:45, 15:30].        three (the OLD day tape scores 1 141 under
+    day 1 146 712, night 1 849 007, combined 2 995 727.     the same check). Roll COUNT unchanged -- 112
+    Built by tools/build_session_tapes.py, 25 s.            night, 188 day, exactly 0's figures; only the
+    The fallback reaches earlier months only (2.4).         instants moved. day+night and combined agree
+                                                           on every timestamp but 8 and differ in
+                                                           delivery month on 3 143 bars, ALL of them
+                                                           15:00-15:29 on a roll date -- 2.3's
+                                                           prediction, measured. All three load through
+                                                           real_data.load_minute_bars, 0 rows lost.
+T3  [DONE 2026-09-01 -- folded into T2; the split IS    -> VERIFIED: the 0.2 holes are gone. DAY on the
+    the front-month selection now, not a separate          183 last-trading-day sessions: median 285 ->
+    pass]                                                  300, short by 2 723 bars -> 0. NIGHT on the
+                                                           110: median 297 -> 834 of 840; the residual
+                                                           1 612 are minutes with no print in ANY kept
+                                                           contract, not a rule artifact.
+T4  [DONE 2026-09-01] diff old vs new tape, attributed. -> VERIFIED, and the attribution is EXACT, not
+    tools/diff_tapes.py. FOUR causes, not three -- the       estimated: replaying the OLD rule on the
+    rebuild also drops 1 297 out-of-session rows (B).        intermediate reproduces OLD's index AND
+    NIGHT: +61 094 bars; 61 176 added, 73 895                contract column exactly (T1's finding, the
+    re-attributed (4.00%), 82 dropped; close moved on        load-bearing one), and 0 fields differ on
+    8.00% of shared minutes -- HALF of that is Defect C.     any minute whose contract did not change.
+    DAY: close moved on 18.17%, but 69% of it is C           high/low differ 0% on all three. Full table
+    alone. See 3.1's correction and docs/tools/.             in docs/tools/diff_tapes.md.
+T5  [DONE 2026-09-01] re-run the pinned config on the   -> MEASURED: Calmar 16.3122 -> 3.6006. Same tree,
+    NEW night tape. warmup RECOMPUTED from the target      same commit, same eval window; net +46 603 ->
+    timestamp: 520 004 -> 538 790 (0.5 -- carrying the     +24 136, max dd -2 857 -> -6 703, 208 -> 235
+    old number would have started the eval window          trades. A CONTROL run on the pre-rebuild tape
+    2020-01-31, 34 days early).                            at warmup 520 004 reproduced 16.3122 EXACTLY
+    [D1 = (a): re-measure only. The edit:/keep: chain       (+46 603.2099 / -2 856.9506), so the drop is
+    is NOT re-run; parameters stay, tape changes.]          the tape, not tree drift. BUT SEE 5.1 -- the
+                                                           forecast grid necessarily re-phased, and W4b
+                                                           measured phase ALONE moving 13.6742 -> 8.7651.
 T6  re-pin NIGHT to the new row (D1)                    -> verify: results.tsv row + dataset vintage;
     [decided; the live-change risk is recorded at 6]           and whether the V5 soak clock restarts
 T7  re-run W4b, W5a and W5b on the new tape             -> verify: the DAY rows lose PROVISIONAL.
@@ -524,6 +634,59 @@ T7  re-run W4b, W5a and W5b on the new tape             -> verify: the DAY rows 
 ```
 
 T0–T4 need no GPU. T5 is ~4 minutes (§2.13's instrument).
+
+### 5.1 T5's result, and the confound it cannot resolve by itself
+
+Both runs are on one tree, one commit, one environment, the same calendar eval
+window (**2020-03-05 18:02 → 2026-08-21 04:59**), and the same parameters —
+`--buy-threshold 0.00045 --sell-threshold -0.00045 --min-prob 0.5`, everything
+else at the `PINNED` defaults.
+
+| | OLD tape, warmup **520 004** | NEW tape, warmup **538 790** |
+|---|---|---|
+| in-session bars | 1 787 831 | 1 849 007 |
+| forecasts | 42 261 | 43 674 |
+| trades | 208 | **235** |
+| net PnL (pts) | +46 603.2099 | **+24 135.5960** |
+| max drawdown (pts) | −2 856.9506 | **−6 703.2441** |
+| fee drag | 0.016 | 0.057 |
+| **Calmar** | **16.3122** | **3.6006** |
+| vs buy-and-hold | +11 835.43 | **−10 638.87** |
+
+**The control is exact.** Re-running the pre-rebuild tape at its own warmup
+reproduces W4b's 16.3122 to the digit (+46 603.2099 / −2 856.950550, 208 trades),
+so nothing between 2026-08-24 and now moved the number. The change is the tape.
+
+**The warmup had to be recomputed, and §0.5 was right about why.** 520 004 names
+the in-session bar the eval window starts on. On the rebuilt tape that index is
+**2020-01-31 23:19** — 34 days early — because ~18 786 bars were inserted *before*
+the split. The target timestamp `2020-03-05 18:02` sits at **538 790**, and that
+is what was used. Carrying the number across would have compared two different
+calendar windows and called the difference the tape.
+
+> **What T5 CANNOT tell apart, and T6 must not ignore.** Forecasts fire at
+> `warmup + k·stride` in **bar index**, and the rebuild inserted bars *inside* the
+> eval window as well as before it. So the forecast grid is necessarily re-phased:
+> the two runs sample different minutes, and a bar-for-bar comparison is not
+> available at any warmup. `DAY_SESSION_PLAN.md` §2.2 measured what that alone is
+> worth — **Calmar 13.6742 → 8.7651 with nothing changed but the grid phase**, and
+> concluded "the pinned 13.6742 is one draw from a distribution at least this
+> wide."
+>
+> So **16.3122 → 3.6006 is the tape correction *and* a fresh phase draw, and this
+> run cannot say in what proportion.** It is not evidence that the corrected tape
+> costs 4.5× — nor evidence that it does not. Quantifying it is a phase sweep on
+> the new tape (a handful of runs at `538 790 + k`, ~4.5 min each), which is a
+> *robustness* measurement of fixed parameters, not the `edit:`/`keep:` search D1
+> ruled out.
+
+**This bears on D1.** D1 chose (a) re-measure over (b) re-tune because testing
+time was the binding constraint, on the implicit expectation that the pinned
+parameters would still be worth pinning. A Calmar of 3.6006 that also trails
+buy-and-hold by 10 638 points is the case that expectation did not cover. Whether
+that reopens D1 is the user's call and is **not assumed here**; T6 is not started.
+
+---
 
 **Rollback.** `NOTE.md`'s incremental procedure records byte sizes so
 `truncate -s <size>` is an exact undo. That does **not** apply to a full rebuild:

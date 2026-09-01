@@ -269,7 +269,10 @@ def front_month_at(ts: Any, policy: Any = None) -> str:
 
     §0.3's divergence (this rule flipping 1 d 8 h 30 m before the tape spliced)
     is not fixed by changing this function — it is fixed by the tape adopting
-    it. See `roll_calendar`.
+    it. **The tape adopted it on 2026-09-01** (TAPE_REBUILD_PLAN T2): all three
+    session tapes are now `front_month_series(ts, policy)` applied to the
+    per-contract intermediate, so there is one rule and it is this one. See
+    `roll_calendar` and `tools/build_session_tapes.py`.
     """
     # Why:  the bar cache and the live stream must switch on the *same* rule, or
     #       the warm-up context and the tape disagree for a day and a half every
@@ -277,7 +280,9 @@ def front_month_at(ts: Any, policy: Any = None) -> str:
     #       evaluated series carries exactly one contract per minute and switches
     #       on the calendar, so `load_minute_bars`'s highest-volume collapse
     #       never chose anything there — volume is not the convention the model
-    #       was evaluated on, and a calendar rule is.
+    #       was evaluated on, and a calendar rule is. (Which calendar instant was
+    #       the defect: the tape's was one day *after* expiry until T2 rebuilt it
+    #       on this function.)
     ts = datetime(ts.year, ts.month, ts.day, ts.hour, ts.minute)
     this_month = f"{ts.year}{ts.month:02d}"
     if ts < roll_at(this_month, policy):

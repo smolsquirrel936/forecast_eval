@@ -51,10 +51,24 @@ def _rows_for(session):
     return [r for r in _rows() if r["session"] == session]
 
 
-def _best_row(rows, session):
-    """The highest-Calmar `keep` row *within one session*, or None if there are
-    none."""
-    # Tech: `status` must be "keep"; rows recorded as `reject` are excluded.
+def _best_row(rows, session, dataset=None):
+    """The highest-Calmar `keep` row *within one session and one dataset
+    vintage*, or None if there are none."""
+    # Tech: when `dataset` is given, rows measured on any other tape vintage are
+    #       excluded before the max.
+    # Why:  TAPE_REBUILD_PLAN T6. This is C1's argument again, one axis over: a
+    #       Calmar measured on a *different tape* is not comparable to one
+    #       measured on this tape, so an unscoped max lets a retired vintage
+    #       re-pin the live deployment. Measured — the rebuild moved the pinned
+    #       configuration from 16.3122 to 3.6006 with **no parameter changed**,
+    #       purely because the tape it is scored on was corrected. Without this
+    #       scope the ledger would insist the deployment stay pinned to a number
+    #       that can no longer be reproduced from any file on disk, which is the
+    #       opposite of what a provenance guard is for. D1 is explicit that the
+    #       old row survives as history: "one vintage is the forward policy, not
+    #       a rewrite of the ledger".
+    #
+    #       `status` must still be "keep"; rows recorded as `reject` are excluded.
     # Why:  DAY_SESSION_PLAN W5b, MEASURED — the ledger holds rejected cells on
     #       purpose, as the evidence for why they were rejected. The day search's
     #       band=0.004 row scores Calmar 14.7697 on the full window and is the
@@ -64,7 +78,8 @@ def _best_row(rows, session):
     #       pin is asserted against — the ledger's own counter-example promoted
     #       to its recommendation.
     scoped = [r for r in rows
-              if r["session"] == session and r.get("status", "keep") == "keep"]
+              if r["session"] == session and r.get("status", "keep") == "keep"
+              and (dataset is None or r["dataset"] == dataset)]
     return max(scoped, key=lambda r: float(r["calmar"])) if scoped else None
 
 
@@ -99,12 +114,32 @@ def test_pinned_row_is_still_the_best_known_config():
     #       at all.
     session = _session_of(PINNED)
     assert _rows_for(session), f"results.tsv has no {session} rows to compare against"
-    best = _best_row(_rows(), session)
+    vintage = _pinned_row()["dataset"]
+    best = _best_row(_rows(), session, vintage)
     assert best["commit"] == PINNED.source_commit, (
-        f"results.tsv now has a better {session} row: {best['commit']} "
-        f"calmar={best['calmar']} vs pinned {PINNED.source_commit} "
-        f"calmar={PINNED.source_calmar}. Re-pin live/config.py deliberately."
+        f"results.tsv now has a better {session} row on {vintage}: "
+        f"{best['commit']} calmar={best['calmar']} vs pinned "
+        f"{PINNED.source_commit} calmar={PINNED.source_calmar}. "
+        f"Re-pin live/config.py deliberately."
     )
+
+
+@pytest.mark.skipif(not RESULTS.exists(), reason="results.tsv not present")
+def test_the_pin_names_the_tape_vintage_it_was_measured_on():
+    """A Calmar without a tape vintage is not a fact about anything.
+
+    TAPE_REBUILD_PLAN T6 — the same parameters score 16.3122 on the pre-rebuild
+    night tape and 3.6006 on the rebuilt one. `results.tsv` has carried a
+    `dataset` column since W0 for this reason; the guard above scopes by it, so
+    a pinned row that does not fill it in would silently widen that scope back
+    to every vintage ever measured."""
+    row = _pinned_row()
+    assert "@" in row["dataset"], (
+        f"pinned row {row['commit']} records dataset {row['dataset']!r} with no "
+        f"@vintage — the scope in _best_row cannot mean anything without it")
+    assert row["dataset"].split("@")[0] in PINNED.source_dataset, (
+        "the pinned config's source_dataset names a different file from its "
+        "results.tsv row")
 
 
 # ---- the values themselves --------------------------------------------------

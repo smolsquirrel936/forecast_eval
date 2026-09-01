@@ -47,10 +47,15 @@ def load_minute_bars(path: Path, n_bars: int | None) -> pd.DataFrame:
       ``datetime,contract,open,high,low,close,volume``. TXF trades several
       contract months at once, so a minute *could* appear under multiple
       ``contract`` values; we keep the **highest-volume** row per minute.
-      **MEASURED 2026-08-23: in practice it never does** — all three RPT files
-      carry exactly one contract per minute, so this collapse is a no-op and
-      the files are already front-month-continuous, spliced on the calendar
-      one day after each expiry (SHIOAJI_PLAN §2.6).
+      **MEASURED 2026-08-23, re-verified 2026-09-01: in practice it never
+      does** — all three RPT files carry exactly one contract per minute, so
+      this collapse is a no-op and the files are already
+      front-month-continuous. Since TAPE_REBUILD_PLAN T2 the splice is
+      ``live.roll.roll_at(month, policy)`` — the instant each deployment
+      actually rolls, 12:45 for day and combined, 15:30 for night. It used to
+      be one calendar day *after* each expiry (SHIOAJI_PLAN §2.6), which no
+      deployment could execute; pre-rebuild copies are in
+      ``dataset/RPT/_prerebuild_backup_20260901/``.
 
     If ``n_bars`` is None, return every traded minute; otherwise return
     the trailing ``n_bars`` rows. Dropping NaN closes matters because
