@@ -467,8 +467,32 @@ this is that record.
 §2.2 requires the probe to use "the day tape's own aligned warmup" and to compare
 against 16.3122. For that comparison to mean anything the two runs must cover the
 **same calendar window**, so warmup was chosen as the day-tape index of the night
-baseline's first eval bar: **674 498 bars** (58.9 % of the tape). Day then
-evaluates `2020-03-06 08:45 → 2026-08-21`, night `2020-03-05 17:45 → 2026-08-21`.
+baseline's first eval bar: **674 498 bars**.
+
+> **CORRECTED 2026-09-01 (later) — the alignment is approximate, not bar-exact,
+> and this section originally claimed otherwise.** `real_data.py` derived the
+> split from **raw row positions** while `run_backtest` counts `bar_idx` over
+> the **`Environment`-filtered** stream, and the two differ: the day tape carries
+> **1 215 rows stamped 13:45** (outside the DAY session by both `policy.label`
+> and `classify_session` — median volume 4 against 2 191 on the 13:44 bar), the
+> night tape 82. So the windows the banner printed were not the windows the runs
+> used. Measured:
+>
+> | | printed | actual |
+> |---|---|---|
+> | DAY warmup ends | 2020-03-05 13:44 | **2020-03-11 08:48** (904 rows earlier in raw terms) |
+> | NIGHT warmup ends | 2020-03-05 17:44 | **2020-03-05 18:01** |
+> | DAY eval bars | 470 647 | **469 432** |
+> | NIGHT eval bars | 1 267 909 | **1 267 827** |
+>
+> **The two eval windows therefore start ~5.6 days apart, not bar-for-bar.**
+> Nothing measured changes: `warmup` reached the forecaster unaltered, the night
+> re-baseline still reproduces §2.2 exactly, and the day probe's first trade
+> (2020-03-11 08:50) was always consistent with the corrected start. The
+> misalignment is 0.24 % of a 6.5-year window, so W5a's and W5b's conclusions
+> stand. What was wrong was the claim of exactness, and the banner that supported
+> it — `real_data.py` now derives and reports the split on the in-session stream,
+> and says so when `--lookback-frac` was taken over raw rows instead.
 
 Reusing night's *30 % split* would have started day's evaluation in **2015-08**
 and compared two different market regimes. Recorded because the 30 % figure is
@@ -479,6 +503,22 @@ the obvious thing to carry across and it is the wrong one.
 operational), and validated by reproducing the night aligned run bit-for-bit from
 `--warmup-bars 520004` instead of the reverse-engineered
 `--lookback-frac 0.290844409`.
+
+> **`warmup_bars` is append-stable, not rebuild-stable — and the rebuild is
+> coming.** Recorded here because §2.2's consequence list says warmup in bars is
+> what makes a run "comparable to itself the next time the dataset grows", and
+> that is true only of growth **at the end**. A bar count is an index into the
+> in-session sequence, so anything that **inserts** bars *before* the split moves
+> what it points at. `TAPE_REBUILD_PLAN.md` T0–T4 does exactly that: fixing
+> Defect A restores ~15 day bars at **every** expiry, and ~63 expiries precede
+> 2020-03. So after the rebuild, `674 498` names a different bar than it does
+> today.
+>
+> **Consequence for the re-measurement:** the DAY rows' `warmup_bars` must be
+> **recomputed from a target timestamp**, not carried across as a number.
+> Re-using it verbatim would reproduce §2.2's alignment trap in a new form —
+> same failure (a moved forecast grid read as a change in the strategy), new
+> cause (bars inserted mid-tape rather than a fraction over a longer one).
 
 #### W5a — the transfer probe: night's configuration does not transfer
 

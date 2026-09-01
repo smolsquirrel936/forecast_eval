@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd
 
+from forecast_eval.environment import Environment
 from forecast_eval.forecaster.toto2 import Toto2Forecaster
 from forecast_eval.logging_io import timestamped_run_dir, write_all
 from forecast_eval.metrics import buy_and_hold_pnl, compute_metrics
@@ -193,17 +194,38 @@ def main(argv=None) -> int:
     print(f"loading: {args.data}")
     ticks = load_minute_bars(args.data, args.n_bars)
     n = len(ticks)
+
+    # Tech: the timestamps of the bars that actually reach the run loop --
+    #       `Environment` drops everything outside trading hours.
+    # Why:  MEASURED 2026-09-01. This is the unit `warmup` is denominated in:
+    #       `run_backtest` fires its first forecast at `bar_idx >= warmup` where
+    #       `bar_idx` counts only in-session bars, and `precompute_forecasts`
+    #       keys its cache the same way. The loaded frame is NOT that sequence.
+    #       The day tape carries 1215 rows stamped 13:45 -- outside the DAY
+    #       session by both `policy.label` and `classify_session`, median volume
+    #       4 against 2191 on the 13:44 bar -- and the night tape carries 82
+    #       such rows. So a warmup quoted against raw row positions names a
+    #       different bar than the split actually lands on: 904 rows different
+    #       on the day tape, about three sessions. Everything below is computed
+    #       on this sequence so the banner cannot disagree with the run.
+    in_session = [m.timestamp for m in Environment(ticks).stream()]
+    n_session = len(in_session)
+
     warmup = (args.warmup_bars if args.warmup_bars is not None
               else int(args.lookback_frac * n))
-    eval_bars = n - warmup
+    eval_bars = n_session - warmup
 
-    # Tech: an explicit --warmup-bars must still leave a non-empty eval window.
+    # Tech: an explicit --warmup-bars must leave a non-empty eval window, bounded
+    #       by the in-session count rather than the raw row count.
     # Why:  --lookback-frac was validated into (0, 1) above, which bounded the
-    #       derived split implicitly; a bar count carries no such bound, and a
-    #       value >= n would silently produce a run with nothing evaluated.
-    if args.warmup_bars is not None and not 0 < args.warmup_bars < n:
-        print(f"ERROR: --warmup-bars must be in (0, {n}), got {args.warmup_bars}",
-              file=sys.stderr)
+    #       derived split implicitly; a bar count carries no such bound. The
+    #       bound is `n_session` because that is what the index means -- a value
+    #       between `n_session` and `n` would pass a raw-row check and still
+    #       evaluate nothing.
+    if args.warmup_bars is not None and not 0 < args.warmup_bars < n_session:
+        print(f"ERROR: --warmup-bars must be in (0, {n_session}) -- the count of "
+              f"IN-SESSION bars, not the {n} rows loaded -- got "
+              f"{args.warmup_bars}", file=sys.stderr)
         return 2
 
     # Tech: refuse to run if the warmup slice is shorter than one model context.
@@ -223,15 +245,30 @@ def main(argv=None) -> int:
     # Tech: print the full shape/range plus the explicit warmup and eval windows.
     # Why:  on a multi-hour full-dataset run it's important to see exactly which date
     #       ranges are warmup vs. evaluated before committing to it.
-    print(f"  rows           : {n}")
+    print(f"  rows loaded    : {n}")
+    print(f"  in-session bars: {n_session}"
+          + (f"   ({n - n_session} rows dropped as off-session)"
+             if n != n_session else ""))
     print(f"  range          : {ticks['timestamp'].iloc[0]}  ->  "
           f"{ticks['timestamp'].iloc[-1]}")
     print(f"  price range    : {ticks['price'].min():.1f} .. "
           f"{ticks['price'].max():.1f}")
-    print(f"  warmup ({warmup / n:5.1%}) : {warmup} bars  "
-          f"[{ticks['timestamp'].iloc[0]} .. {ticks['timestamp'].iloc[warmup - 1]}]")
-    print(f"  eval   ({eval_bars / n:5.1%}) : {eval_bars} bars  "
-          f"[{ticks['timestamp'].iloc[warmup]} .. {ticks['timestamp'].iloc[-1]}]")
+    print(f"  warmup ({warmup / n_session:5.1%}) : {warmup} bars  "
+          f"[{in_session[0]} .. {in_session[warmup - 1]}]")
+    print(f"  eval   ({eval_bars / n_session:5.1%}) : {eval_bars} bars  "
+          f"[{in_session[warmup]} .. {in_session[-1]}]")
+    # Tech: say so out loud when the fraction path was used on a tape carrying
+    #       off-session rows.
+    # Why:  --lookback-frac multiplies the RAW row count, so on such a tape the
+    #       split it names is not the fraction it reads as. The arithmetic is
+    #       left alone deliberately -- changing it would silently move every run
+    #       ever recorded against a fraction, which is the failure mode 2.2 is
+    #       about. Saying it is the honest middle: use --warmup-bars for anything
+    #       that will be pinned.
+    if args.warmup_bars is None and n != n_session:
+        print(f"  NOTE           : --lookback-frac {args.lookback_frac} was taken "
+              f"over {n} RAW rows, not the {n_session} in-session bars the split "
+              f"is measured in; prefer --warmup-bars for a recorded run")
 
     # Tech: build the forecaster with warmup_bars set to the *split* warmup (not the
     #       context length) and the threshold emitter.
