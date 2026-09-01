@@ -45,6 +45,8 @@ from forecast_eval.live.broker.dryrun import DryRunBroker         # noqa: E402
 from forecast_eval.live.broker.shadow import ShadowBroker         # noqa: E402
 from forecast_eval.live.broker.shioaji import ShioajiBroker       # noqa: E402
 from forecast_eval.live.broker.sim import SimBroker               # noqa: E402
+from forecast_eval.live.artifacts import (ArtifactWriter,        # noqa: E402
+                                          live_params)
 from forecast_eval.live.capture import TickCapture                # noqa: E402
 from forecast_eval.live.config import CONFIGS, PINNED, config_named  # noqa: E402
 from forecast_eval.live.contracts import (                        # noqa: E402
@@ -472,6 +474,23 @@ def main(argv=None) -> int:
                               "soak_id": epoch.soak_id if epoch else None})
     alerter.recorder = recorder
     capture = None if args.no_capture else TickCapture(out / "ticks.csv")
+
+    # Tech: the run directory gets the backtest's own artifact set — fills,
+    #       orders, forecasts, signals, trades and params.json — refreshed while
+    #       the run is alive, not only at the end.
+    # Why:  a live run used to leave `session.jsonl` and `ticks.csv`, so the two
+    #       halves of this project produced different evidence and
+    #       `reports.generate_report`, which only ever wanted three CSVs in a
+    #       directory, could not be pointed at a soak at all. `LiveLoop.result()`
+    #       already returns a `BacktestResult`, so nothing is re-derived: the
+    #       same `write_all` runs over the same object, and the schemas cannot
+    #       drift because there is only one writer. `params.json` goes down now
+    #       rather than at shutdown, so a run that dies in its first minute still
+    #       says what it was trying to be.
+    artifacts = ArtifactWriter(out)
+    artifacts.write_params(live_params(
+        cfg, out_dir=out, broker=args.broker, warmup_days=args.warmup_days,
+        soak_id=epoch.soak_id if epoch else None))
 
     execution = Execution(fee_rate=cfg.fee_rate)
     rails_cfg = _rails_config(args, cfg)
@@ -1067,6 +1086,14 @@ def main(argv=None) -> int:
                 last_clock = now
                 rt.on_clock(datetime.now())
                 guard.heartbeat(datetime.now())
+                # Tech: refresh the artifact set; the writer throttles on its own
+                #       interval and skips when no list has grown.
+                # Why:  a soak runs for weeks, so "the files are written at the
+                #       end" is not trackable — but ten of every twenty-four
+                #       hours are outside the session, where nothing arrives and
+                #       an unguarded write would rewrite five files a minute,
+                #       byte for byte, for the whole dead zone.
+                artifacts.write(rt)
                 # Tech: run the liveness check only inside a session we trade.
                 # Why:  silence between 05:00 and 15:00 is expected, and probing
                 #       the venue every minute through a ten-hour gap would spend
@@ -1231,6 +1258,22 @@ def main(argv=None) -> int:
             recorder.record("fill_gap_summary", **broker.gap_summary())
         if capture:
             capture.close()
+
+        # Tech: the final artifact write, forced past both gates, and the only
+        #       one that renders the report.
+        # Why:  `force` because the last bars must land even if the throttle just
+        #       fired; `report=True` here and nowhere else because rendering
+        #       imports matplotlib and redraws every chart — acceptable once, on
+        #       a process that is already shutting down, and wasteful every
+        #       minute of a three-month soak. A failure is swallowed and counted:
+        #       these files record a live run, they never feed one.
+        written = artifacts.write(rt, report=True, force=True) if rt else None
+        if written:
+            print(f"  artifacts             {len(written)} files -> {out}")
+        for k, v in artifacts.summary().items():
+            print(f"  {k:22s} {v}")
+        recorder.record("artifact_summary", **artifacts.summary())
+
         recorder.close()
         try:
             api.logout()

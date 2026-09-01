@@ -229,6 +229,17 @@ is Phase INT yet:
    and the `session_event` fix before a long run started on top of them. It
    cost 0 fill-gap samples, since the stopped segment produced none. Restart
    with `--resume`; every hour down after that is a sample not taken.)
+> **A live run now leaves the backtest's artifact set — added 2026-09-02.** It
+> used to leave `session.jsonl` and `ticks.csv` only, so a soak and a backtest
+> produced different evidence and `reports.generate_report` could not be pointed
+> at a soak at all. A run directory now also carries `fills.csv`, `orders.csv`,
+> `forecasts.csv`, `signals.csv`, `trades.csv`, `params.json` and, at shutdown,
+> `report.html`. Nothing is re-derived: `LiveLoop.result()` already returns a
+> `BacktestResult`, so [live/artifacts.py](live/artifacts.py) hands it to the
+> backtest's own `write_all` and the schemas cannot drift. Refreshed while the
+> run is alive, gated on content so the 05:00–15:00 dead zone writes nothing.
+> See [docs/live/artifacts.md](docs/live/artifacts.md).
+
 2. **Once both gates are satisfied, Phase INT — Integration (§4) is next:**
    document the live path in `SPEC.md` (new §11) and `CLAUDE.md`; write the
    day-session porting guide (`docs/DOCS_PLAN.md` already tracks it as a task

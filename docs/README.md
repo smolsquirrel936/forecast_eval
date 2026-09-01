@@ -108,6 +108,7 @@ Three invariants make this honest (all enforced in code + tests):
 | [live/alerts.py](live/alerts.md) | `Alerter` | the one door everything needing a human goes through; where a Telegram sink attaches |
 | [live/startup.py](live/startup.md) | `RestartGuard` | the rails that survive the process dying |
 | [live/recorder.py](live/recorder.md) | JSONL audit trail | what a live session writes down, and why per-line flush |
+| [live/artifacts.py](live/artifacts.md) | `ArtifactWriter` | a live run's directory in the backtest's own schema — same `write_all`, so `generate_report` reads a soak |
 | [live/capture.py](live/capture.md) | `TickCapture` | the raw feed, written before any filter can touch it |
 | [live/contracts.py](live/contracts.md) | contract resolution | reaching a TXF contract, and what counts as "the same" one |
 | [live/broker/base.py](live/broker/base.md) | `Broker` ABC | the seam that lets `Trader` drive a real venue unchanged |
