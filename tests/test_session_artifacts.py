@@ -1,0 +1,130 @@
+"""Rebuilding a finished run's artifacts from its `session.jsonl`.
+
+`live/artifacts.py` is the answer for a *running* deployment — one writer, no
+projection. This is the answer for runs that ended before that existed, where the
+loop object is gone and the event stream is all that survives. The cases below
+pin the three things that make the reconstruction trustworthy rather than
+plausible:
+
+  * the **clock**, because one file carries two timestamp shapes and getting it
+    wrong is silent in every other respect;
+  * the **guard**, because a reconstruction must never quietly replace artifacts
+    a run wrote from its own loop;
+  * the **schema**, because the whole point is that a rebuilt directory is read
+    by everything that reads a backtest's.
+"""
+import json
+
+import pandas as pd
+import pytest
+
+from forecast_eval.tools.session_artifacts import (VENUE_UTC_OFFSET, check_alignment,
+                                                   main, read_records, rebuild)
+
+# A run shaped like `live_20260824_150112`: ISO local timestamps on bars, orders
+# and signals, and a float epoch on fills — the same instant, eight hours apart.
+RECORDS = [
+    {"event": "meta", "config": "LiveConfig[x]"},
+    {"event": "bar", "timestamp": "2026-08-24T20:00:00", "price": 44890.0},
+    {"event": "forecast", "timestamp": "2026-08-24T20:01:00", "horizon_bars": 30,
+     "payload": {"predicted_return": -0.001, "predicted_price": 44800.0,
+                 "last_price": 44890.0}},
+    {"event": "signal", "timestamp": "2026-08-24T20:01:00", "direction": "SELL",
+     "price": 44890.0, "session": "NIGHT", "strength": 0.7},
+    {"event": "order", "timestamp": "2026-08-24T20:01:00", "side": "SELL",
+     "limit_price": 44890.0, "intent": "OPEN", "quantity": 1},
+    # 1787572931.325908 is 12:02:11 UTC == 20:02:11 in Taipei
+    {"event": "fill", "timestamp": 1787572931.325908, "side": "SELL",
+     "fill_price": 44893.0, "quantity": 1, "fee": 6.73},
+    {"event": "bar", "timestamp": "2026-08-24T23:34:00", "price": 44520.0},
+    {"event": "fill", "timestamp": 1787585580.947707, "side": "BUY",
+     "fill_price": 44520.0, "quantity": 1, "fee": 6.68},
+]
+
+
+def _session(tmp_path, records=RECORDS):
+    d = tmp_path / "live_20260824_150112"
+    d.mkdir()
+    with (d / "session.jsonl").open("w", encoding="utf-8") as fh:
+        for r in records:
+            fh.write(json.dumps(r) + "\n")
+    return d
+
+
+def test_the_two_timestamp_shapes_land_on_one_clock(tmp_path):
+    """The load-bearing conversion. A fill's epoch is UTC and everything else is
+    naive Taipei local, so an unconverted fill lands eight hours before the order
+    that produced it — and nothing else would look wrong."""
+    result = rebuild(RECORDS)
+    assert str(result.fills[0].timestamp) == "2026-08-24 20:02:11.325907946"
+    assert result.orders[0].timestamp == pd.Timestamp("2026-08-24 20:01:00")
+    assert result.fills[0].timestamp > result.orders[0].timestamp
+    assert VENUE_UTC_OFFSET.total_seconds() == 8 * 3600
+
+
+def test_a_wrong_clock_is_caught_by_the_bars(tmp_path):
+    """`check_alignment` is what makes the offset a checked assumption. A fill
+    outside the run's own bar range is the one symptom a bad offset produces."""
+    assert check_alignment(rebuild(RECORDS), RECORDS) is None
+
+    off = [dict(r) for r in RECORDS]
+    for r in off:
+        if r["event"] == "fill":
+            r["timestamp"] = float(r["timestamp"]) - 8 * 3600   # "forgot" the offset
+    warning = check_alignment(rebuild(off), off)
+    assert warning and "outside the run's bars" in warning
+
+
+def test_the_rebuilt_lists_are_the_real_event_types(tmp_path):
+    """Built as `FillEvent` / `OrderEvent` / `Forecast`, not as dict rows, so a
+    change to the events breaks this loudly instead of writing the old shape."""
+    result = rebuild(RECORDS)
+    assert [type(x).__name__ for x in result.fills] == ["FillEvent"] * 2
+    assert type(result.orders[0]).__name__ == "OrderEvent"
+    assert type(result.forecasts[0]).__name__ == "Forecast"
+    assert result.forecasts[0].payload["predicted_return"] == -0.001
+    assert result.n_bars == 2
+
+
+def test_the_round_trip_pairs_and_prices_correctly(tmp_path):
+    """End to end: the SHORT opened at 44893 and closed at 44520 is +373 gross."""
+    d = _session(tmp_path)
+    assert main([str(d), "--no-report"]) == 0
+    trades = pd.read_csv(d / "trades.csv")
+    assert len(trades) == 1
+    assert trades.iloc[0]["side"] == "SHORT"
+    assert trades.iloc[0]["pnl_points"] == pytest.approx(373.0)
+
+
+@pytest.mark.parametrize("name", ["fills", "orders", "forecasts", "signals", "trades"])
+def test_every_artifact_is_written_in_the_backtests_schema(name, tmp_path):
+    from forecast_eval.logging_io import _EMPTY_COLUMNS
+
+    d = _session(tmp_path)
+    main([str(d), "--no-report"])
+    assert list(pd.read_csv(d / f"{name}.csv").columns) == _EMPTY_COLUMNS[name]
+
+
+def test_it_refuses_to_overwrite_artifacts_a_run_wrote_itself(tmp_path, capsys):
+    """A run from `live/artifacts.py` wrote its artifacts from the loop. Those are
+    the primary record; replacing them with a reconstruction is a downgrade, and
+    doing it silently is worse."""
+    d = _session(tmp_path)
+    (d / "fills.csv").write_text("timestamp,side,fill_price,quantity,fee\n")
+
+    assert main([str(d), "--no-report"]) == 3
+    assert "already has" in capsys.readouterr().err
+    assert main([str(d), "--no-report", "--force"]) == 0
+
+
+def test_a_partial_final_line_is_skipped(tmp_path):
+    """The recorder flushes per line so the trail survives a kill -9, which means
+    the last line of a killed run can be half-written."""
+    d = _session(tmp_path)
+    with (d / "session.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write('{"event": "fill", "timestamp": 178757')
+    assert len(read_records(d / "session.jsonl")) == len(RECORDS)
+
+
+def test_a_missing_session_file_is_an_error_not_a_crash(tmp_path):
+    assert main([str(tmp_path), "--no-report"]) == 2
