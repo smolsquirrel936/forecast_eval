@@ -40,6 +40,7 @@ from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+from forecast_eval.events import FillEvent                        # noqa: E402
 from forecast_eval.execution import Execution                     # noqa: E402
 from forecast_eval.live.broker.dryrun import DryRunBroker         # noqa: E402
 from forecast_eval.live.broker.shadow import ShadowBroker         # noqa: E402
@@ -49,6 +50,8 @@ from forecast_eval.live.artifacts import (ArtifactWriter,        # noqa: E402
                                           live_params)
 from forecast_eval.live.capture import TickCapture                # noqa: E402
 from forecast_eval.live.config import CONFIGS, PINNED, config_named  # noqa: E402
+from forecast_eval.live.ledger import (FillLedger, ledger_path,     # noqa: E402
+                                       net_position)
 from forecast_eval.live.contracts import (                        # noqa: E402
     contract_month, dated_months, resolve_txf, txf_root)
 from forecast_eval.live.alerts import Alerter                     # noqa: E402
@@ -488,6 +491,14 @@ def main(argv=None) -> int:
     #       rather than at shutdown, so a run that dies in its first minute still
     #       says what it was trying to be.
     artifacts = ArtifactWriter(out)
+    # Tech: the deployment's fill ledger, keyed by policy and scoped to the soak.
+    # Why:  see `live/ledger.py` — a restart adopts the position but not its
+    #       history, so `trades.csv` mis-paired every trade on a resumed run.
+    #       Keyed like the bar cache (C5) so DAY and NIGHT can never replay each
+    #       other's fills; it lives beside the bar cache, in `out.parent`, since
+    #       it outlives any single run directory.
+    ledger = FillLedger(ledger_path(out.parent, cfg.policy),
+                        soak_id=epoch.soak_id if epoch else None)
     artifacts.write_params(live_params(
         cfg, out_dir=out, broker=args.broker, warmup_days=args.warmup_days,
         soak_id=epoch.soak_id if epoch else None))
@@ -645,6 +656,59 @@ def main(argv=None) -> int:
                          f"{adopted['entry_price']:.2f} from the venue")
         elif args.broker == "shioaji":
             print("account is flat — starting from no position")
+
+        # Tech: replay this deployment's fills for the live soak, and seed the
+        #       loop's list with them; fall back to one synthetic opening fill
+        #       when the ledger cannot support the position actually held.
+        # Why:  a restart adopts the *position* but not its history, and
+        #       `build_trades` walks from flat — so the inherited position's
+        #       close was booked as an OPEN and every pair after it shifted
+        #       (measured: one SHORT +100 reported where the truth was two LONGs
+        #       of +145 and +300, with the run's last fill dropped). Nothing in
+        #       the loop reads `fills` to decide anything — `_note_roll_fill`
+        #       takes `fills[-1]`, which seeding at the front cannot move — so
+        #       this is inert for trading and fixes only the record.
+        #
+        #       The reconciliation is the load-bearing part. If the replay does
+        #       not add up to what the venue holds, the history is wrong (a
+        #       manual flatten, a crash between a fill and its sync, a different
+        #       account), and seeding it would produce a confidently wrong
+        #       `trades.csv`. In that case the ledger is refused and the
+        #       synthetic fill is used instead: one opening fill at the venue's
+        #       own average price, which cannot reconstruct the history but does
+        #       guarantee the pairing. `entry_ts` is then the resume moment, not
+        #       the original open — the venue reports an average price, not a
+        #       time — which is the same approximation `trader.entry_timestamp`
+        #       already makes.
+        inherited = ledger.replay() if args.resume else []
+        held_now = adopted["position"] if adopted else 0
+        if inherited and net_position(inherited) != held_now:
+            alerter.warn(
+                "fills_replay_refused",
+                f"the {cfg.policy.cache_slug()} ledger replays to "
+                f"{net_position(inherited):+d} lot(s) but the venue holds "
+                f"{held_now:+d} — refusing the history and booking the open "
+                f"position from the venue instead")
+            recorder.record("fills_replay_refused",
+                            ledger_net=net_position(inherited),
+                            venue_position=held_now,
+                            replayed=len(inherited))
+            inherited = []
+        if not inherited and adopted:
+            inherited = [FillEvent(
+                timestamp=adopted["adopted_at"],
+                side="BUY" if adopted["position"] > 0 else "SELL",
+                fill_price=float(adopted["entry_price"]),
+                quantity=abs(int(adopted["position"])), fee=0.0)]
+            recorder.record("fills_synthesised", **adopted)
+        if inherited:
+            rt.loop.fills.extend(inherited)
+            ledger.mark_written(len(inherited))
+            print(f"resume: {len(inherited)} inherited fill(s) seeded, "
+                  f"net {net_position(inherited):+d}")
+            recorder.record("fills_replayed", count=len(inherited),
+                            net=net_position(inherited),
+                            soak_id=ledger.soak_id)
 
         # --- warm-up: fetch, prime, pre-warm, seed -------------------------
         end = datetime.now().date()
@@ -1094,6 +1158,12 @@ def main(argv=None) -> int:
                 #       an unguarded write would rewrite five files a minute,
                 #       byte for byte, for the whole dead zone.
                 artifacts.write(rt)
+                # Tech: append any fill the ledger has not seen yet.
+                # Why:  cheap and bounded — it writes the tail past a high-water
+                #       mark, so the cost is the number of NEW fills (0.18-0.37 a
+                #       night), not the length of the soak. This is what makes
+                #       the *next* restart able to replay this one.
+                ledger.sync(rt.loop.fills)
                 # Tech: run the liveness check only inside a session we trade.
                 # Why:  silence between 05:00 and 15:00 is expected, and probing
                 #       the venue every minute through a ten-hour gap would spend
@@ -1267,6 +1337,11 @@ def main(argv=None) -> int:
         #       a process that is already shutting down, and wasteful every
         #       minute of a three-month soak. A failure is swallowed and counted:
         #       these files record a live run, they never feed one.
+        if rt is not None:
+            ledger.sync(rt.loop.fills)
+        for k, v in ledger.summary().items():
+            print(f"  {k:22s} {v}")
+        recorder.record("ledger_summary", **ledger.summary())
         written = artifacts.write(rt, report=True, force=True) if rt else None
         if written:
             print(f"  artifacts             {len(written)} files -> {out}")

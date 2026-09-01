@@ -96,6 +96,7 @@ Three invariants make this honest (all enforced in code + tests):
 | [live/runtime.py](live/runtime.md) | `LiveRuntime` | the whole assembly minus the network — one policy, and a warm-up that leaves nothing cold |
 | [live/config.py](live/config.md) | `LiveConfig` / `PINNED` | the tuned configuration a live run trades, and where it came from |
 | [live/sessions.py](live/sessions.md) | `SessionPolicy` | which sessions a deployment trades, and where its trading day begins |
+| [live/ledger.py](live/ledger.md) | `FillLedger` | the deployment's fill history across restarts — policy-keyed, soak-scoped, so a resumed run's trades pair right |
 | [live/loop.py](live/loop.md) | `LiveLoop` | the §4.1 loop restructured from pull to push |
 | [live/bars.py](live/bars.md) | `TickAggregator` | how live ticks become the 1-min bars the model expects |
 | [live/backfill.py](live/backfill.md) | `kbars` → bars | warm-up history, and the three corrections `kbars` needs |
