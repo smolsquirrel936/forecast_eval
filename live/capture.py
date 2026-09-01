@@ -132,3 +132,37 @@ def read_ticks(path: "str | Path") -> pd.DataFrame:
     df["simtrade"] = df["simtrade"].astype(bool)
     df["code"] = df["code"].fillna("").astype(str)
     return df
+
+
+def price_series(path: "str | Path") -> Optional[pd.DataFrame]:
+    """A capture as the `(timestamp, price)` frame the report charts against.
+
+    Returns None when there is no capture to read.
+    """
+    # Tech: read the capture through `read_ticks`, drop simtrade prints, and keep
+    #       the two columns `reports.generate_report` wants.
+    # Why:  the price line and the buy-and-hold curve are drawn from this, and
+    #       without it the report's "Price with fills" panel has fills plotted
+    #       against nothing — which is what a live run produced until 2026-09-02,
+    #       because `write_all` was called with no `report_ticks` at all.
+    #
+    #       Simtrade prints are excluded for §2.5's reason: they are not evidence
+    #       the market traded, so a chart drawn from them would not be the series
+    #       the run actually saw. Going through `read_ticks` rather than a second
+    #       `read_csv` is what keeps the ISO-8601 handling above in one place —
+    #       it was rediscovered once already, in `tools/session_artifacts.py`.
+    p = Path(path)
+    if not p.exists():
+        return None
+    try:
+        df = read_ticks(p)
+    except Exception:                                  # noqa: BLE001 — see Why
+        # Why:  a capture is written by a process that can be killed mid-row, and
+        #       this is only ever the *background* of a chart. A malformed tail
+        #       must cost the price line, never the report.
+        return None
+    df = df[~df["simtrade"]]
+    if df.empty:
+        return None
+    return pd.DataFrame({"timestamp": df["timestamp"].to_numpy(),
+                         "price": df["price"].astype(float).to_numpy()})

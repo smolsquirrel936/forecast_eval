@@ -846,8 +846,30 @@ def main(argv=None) -> int:
                     help="Optional path to TXF_OHLC_1min.csv for price chart background")
     args = ap.parse_args(argv)
 
+    # Tech: with no `--data`, fall back to a live run's own `ticks.csv`.
+    # Why:  `--data` takes the *dataset's* minute file, which a live directory
+    #       does not have — it has the capture the run wrote itself, in the
+    #       capture schema. Without this, re-rendering a live run gives fills
+    #       drawn against an empty axis, and the panel still renders, so it reads
+    #       as "this run had no prices" rather than "nobody passed any".
+    #
+    #       Imported here rather than at module scope: `live` depends on this
+    #       module, not the other way round, and the fallback is a convenience of
+    #       the CLI rather than a property of `generate_report`. A tree without
+    #       the live package still renders reports.
+    ticks = None
+    if args.data is None:
+        try:
+            from .live.capture import price_series
+            ticks = price_series(args.run_dir / "ticks.csv")
+        except Exception:                              # noqa: BLE001 — see Why
+            ticks = None
+        if ticks is not None:
+            print(f"price background: {len(ticks):,} prints from "
+                  f"{args.run_dir / 'ticks.csv'}")
+
     try:
-        paths = generate_report(args.run_dir, data_path=args.data)
+        paths = generate_report(args.run_dir, data_path=args.data, ticks=ticks)
     except FileNotFoundError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2

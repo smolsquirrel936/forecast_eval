@@ -154,26 +154,13 @@ def check_alignment(result: BacktestResult, records: List[dict]) -> Optional[str
 
 def load_price_series(run_dir: Path) -> Optional[pd.DataFrame]:
     """`ticks.csv` as the `(timestamp, price)` frame the report charts against."""
-    # Tech: read the capture, drop simtrade prints, keep two columns.
-    # Why:  the report draws the price line and the buy-and-hold curve from this.
-    #       Simtrade prints are excluded for the reason §2.5 gives — they are not
-    #       evidence the market traded — so a chart built from them would not be
-    #       the series the run actually saw.
-    path = run_dir / "ticks.csv"
-    if not path.exists():
-        return None
-    df = pd.read_csv(path, usecols=["timestamp", "price", "simtrade"])
-    df = df[df["simtrade"] == 0]
-    # Tech: `format="ISO8601"` rather than letting pandas infer one format.
-    # Why:  MEASURED — the capture mixes both ISO shapes in one file, because a
-    #       print that lands exactly on a second has no fractional part
-    #       ("2026-08-24T15:11:23" at row 320, among 287 726 that do). Inference
-    #       locks onto the first row's format and then raises on the first row
-    #       that differs, which reads as a corrupt capture rather than a
-    #       perfectly ordinary one.
-    return pd.DataFrame({"timestamp": pd.to_datetime(df["timestamp"],
-                                                     format="ISO8601"),
-                         "price": df["price"].astype(float)})
+    # Tech: delegate to `live/capture.py`, which owns the capture format.
+    # Why:  this used to re-read the CSV itself, and in doing so rediscovered the
+    #       mixed ISO-8601 shapes that `capture.read_ticks` had already handled
+    #       and documented (§2.17). One reader for one format; a second copy is
+    #       how the two drift.
+    from forecast_eval.live.capture import price_series
+    return price_series(run_dir / "ticks.csv")
 
 
 def seed_ledger(result: BacktestResult, run_dir: Path, *, config: str,

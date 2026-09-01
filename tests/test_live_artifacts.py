@@ -128,6 +128,47 @@ def test_generate_report_renders_from_a_live_run_directory(live_dir):
     assert (live / "report.html").exists()
 
 
+def test_the_report_is_given_the_runs_own_price_capture(live_dir, monkeypatch):
+    """MEASURED 2026-09-02 on a real run. `write_all` was called with no
+    `report_ticks`, so "Price with fills" drew the fills against an empty axis.
+    The panel still rendered, which is why it took a reader to notice."""
+    live, loop = live_dir
+    # note the second row has no fractional seconds and the third is a simtrade
+    rows = [
+        "timestamp,received,code,price,volume,simtrade",
+        "2026-09-02T02:06:02.475000,2026-09-02T02:06:03.1,TXFI6,46619.0,1,0",
+        "2026-09-02T02:06:03,2026-09-02T02:06:03.5,TXFI6,46620.0,1,0",
+        "2026-09-02T02:06:04.100000,2026-09-02T02:06:04.5,TXFI6,99999.0,1,1",
+    ]
+    (live / "ticks.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    seen = {}
+
+    def spy(result, out_dir, **kw):
+        seen.update(kw)
+        return {}
+
+    monkeypatch.setattr("forecast_eval.live.artifacts.write_all", spy)
+    ArtifactWriter(live).write(_runtime(loop), report=True, force=True)
+
+    ticks = seen["report_ticks"]
+    assert ticks is not None, "the report got no price series"
+    assert list(ticks.columns) == ["timestamp", "price"]
+    assert len(ticks) == 2, "the simtrade print must not reach the chart"
+    assert 99999.0 not in set(ticks["price"])
+
+
+def test_the_periodic_write_does_not_read_the_capture(live_dir, monkeypatch):
+    """A capture is tens of MB by the end of a night, and the throttled path runs
+    once a minute for weeks. Only the shutdown render needs it."""
+    live, loop = live_dir
+    seen = {}
+    monkeypatch.setattr("forecast_eval.live.artifacts.write_all",
+                        lambda result, out_dir, **kw: seen.update(kw) or {})
+    ArtifactWriter(live, min_interval_seconds=0.0).write(_runtime(loop), force=True)
+    assert seen["report_ticks"] is None
+
+
 # ---- the empty run, which is what a live run normally is --------------------
 
 

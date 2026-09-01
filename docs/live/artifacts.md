@@ -51,6 +51,19 @@ byte-identical to the last.
 redraws every chart: acceptable once on a process that is already stopping,
 wasteful every minute of a three-month soak.
 
+## The report gets the run's own price capture
+
+MEASURED 2026-09-02, on a real run: `write_all` was called with no
+`report_ticks`, so the report's **"Price with fills"** panel drew the fills
+against an empty axis. The panel still rendered, which is why it took a reader to
+notice rather than a failure. The capture is sitting in the same directory, so
+`price_series(out_dir / "ticks.csv")` now supplies it — and **only** when
+`report=True`, keeping a capture that reaches tens of MB off the once-a-minute
+path.
+
+`python -m forecast_eval.reports <run_dir>` falls back to the same capture, so
+any live directory can be re-rendered without re-running anything.
+
 ## Failures are counted, never raised
 
 These files are a *record* of a live run and never an input to one, so a full

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from ..logging_io import write_all, write_params
+from .capture import price_series
 
 # Tech: the shortest gap between two artifact writes.
 # Why:  the stride is 30 bars — one forecast and one signal every 30 minutes —
@@ -144,9 +145,19 @@ class ArtifactWriter:
         #       already applies to a failing chart backend, one level up.
         try:
             self.out_dir.mkdir(parents=True, exist_ok=True)
+            # Tech: hand the report this run's own capture as the price series,
+            #       and only when actually rendering.
+            # Why:  MEASURED 2026-09-02 on a real run. `write_all` was called
+            #       with no `report_ticks`, so "Price with fills" drew the fills
+            #       against an empty axis — the panel rendered, which is why it
+            #       took a reader to notice rather than a failure. The capture is
+            #       sitting in this same directory. Loading it only under
+            #       `report` keeps a 20 MB read off the once-a-minute path.
             written = write_all(
                 runtime.loop.result(), self.out_dir, ext=self.ext,
                 auto_report=report,
+                report_ticks=(price_series(self.out_dir / "ticks.csv")
+                              if report else None),
                 roll_fills=(getattr(runtime, "roll_fills", None) or None),
             )
         except Exception:                                  # noqa: BLE001 — see Why

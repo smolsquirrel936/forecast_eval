@@ -72,3 +72,22 @@ reports a mismatch that exists only in the replay.
 
 ## Related
 [live/bars.py](bars.md) · [live/recorder.py](recorder.md) · [live/runtime.py](runtime.md) · [live/cli.py](cli.md) · [SHIOAJI_PLAN.md §2.5](../../SHIOAJI_PLAN.md)
+
+## `price_series` — the capture as a chart background
+
+`reports.generate_report` draws its price line and buy-and-hold curve from a
+`(timestamp, price)` frame. A live run has exactly that in its own `ticks.csv`,
+and until 2026-09-02 nobody passed it: `write_all` was called with no
+`report_ticks`, so **"Price with fills"** plotted the fills against an empty
+axis. The panel still rendered, which is why it took a reader to notice.
+
+`price_series(path)` is that frame — `read_ticks`, minus simtrade prints (§2.5,
+they are not evidence the market traded), or `None` when there is no capture. It
+goes through `read_ticks` rather than a second `read_csv` so the ISO-8601
+handling above stays in one place; it had already been rediscovered once, in
+`tools/session_artifacts.py`, before that tool was pointed here instead.
+
+Used by [live/artifacts.py](artifacts.md) at shutdown, by
+[tools/session_artifacts.py](../tools/session_artifacts.md), and by
+`python -m forecast_eval.reports <run_dir>` as its fallback when `--data` is not
+given — which is how any existing live directory gets re-rendered with its prices.

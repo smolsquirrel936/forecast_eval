@@ -46,12 +46,13 @@ them — the one symptom a wrong offset produces.
 
 ## Two more measured details
 
-**`ticks.csv` mixes both ISO shapes.** A print landing exactly on a second has no
-fractional part (`"2026-08-24T15:11:23"` at row 320, among 287 726 that do), so
-`pd.to_datetime` must be given `format="ISO8601"`; inference locks onto the first
-row and then raises on the first row that differs, which reads as a corrupt
-capture rather than an ordinary one. Simtrade prints are dropped (§2.5) so the
-price line is the series the run actually saw.
+**The price series comes from [live/capture.py](../live/capture.md).** This
+module briefly carried its own reader and rediscovered, as a fresh finding, that
+`ticks.csv` mixes both ISO-8601 shapes — a print landing exactly on a second has
+no fractional part. `capture.read_ticks` had already solved and documented that
+(§2.17). It now delegates to `capture.price_series`: one reader for one format,
+because a second copy is how the two drift. Simtrade prints are dropped there
+(§2.5), so the price line is the series the run actually saw.
 
 **`bars_held` is 0 on every rebuilt trade.** `build_trades` computes it from
 `fill_bar_idx`, which `write_all` does not pass — so this is true of a *live*
