@@ -113,6 +113,25 @@ def main(argv=None) -> int:
                     help="Trailing rows to use (default: full dataset)")
     ap.add_argument("--lookback-frac", type=float, default=0.30,
                     help="Fraction of bars used as silent warmup")
+    # Tech: --warmup-bars names the split in bars and, when given, overrides
+    #       --lookback-frac entirely.
+    # Why:  DAY_SESSION_PLAN 2.2, MEASURED — a fraction is not reproducible across
+    #       tapes of different length. The 2026-08-24 re-baseline re-ran the pinned
+    #       config on a grown tape at the same --lookback-frac 0.30 and the split
+    #       moved 520004 -> 536373 bars; forecasts fire at `warmup + k*stride`, and
+    #       16369 mod 30 = 19, so every forecast landed 19 bars off the original
+    #       grid (0 shared timestamps out of 40443 old / 41716 new). Same strategy,
+    #       same data, -10100.62 points over the identical calendar window --
+    #       Calmar 13.6742 -> 8.7651. Recovering the original run needed a
+    #       10-decimal fraction reverse-engineered from the row count. A bar count
+    #       is the number that actually identifies the split, so it is the one a
+    #       `results.tsv` row pins (the `warmup_bars` column) and the one a re-run
+    #       passes back in.
+    ap.add_argument("--warmup-bars", type=int, default=None,
+                    help="Silent-warmup length in BARS; overrides --lookback-frac. "
+                         "Reproducible across tapes of different length, which a "
+                         "fraction is not -- prefer this for any run that will be "
+                         "recorded in results.tsv")
     ap.add_argument("--checkpoint", default="Datadog/Toto-2.0-313m",
                     help="HuggingFace toto2 checkpoint id")
     ap.add_argument("--context-length", type=int, default=3008,
@@ -166,15 +185,26 @@ def main(argv=None) -> int:
         print(f"ERROR: data file not found at {args.data}", file=sys.stderr)
         return 2
 
-    # Tech: load the bars and derive the warmup/eval split from lookback_frac.
+    # Tech: load the bars and derive the warmup/eval split -- from --warmup-bars
+    #       when it was given, otherwise from --lookback-frac.
     # Why:  the first `warmup` bars build the model's context silently (no trading);
     #       trading only happens over the trailing eval_bars, mirroring how a model
     #       deployed live would have history before it ever acts (SPEC §4.8).
     print(f"loading: {args.data}")
     ticks = load_minute_bars(args.data, args.n_bars)
     n = len(ticks)
-    warmup = int(args.lookback_frac * n)
+    warmup = (args.warmup_bars if args.warmup_bars is not None
+              else int(args.lookback_frac * n))
     eval_bars = n - warmup
+
+    # Tech: an explicit --warmup-bars must still leave a non-empty eval window.
+    # Why:  --lookback-frac was validated into (0, 1) above, which bounded the
+    #       derived split implicitly; a bar count carries no such bound, and a
+    #       value >= n would silently produce a run with nothing evaluated.
+    if args.warmup_bars is not None and not 0 < args.warmup_bars < n:
+        print(f"ERROR: --warmup-bars must be in (0, {n}), got {args.warmup_bars}",
+              file=sys.stderr)
+        return 2
 
     # Tech: refuse to run if the warmup slice is shorter than one model context.
     # Why:  Toto2 needs at least context_length bars before its first forecast; a
@@ -182,7 +212,8 @@ def main(argv=None) -> int:
     #       with an actionable message instead of producing zero forecasts.
     if warmup < args.context_length:
         print(
-            f"ERROR: warmup ({warmup} bars at lookback_frac={args.lookback_frac}) "
+            f"ERROR: warmup ({warmup} bars from "
+            f"{'--warmup-bars' if args.warmup_bars is not None else f'lookback_frac={args.lookback_frac}'}) "
             f"is smaller than context_length ({args.context_length}). "
             f"Toto2 needs at least context_length bars before it can forecast.",
             file=sys.stderr,
@@ -197,9 +228,9 @@ def main(argv=None) -> int:
           f"{ticks['timestamp'].iloc[-1]}")
     print(f"  price range    : {ticks['price'].min():.1f} .. "
           f"{ticks['price'].max():.1f}")
-    print(f"  warmup (30%)   : {warmup} bars  "
+    print(f"  warmup ({warmup / n:5.1%}) : {warmup} bars  "
           f"[{ticks['timestamp'].iloc[0]} .. {ticks['timestamp'].iloc[warmup - 1]}]")
-    print(f"  eval   (70%)   : {eval_bars} bars  "
+    print(f"  eval   ({eval_bars / n:5.1%}) : {eval_bars} bars  "
           f"[{ticks['timestamp'].iloc[warmup]} .. {ticks['timestamp'].iloc[-1]}]")
 
     # Tech: build the forecaster with warmup_bars set to the *split* warmup (not the

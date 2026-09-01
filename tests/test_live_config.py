@@ -51,8 +51,19 @@ def _rows_for(session):
 
 
 def _best_row(rows, session):
-    """The highest-Calmar row *within one session*, or None if there are none."""
-    scoped = [r for r in rows if r["session"] == session]
+    """The highest-Calmar `keep` row *within one session*, or None if there are
+    none."""
+    # Tech: `status` must be "keep"; rows recorded as `reject` are excluded.
+    # Why:  DAY_SESSION_PLAN W5b, MEASURED — the ledger holds rejected cells on
+    #       purpose, as the evidence for why they were rejected. The day search's
+    #       band=0.004 row scores Calmar 14.7697 on the full window and is the
+    #       highest DAY number in this file, but it is 27 trades with 10 of them
+    #       out-of-sample and a first-half Calmar of 2.28. Without this filter it
+    #       would be "the best known DAY config" and would be what a future DAY
+    #       pin is asserted against — the ledger's own counter-example promoted
+    #       to its recommendation.
+    scoped = [r for r in rows
+              if r["session"] == session and r.get("status", "keep") == "keep"]
     return max(scoped, key=lambda r: float(r["calmar"])) if scoped else None
 
 
@@ -275,6 +286,18 @@ def test_a_day_row_cannot_repin_the_night_deployment():
     assert _best_row(rows, "DAY")["commit"] == "day_x"
     # and the unscoped comparison this replaced would have picked the DAY row
     assert max(rows, key=lambda r: float(r["calmar"]))["commit"] == "day_x"
+
+
+def test_a_rejected_row_cannot_become_the_best_known_config():
+    """W5b's overfit cell is in `results.tsv` as evidence, and evidence must not
+    be mistaken for a recommendation. A `reject` row outscoring every `keep` row
+    is the normal case for a rejected cell, not an anomaly."""
+    rows = [
+        {"commit": "day_keep", "session": "DAY", "calmar": "4.6805", "status": "keep"},
+        {"commit": "day_overfit", "session": "DAY", "calmar": "14.7697",
+         "status": "reject"},
+    ]
+    assert _best_row(rows, "DAY")["commit"] == "day_keep"
 
 
 def test_best_row_is_none_when_a_session_has_no_rows():
