@@ -60,7 +60,9 @@ rather than as new steps:
   code that produced it. Committing is therefore a prerequisite of W5, not
   housekeeping.
 
-**Updated 2026-09-01 (later) — W5a and W5b are done, PROVISIONALLY.** The user
+**Updated 2026-09-01 (later) — W5a and W5b are done, PROVISIONALLY.**
+*(Superseded — they were re-measured the same day; see the "later still" block
+below. Kept as the chronological record.)* The user
 directed W5a first, then W5b. Both ran on §5's *provisional* branch — measured
 against Calmar 16.3122 while the tape rebuild is still pending — and both
 re-measure after `TAPE_REBUILD_PLAN.md` T0–T4 regardless of their verdict. §2.3
@@ -88,6 +90,57 @@ Also here: `real_data.py` gained **`--warmup-bars`**, without which §2.2's "pin
 warmup in bars" could not be expressed; §2.2's two run directories had been
 deleted, so **16.3122 was re-measured and reproduced exactly** before anything
 was compared against it.
+
+**Updated 2026-09-01 (later still) — the re-measurement happened; W5a and W5b are
+no longer provisional.** `TAPE_REBUILD_PLAN.md` T7 re-ran both on the rebuilt
+tape, with the day warmup **recomputed from its target timestamp** (674 498 →
+**676 123**, holding the eval window at 2020-03-11 08:49 — carrying the number
+would have started it eight days early). **Every conclusion below survives; every
+number in it changed.**
+
+| | provisional | **re-measured** |
+|---|---|---|
+| NIGHT baseline (W4b) | 16.3122 | **3.6006** |
+| W5a transfer probe | 0.2671 | **0.4129** |
+| W5b pinned cell `0.001/0.65` | 4.6805 | **1.6937** |
+| W5b rejected cell `0.004/0.50` | 14.7697 | **3.4057** |
+| spearman(h1, h2) over the grid | 0.45 | **0.39** |
+
+Three things this changed that are not simply "the numbers moved":
+
+- **W5a's verdict holds but its arithmetic inverted.** Night's configuration still
+  does not transfer — but the gap fell from **61× to 8.7×**, and it fell because
+  **NIGHT dropped**, not because DAY improved. The *reason* the probe said
+  "search" is untouched: it rested on forecast quality being equally poor on both
+  sides, and it still is (day IC −0.0040, hit rate 0.4967).
+- **The worst-half selection rule is insufficient as written**, and only the
+  rebuilt tape showed it. On the old tape the degenerate corner won the
+  *full-window* ranking, so ranking on the worse half excluded it. On the rebuilt
+  tape the top cell **by worst half** is `band 0.005 / min-prob 0.8` — **9 trades**,
+  5 and 4 across the halves, with an **infinite** second-half Calmar because a
+  four-trade half never drew down. W5b applied a minimum-trades floor by judgment
+  and never wrote it down; `tools/band_sweep.py` now states its `n >= 40` filter.
+  This is the same failure W5b diagnosed, one level up.
+- **Neither deployment beats buy-and-hold any more.** Like-for-like over each eval
+  window: DAY **+9 748 vs +34 167 (−24 419)**, NIGHT **+24 136 vs +33 341
+  (−9 205)**. Night's "+13 259 over the floor" was one of the strongest claims in
+  the ledger and is now negative. Read it with `TAPE_REBUILD_PLAN.md` §5.1 — part
+  of that swing is the forecast-grid re-phase, not the tape — but a sign change is
+  not what a phase draw was expected to do.
+
+**The ridge survived.** W5b's stable region (`band 0.001–0.0015 × min-prob
+0.5–0.65`) is still where the non-degenerate cells cluster, and the best cell is
+adjacent to the old pick — `0.00125/0.65`, worst-half **1.1664** against the
+pinned cell's 0.9967. The pin was **not** moved to it: re-measure, not re-select,
+the same discipline `TAPE_REBUILD_PLAN.md` D1 chose for NIGHT.
+
+> **Still owed, and this plan overstates itself until they land.** The three DAY
+> rows on `TXF_RPT_minute_day.csv@2026-09-01` are **not in `results.tsv`**, and
+> `PINNED_DAY` still names `fdd1348` at Calmar 4.6805 on the retired
+> `@2026-08-21` vintage. Every number above is measured and reproducible (runs in
+> `outputs/real_data_day_*_T7_20260901/`, sweep in
+> `outputs/day_band_sweep_T7_20260901.csv`), but the ledger has not been told.
+> Held at the user's instruction; see `TAPE_REBUILD_PLAN.md` §5.2.
 
 ---
 
@@ -456,7 +509,20 @@ it. It was **re-measured and reproduced exactly** as part of W5a — see §2.3.
 
 ---
 
-### 2.3 W5a and W5b — the day search, run 2026-09-01 · **PROVISIONAL**
+### 2.3 W5a and W5b — the day search, run 2026-09-01 · **RE-MEASURED 2026-09-01 (T7)**
+
+> **Every number in this section is the PRE-REBUILD vintage** — measured on
+> `TXF_RPT_minute_day.csv@2026-08-21` against a NIGHT baseline of 16.3122, at
+> warmup 674 498. It is kept as the record of the search as it was run, because
+> the *method* it establishes is what carried forward. The re-measured figures are
+> in the "later still" block at the top of this plan and in
+> `TAPE_REBUILD_PLAN.md` §5.2; the short version is that every conclusion here
+> survived and every number fell by roughly a third to a half.
+>
+> Two claims below are outright superseded and are corrected in place where they
+> appear: the **`spearman(h1,h2)=0.45`** figure is **0.39** on the rebuilt tape,
+> and the statement that worst-half ranking excludes the degenerate corner is
+> **false there** — it is the top cell by worst half.
 
 Both steps are done. **Both are provisional in the sense §5's blocking note
 defines:** they were run on the branch that measures against Calmar 16.3122
@@ -1084,7 +1150,7 @@ night tree too.
 > | | |
 > |---|---|
 > | Done | W0, W1, W2, W3, **W4**, W4b, **W5a**, **W5b**, **W6**, **W7** — all offline, no market |
-> | Done but PROVISIONAL | **W5a**, **W5b** — measured against Calmar 16.3122, which the tape rebuild invalidates; both re-measure after T0–T4 (§2.3) |
+> | ~~Done but PROVISIONAL~~ **resolved** | **W5a**, **W5b** — re-measured on the rebuilt tape by `TAPE_REBUILD_PLAN.md` T7. Conclusions survive, every number changed: probe 0.2671 → **0.4129**, pinned cell 4.6805 → **1.6937**, night baseline 16.3122 → **3.6006**. `results.tsv` rows and `PINNED_DAY` not yet updated (§2.3) |
 > | Available now | *(nothing offline remains)* — every step that does not need a market is done |
 > | Not started | W8, W9 — both need a market, and W8 needs Shioaji credentials the W6 check did not have |
 > | Prerequisite for any pinned row | ~~commit the tree~~ — **done**, tree is clean at `e073e73` |
@@ -1110,21 +1176,30 @@ W4  [DONE 2026-08-31] C6 - policy-derived warm-up window    -> verified: Session
                                                               NIGHT reproduces 30 exactly (unchanged CLI
                                                               default), DAY computes 84 (~85 quoted); wired
                                                               into cli.py's --warmup-days default; 2 new tests
-W4b [DONE 2026-08-24] re-baseline on the NEW tape (2.2)   -> verified: 185 trades reproduce bit-identically;
-                                                              208 trades, Calmar 16.3122 on the new tape
-W5a [DONE 2026-09-01, PROVISIONAL] [D2] TRANSFER PROBE     -> verified: Calmar 0.2671 vs NIGHT 16.3122.
-    - night-pinned params over the day file, warmup 674498      Does NOT transfer: dd -2857 -> -11649 on a
-    bars (aligned to the NIGHT eval start so the calendar       fifth the PnL, fee_drag 0.351 vs 0.028,
-    windows match). Ran on the PROVISIONAL branch - see the     18.65 gross pts/trade vs 230.42. Verdict:
-    blocking note below; its number is re-measured after        the search IS warranted, for a reason the
-    the tape rebuild regardless of the verdict.                 probe alone would have got backwards - see
-                                                               2.3. 257 trades, all tagged DAY.
-W5b [DONE 2026-09-01, PROVISIONAL] C1 - day search         -> verified: band 0.001 + min-prob 0.65 ->
-    -> PINNED DAY row, band 0.001 / min-prob 0.65,              Calmar 4.6805 (73 trades), 17x the probe.
-    Calmar 4.6805. Selected on WORST-HALF Calmar, not           Reproduced through the CLI; the swept and
-    full-window - the full-window max is a 27-trade             CLI numbers agree exactly. Rejected cell
-    artefact and is in results.tsv as a `reject` row.           (band 0.004, Calmar 14.7697) recorded as
-    See 2.3 for the method and the caveat.                      evidence. NOT a live pin - see 2.3.
+W4b [DONE 2026-08-24; SUPERSEDED by TAPE_REBUILD T5]      -> verified: 185 trades reproduce bit-identically;
+    re-baseline on the NEW tape (2.2)                          208 trades, Calmar 16.3122. That tape was
+                                                               itself rebuilt 2026-09-01: the same
+                                                               parameters now score 3.6006. Use that.
+W5a [DONE 2026-09-01; RE-MEASURED by TAPE_REBUILD T7]      -> verified: Calmar 0.2671 -> 0.4129 on the
+    [D2] TRANSFER PROBE - night-pinned params over the         rebuilt tape (230 trades, warmup 676123
+    day file, warmup 674498 bars -> 676123 after the           recomputed from the target timestamp).
+    rebuild, RECOMPUTED from the target timestamp so the       Still does NOT transfer -- but the gap fell
+    eval window holds at 2020-03-11 08:49.                     61x -> 8.7x because NIGHT dropped, not
+                                                               because DAY rose. The verdict's REASON is
+                                                               untouched: forecast quality is equally poor
+                                                               on both sides (day IC -0.0040). Search was
+                                                               warranted then and still is - see 2.3.
+W5b [DONE 2026-09-01; RE-MEASURED by TAPE_REBUILD T7]      -> verified: band 0.001 + min-prob 0.65 ->
+    C1 - day search -> PINNED DAY row, band 0.001 /            Calmar 4.6805 -> 1.6937 (73 -> 67 trades).
+    min-prob 0.65. Selected on WORST-HALF Calmar, not          Ridge SURVIVES (band 0.001-0.0015 x
+    full-window. Re-run by tools/band_sweep.py, which is       min-prob 0.5-0.65); level does not, ~1/3.
+    W5b's harness written down - the original was ad hoc       Rejected cell 14.7697 -> 3.4057. NEW: the
+    and did not survive as a file.                             worst-half rule alone is INSUFFICIENT -- the
+                                                               degenerate corner (band 0.005/p 0.8, 9
+                                                               trades, infinite h2 Calmar) now tops the
+                                                               worst-half ranking too. An n-floor was
+                                                               always applied by judgment; now written
+                                                               down. NOT a live pin - see 2.3.
 W6  [DONE 2026-09-01] C2 - `--config night|day` at the      -> verified: banner reads
     entry point; PINNED_DAY + a CONFIGS registry; no             LiveConfig[fdd1348 calmar=4.6805 [DAY]]
     `--session` flag, and a test that there never is one.        band=+-0.001 min_prob=0.65, warm-up 84d,
