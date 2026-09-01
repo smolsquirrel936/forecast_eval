@@ -4,6 +4,7 @@ The live loop itself is covered by test_live_runtime.py; what matters here is
 that the CLI cannot be talked into something dangerous: placing real orders, or
 starting without the VRAM the model needs.
 """
+import pathlib
 from datetime import datetime, timedelta
 
 import pytest
@@ -359,6 +360,37 @@ def test_config_flag_selects_the_whole_deployment_not_just_a_policy():
     assert sorted(day.policy.sessions) == ["DAY"]
     assert day.buy_threshold != night.buy_threshold
     assert day.min_prob != night.min_prob
+
+
+def test_the_run_directory_names_the_deployment():
+    """A directory of DAY artifacts and one of NIGHT artifacts used to be
+    distinguishable only by opening `params.json`, and they are the two things
+    most likely to be compared side by side."""
+    now = datetime(2026, 9, 2, 1, 32, 4)
+    night = cli._run_dir(config_named("night"), now)
+    day = cli._run_dir(config_named("day"), now)
+    assert night.name == "live_night_20260902_013204"
+    assert day.name == "live_day_20260902_013204"
+    assert night != day
+
+
+def test_the_run_directory_shares_the_slug_with_the_cache_and_the_ledger():
+    """One token per deployment across every file it owns, so a reader can see
+    which belong together without opening any of them."""
+    from pathlib import Path as _P
+
+    from forecast_eval.live.ledger import ledger_path
+    cfg = config_named("day")
+    assert "day" in cli._run_dir(cfg).name
+    assert cli._bars_cache_path(_P("outputs"), cfg.policy).name == "bars_cache_day.csv"
+    assert ledger_path("outputs", cfg.policy).name == "fills_day.csv"
+
+
+def test_an_explicit_out_still_wins_over_the_derived_name():
+    """`--out` is how a probe or a one-off run names its own directory; deriving
+    a default must not take that away."""
+    args = cli.build_parser().parse_args(["--out", "outputs/whatever"])
+    assert args.out == pathlib.Path("outputs/whatever")
 
 
 def test_there_is_no_bare_session_flag():

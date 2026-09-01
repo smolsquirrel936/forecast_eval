@@ -179,3 +179,19 @@ there degrades to `[front]`, which is exactly the old behaviour.
 
 ## Related
 [live/runtime.py](runtime.md) · [live/roll.py](roll.md) · [live/startup.py](startup.md) · [live/soak_epoch.py](soak_epoch.md) · [live/recorder.py](recorder.md) · [live/capture.py](capture.md) · [live/broker/dryrun.py](broker/dryrun.md) · [SHIOAJI_PLAN.md](../../SHIOAJI_PLAN.md)
+
+## The run directory names its deployment
+
+`outputs/live_<slug>_<timestamp>/` — `live_night_20260902_013204`,
+`live_day_...`. It used to be `live_<timestamp>` alone, which says when a run
+happened but not what ran; with two deployments a directory of DAY artifacts and
+one of NIGHT artifacts were distinguishable only by opening `params.json`, and
+they are the two things most likely to be compared side by side.
+
+The slug is `policy.cache_slug()`, the same token the bar cache
+(`bars_cache_night.csv`) and the fill ledger ([fills_night.csv](ledger.md)) carry,
+so every file a deployment owns reads the same. A `both()` policy therefore reads
+as `day_night` rather than "fullday" — that is a tape name, and a deployment with
+two identities is how two names for one thing start.
+
+`--out` still wins: a probe or a one-off run names its own directory.

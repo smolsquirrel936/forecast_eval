@@ -366,6 +366,26 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _run_dir(cfg: Any, now: Optional[datetime] = None) -> Path:
+    # Tech: the default run directory — `outputs/live_<slug>_<timestamp>/`, with
+    #       the slug being the deployment's own `policy.cache_slug()`.
+    # Why:  the name used to be `live_<timestamp>` alone, which says when a run
+    #       happened but not *what ran*. With two deployments that is a real
+    #       ambiguity: a directory of day artifacts and one of night artifacts
+    #       are indistinguishable without opening `params.json`, and they are the
+    #       two things most likely to be compared side by side.
+    #
+    #       `cache_slug()` rather than a new name of its own, so the run
+    #       directory, the bar cache (`bars_cache_night.csv`) and the fill ledger
+    #       (`fills_night.csv`) all carry the *same* token and a reader can see at
+    #       a glance which files belong to which deployment. That does mean a
+    #       `both()` policy reads as `day_night` and not "fullday" — "fullday" is
+    #       a tape name (§2.5), and giving a deployment a second identity is how
+    #       two names for one thing start.
+    return Path("outputs") / (
+        f"live_{cfg.policy.cache_slug()}_{(now or datetime.now()):%Y%m%d_%H%M%S}")
+
+
 def _bars_cache_path(out_dir: Path, policy: Any) -> Path:
     # Tech: the bar cache, keyed by the deployment's session policy.
     # Why:  C5. One `bars_cache.csv` was shared by every deployment, so a DAY run
@@ -410,7 +430,7 @@ def main(argv=None) -> int:
     if args.warmup_days is None:
         args.warmup_days = cfg.warmup_days_default()
 
-    out = args.out or Path("outputs") / f"live_{datetime.now():%Y%m%d_%H%M%S}"
+    out = args.out or _run_dir(cfg)
     out.mkdir(parents=True, exist_ok=True)
     state_file = args.state_file or out.parent / "live_restart.json"
 
