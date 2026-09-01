@@ -134,13 +134,19 @@ adjacent to the old pick — `0.00125/0.65`, worst-half **1.1664** against the
 pinned cell's 0.9967. The pin was **not** moved to it: re-measure, not re-select,
 the same discipline `TAPE_REBUILD_PLAN.md` D1 chose for NIGHT.
 
-> **Still owed, and this plan overstates itself until they land.** The three DAY
-> rows on `TXF_RPT_minute_day.csv@2026-09-01` are **not in `results.tsv`**, and
-> `PINNED_DAY` still names `fdd1348` at Calmar 4.6805 on the retired
-> `@2026-08-21` vintage. Every number above is measured and reproducible (runs in
+> **The ledger has been told — landed 2026-09-01.** The two-vintage state D1
+> rejected is closed: `results.tsv` carries three DAY rows on
+> `TXF_RPT_minute_day.csv@2026-09-01` at warmup **676 123** — the W5a probe
+> (`keep`, **0.4129**, net +5 973.62, dd −14 467.83), the re-measured pin
+> (`keep`, **1.6937**, net +9 748.01, dd −5 755.50) and the degenerate
+> `0.005/0.8` corner (`reject`, full **37.6428** on **9 trades**, dd −939.28,
+> recorded because it now tops the *worst-half* ranking too). The `PROVISIONAL`
+> markers on the two `fdd1348` rows are resolved in place and point at their
+> re-measurements, and **`PINNED_DAY` names `3c3ae38` at Calmar 1.6937 on the
+> `@2026-09-01` vintage** — same cell, re-measured, not re-selected. Both
+> deployments are now on one vintage. Runs in
 > `outputs/real_data_day_*_T7_20260901/`, sweep in
-> `outputs/day_band_sweep_T7_20260901.csv`), but the ledger has not been told.
-> Held at the user's instruction; see `TAPE_REBUILD_PLAN.md` §5.2.
+> `outputs/day_band_sweep_T7_20260901.csv`; see `TAPE_REBUILD_PLAN.md` §5.2.
 
 ---
 
@@ -524,12 +530,13 @@ it. It was **re-measured and reproduced exactly** as part of W5a — see §2.3.
 > and the statement that worst-half ranking excludes the degenerate corner is
 > **false there** — it is the top cell by worst half.
 
-Both steps are done. **Both are provisional in the sense §5's blocking note
+Both steps are done. **Both were provisional in the sense §5's blocking note
 defines:** they were run on the branch that measures against Calmar 16.3122
-while `TAPE_REBUILD_PLAN.md` is still pending, on the stated understanding that
+while `TAPE_REBUILD_PLAN.md` was still pending, on the stated understanding that
 their numbers are re-measured after T0–T4 whatever the verdict. §5 says the
 indefensible thing is running W5a *without recording which branch was chosen*;
-this is that record.
+this is that record. **The understanding was honoured — T7 re-measured both on
+2026-09-01, and the ledger and `PINNED_DAY` carry the new numbers (§2.3).**
 
 #### The aligned warmup, and why it is not night's fraction
 
@@ -696,6 +703,59 @@ so it belongs beside `TAPE_REBUILD_PLAN.md` §6's D1 rather than in this plan.
 
 ---
 
+### 2.4 The DAY warm-up spliced at 15:30 — found 2026-09-01, **FIXED 2026-09-02**
+
+`TAPE_REBUILD_PLAN.md` §5.3 ran the tape-spanning parity check for the first time
+— the shipped tape against the series the live warm-up path would really have
+built, at every roll. **NIGHT passes exactly, 112 rolls of 112. DAY fails every
+roll that traded, 183 of 183.**
+
+The defect is one argument at one call site, and it is this plan's own C4 arriving
+where C4 did not reach:
+
+- **C4 decided DAY rolls at 12:45**, and the deployment does. `RollSchedule` is
+  built with `policy=cfg.policy` (`live/cli.py:1005`), and the day tape was spliced
+  on the same instant (`TAPE_REBUILD_PLAN` T2).
+- **The warm-up backfill was left on 15:30.** `live/cli.py:645` passes
+  `front_month_at` **unbound**, and its default is the module's `ROLL_AT` —
+  NIGHT's. So a DAY run rolls its position at 12:45 and splices its *history* at
+  15:30.
+
+The hour in between — exactly **12:45–13:44** on each roll day, 60 minutes, 10 979
+of them over the tape — is therefore sourced from the month the deployment has
+already stopped trading, where `PINNED_DAY`'s Calmar was measured on the incoming
+one. `|Δclose|` across those minutes is **median 27 points, p95 183, max 463**: the
+inter-month basis, not rounding. With `warmup_days_default() = 84`, every DAY
+start-up spans about three roll days, so roughly **6 % of its 3 008-bar context is
+the wrong month's price** — not a rare event, but every start-up the deployment
+would ever do.
+
+It is confined to the warm-up: the live stream is aggregated from the contract the
+run actually holds, which follows the policy-keyed `RollSchedule` and is correct.
+So it is history the model is primed on, not prints it trades — which is why
+nothing downstream raises, and why only a tape-spanning check could find it.
+
+**FIXED 2026-09-02**, in two parts:
+
+- `live/cli.py` binds `cfg.policy` into the `front_month_at` it hands the backfill,
+  so the warm-up splices where the deployment rolls;
+- `live/roll.py` makes that argument **required** on `front_month_at` and
+  `front_month_series`, so the next caller cannot repeat the omission. This is the
+  repair `fetch_bars` already made for the same class of bug — it once defaulted to
+  `("DAY",)` while the strategy was tuned on NIGHT, and nothing could detect that
+  either.
+
+**NIGHT does not move by one bar** — `SessionPolicy.night().roll_at_time()` *is*
+the old 15:30 default, and that equality is now an assertion in
+`tests/test_live_roll.py` instead of an implicit property of a default. Re-measured
+across every tape: **592 rolls, zero differing minutes** (DAY 5 → 188 clean).
+
+**W8 is unblocked.** It was worth holding for exactly this: W8 is the DAY
+deployment's first dry-run against a live feed, and on the old warm-up it would
+have measured the defect rather than the deployment.
+
+---
+
 ## 3. What ports free — verified by reading
 
 These are properties of the **night** codebase, which is where `live/` exists —
@@ -723,7 +783,7 @@ C3, C5, C6 and C7 name files that do not exist — which was §0's point, not a
 separate problem. **Under Shape A it stops mattering:** all of this work happens
 in `night/`, where those files do exist.
 
-### C1 — no tuned DAY configuration exists · **BLOCKING · research**
+### C1 — no tuned DAY configuration exists · **DONE 2026-09-01 (W5b/W6), re-measured (T7)**
 
 `PINNED` carries `source_dataset=…TXF_RPT_minute_night.csv` and
 `SessionPolicy.night()`; every knob is the endpoint of a night search recorded in
@@ -748,6 +808,13 @@ live — which, under Shape A, is `night/` and only `night/`.**
 parameters over the day file, unchanged, one ~4-minute run) comes before any
 search, and its Calmar and median hold decide whether the full `edit:`/`keep:`
 loop is worth launching. Sequenced as W5a → W5b.
+
+**DONE 2026-09-01 (W5b), as proposed — and re-measured the same day.** W5b's
+search produced the row and W6 wired it: `PINNED_DAY` is `band 0.001 /
+min_prob 0.65` on `TXF_RPT_minute_day.csv@2026-09-01`, Calmar **1.6937**, and
+`results.tsv` gained the session column that lets two pins coexist without either
+re-pinning the other. §2.3 has the numbers and the two caveats that survive — it
+trails buy-and-hold by −24 419, and it has still never traded (W8).
 
 ### C2 — the entry point cannot express a DAY deployment · **DONE 2026-09-01 (W6)**
 
@@ -794,7 +861,7 @@ light up from the single selection, and NIGHT is unchanged. **15 new tests.**
 directly. Both are NIGHT-specific probes, so that is correct today; if either is
 ever wanted for DAY it needs the same treatment, and neither is on W6's path.
 
-### C3 — `settle_rolled_leg(session="NIGHT")` · build, one line · **silent**
+### C3 — `settle_rolled_leg(session="NIGHT")` · **DONE 2026-08-24 (W1)**
 
 `live/runtime.py:285` books a roll-settled leg to NIGHT by literal default. On a
 DAY deployment every rolled round-trip is attributed to a session the run never
@@ -805,7 +872,12 @@ whether this port happens.**
 **Proposed:** derive from the fill's timestamp (`classify_session`) or the policy,
 plus the regression test that fails on the literal.
 
-### C4 — `ROLL_AT = 15:30` was measured for a night strategy · **MEASURED 2026-08-24 (W2) — decision pending**
+**DONE 2026-08-24 (W1), as proposed.** `LiveRuntime._settlement_session`
+derives the session from the fill's timestamp via `classify_session`; the
+`session=` parameter survives only so a test can force a value, and no production
+caller passes one. Three tests fail against the literal.
+
+### C4 — `ROLL_AT = 15:30` was measured for a night strategy · **DONE 2026-08-25 (W2)**
 
 `live/roll.py:183-190` derives it from the expiring month's final *night* session
 opening at 15:00 the day before its last trading day, whose first half hour the
@@ -1017,7 +1089,14 @@ not propose starting; recorded so it is not re-discovered from scratch.
 Measurement scripts: `tools/roll_at_measure.py` (per-bucket, two-month) and the
 execution-moment/volatility figures in this section. Offline.
 
-### C4a — `front_month_at` splices 1 d 8.5 h before the tape does · **FOUND 2026-08-25 · silent · NIGHT**
+**DONE 2026-08-25 (W2), as proposed.** `roll_at_time()` lives on
+`SessionPolicy` — DAY 12:45, NIGHT 15:30 — and `RollSchedule` is constructed with
+`cfg.policy`, so the two deployments cannot share one value. The 12:45 choice was
+measured (calmest stretch of the day session, and `ROLL_WINDOW` then ends exactly
+at the 13:45 close); §2.4 is the sequel, where the *warm-up* turned out not to
+have followed the policy the schedule already did.
+
+### C4a — `front_month_at` splices 1 d 8.5 h before the tape does · **FOUND 2026-08-25 · silent · NIGHT** · **DISSOLVED — see the notes below**
 
 Found while wiring C4's per-policy `ROLL_AT`, because the two share `roll_at`.
 
@@ -1054,6 +1133,17 @@ warm-up context of the pinned NIGHT deployment, three weeks before the first
 live roll — the user's call, not a side effect. A test asserts the splice did
 not move (`test_the_cache_splice_rule_was_not_moved_by_this_change`).
 
+> **That paragraph is history as of 2026-09-02, and both of its claims are now
+> false.** `front_month_at` **is** policy-keyed, and the policy is **required**;
+> the test named above no longer exists, having been replaced by
+> `test_the_splice_rule_requires_a_policy_and_night_is_still_the_old_default`.
+> What changed the answer is that "not policy-keyed" turned out not to be the
+> safe option it reads as here: `live/cli.py` handed the unbound function to the
+> warm-up backfill, so *keeping* the module default silently gave a DAY
+> deployment NIGHT's splice — §2.4. The NIGHT context still does not move, which
+> is what this paragraph was protecting, and that is now asserted directly rather
+> than obtained by leaving the parameter off.
+
 **Superseded 2026-08-25 by `TAPE_REBUILD_PLAN.md`.** Investigating this found a
 larger defect underneath it: the tape holds the expiring contract past its
 13:30 death on the last trading day, so **~540 night bars and 15 day bars are
@@ -1064,14 +1154,19 @@ That reverses the fix. The code's rule is the one a live deployment can execute
 tape. C4a then dissolves rather than being fixed. Two decisions and the
 sequencing constraint — it must land before W5 — are in that plan.
 
-### C5 — `outputs/bars_cache.csv` is shared across deployments · build, small
+### C5 — `outputs/bars_cache.csv` is shared across deployments · **DONE 2026-08-24 (W1)**
 
 `cli.py:502` hardcodes one cache path. A DAY run writes DAY bars into the file a
 NIGHT run reads. Not silent — `warm_up` raises at `runtime.py:562` — but it
 blocks whichever soak starts second, and the night soak is the one accruing V4's
 fill-gap number. **Proposed:** key the cache by policy.
 
-### C6 — emitter priming: the 30-day default is a night-sized number · **quantified**
+**DONE 2026-08-24 (W1), as proposed.** `cli._bars_cache_path(out_dir, policy)`
+keys the cache by the deployment's policy, so a DAY run and a NIGHT run cannot
+read each other's bars as model context. Four tests fail against the hardcoded
+path.
+
+### C6 — emitter priming: the 30-day default is a night-sized number · **DONE 2026-08-31 (W4)**
 
 `_prime_emitter` replays up to `emitter_prime_boundaries = 500` boundaries; below
 **3** samples `_check_primed` refuses to start, because `_trend_confirms` fails
@@ -1089,7 +1184,14 @@ run on today's defaults sits one quiet fortnight from refusing to start.**
 
 **Proposed:** derive the warm-up window from the policy's bars-per-session.
 
-### C7 — an 85-day warm-up cannot be fetched · **the hard one**
+**DONE 2026-08-31 (W4), as proposed.** `LiveConfig.warmup_days_default()`
+derives the window from `SessionPolicy.bars_per_session()` rather than a flat
+constant — NIGHT keeps 30, DAY gets **84**. `cli.py` resolves it *after*
+`--config` is read, because argparse evaluates defaults at parser-build time and
+a baked default would always have been NIGHT's 30, which is C6 arriving by
+another door.
+
+### C7 — an 85-day warm-up cannot be fetched · **DONE 2026-08-24 (W3)**
 
 Expired months are delisted (§2.8 Finding D), so an 85-day window spans ~3
 delivery months of which the older two no longer answer `kbars`; and
@@ -1104,7 +1206,15 @@ context window, which V1c only ever compared on a single session.
 > **DECIDED 2026-08-24 — D4: acceptable.** The seeder is in scope (step W3); the
 > port does not wait ~2 months for a cache to fill from live.
 
-### C8 — `forced_close=False` inherits a night-measured risk profile · **research**
+**DONE 2026-08-24 (W3), as decided in D4.** `live/seed_cache.py` seeds the day
+cache offline from `TXF_RPT_minute_day.csv` in the cache's four-column schema:
+30 000 DAY bars, 0 of them outside the session. The mixed-source caveat stands as
+recorded — a seeded context holds RPT bars and venue bars in one window, which
+V1c only ever compared on a single session — and it is now also covered from the
+other side by [tools/roll_parity.py](docs/tools/roll_parity.md), which shows the
+RPT tape and the live warm-up path agree bar for bar at every roll (§2.4).
+
+### C8 — `forced_close=False` inherits a night-measured risk profile · **OPEN · research · the only C item still open**
 
 §2.12 settled it on measured facts: median hold **4 d 11 h**, 89 % of trades
 spanning more than one calendar day. Those are properties of the *night* config;
@@ -1143,22 +1253,28 @@ night tree too.
 
 **The work itself — all of it in `night/forecast_eval`:**
 
-> **CURRENT STAGE, 2026-09-01 (end of day): W0–W7 are all done. The entire
-> offline half of the port is complete; W8 is the first step that needs a
-> market, and the first that needs Shioaji credentials.**
+> **CURRENT STAGE, 2026-09-02: W0–W7 are done and so are C1–C7. What is left is
+> W8, W9 and C8 — two of the three need a live market.**
 >
 > | | |
 > |---|---|
 > | Done | W0, W1, W2, W3, **W4**, W4b, **W5a**, **W5b**, **W6**, **W7** — all offline, no market |
-> | ~~Done but PROVISIONAL~~ **resolved** | **W5a**, **W5b** — re-measured on the rebuilt tape by `TAPE_REBUILD_PLAN.md` T7. Conclusions survive, every number changed: probe 0.2671 → **0.4129**, pinned cell 4.6805 → **1.6937**, night baseline 16.3122 → **3.6006**. `results.tsv` rows and `PINNED_DAY` not yet updated (§2.3) |
-> | Available now | *(nothing offline remains)* — every step that does not need a market is done |
+> | ~~Done but PROVISIONAL~~ **resolved** | **W5a**, **W5b** — re-measured on the rebuilt tape by `TAPE_REBUILD_PLAN.md` T7. Conclusions survive, every number changed: probe 0.2671 → **0.4129**, pinned cell 4.6805 → **1.6937**, night baseline 16.3122 → **3.6006**. `results.tsv` rows **and `PINNED_DAY` now carry them** (§2.3) — one vintage, no longer two |
+> | Collisions closed | **C1**–**C7**, each marked in §4 with the step that closed it. C4a **dissolved** rather than being fixed — the tape adopted the code's rule (T2) — and its sequel is §2.4 |
+> | Available now, no market | **C8** — the last open collision. `forced_close=False` carries a *night*-measured risk profile, and the DAY equivalent has never been measured |
 > | Not started | W8, W9 — both need a market, and W8 needs Shioaji credentials the W6 check did not have |
-> | Prerequisite for any pinned row | ~~commit the tree~~ — **done**, tree is clean at `e073e73` |
+> | Fixed 2026-09-02 | §2.4 — the DAY warm-up spliced at 15:30 while the deployment rolled at 12:45, on 183 of 183 rolls that traded. **W8 was held for this** and is now unblocked |
 >
-> Nothing here is waiting on a decision except W5a. The port has not begun to
-> touch the entry point yet — **no day deployment exists**; what is built so far
-> is the per-policy machinery (`SessionPolicy`, cache keying, `ROLL_AT`,
-> warm-up derivation, the RPT seeder) that a DAY deployment would stand on.
+> **A DAY deployment now exists** — `--config day` selects `PINNED_DAY`, which
+> carries its own band, probability gate, roll instant, warm-up window and cache,
+> and W7 shows it reproduces `run_backtest` bar for bar offline. What it has never
+> done is trade: not live, not in simulation. That is W8, and it is the whole of
+> what "not deployed" means now.
+>
+> Two things are true of the pinned value and are not tasks on this list: it
+> **trails buy-and-hold by −24 419** over its eval window, and a better cell
+> (`0.00125/0.65`, worst-half 1.1664 against the pin's 0.9967) was found and
+> deliberately not pinned — re-measure, not re-select (§2.3).
 
 ```
 W0  [DONE 2026-08-24] session-tag results.tsv + schema     -> verified: a Calmar-99 DAY row leaves the
@@ -1201,7 +1317,7 @@ W5b [DONE 2026-09-01; RE-MEASURED by TAPE_REBUILD T7]      -> verified: band 0.0
                                                                always applied by judgment; now written
                                                                down. NOT a live pin - see 2.3.
 W6  [DONE 2026-09-01] C2 - `--config night|day` at the      -> verified: banner reads
-    entry point; PINNED_DAY + a CONFIGS registry; no             LiveConfig[fdd1348 calmar=4.6805 [DAY]]
+    entry point; PINNED_DAY + a CONFIGS registry; no             LiveConfig[3c3ae38 calmar=1.6937 [DAY]]
     `--session` flag, and a test that there never is one.        band=+-0.001 min_prob=0.65, warm-up 84d,
     --warmup-days now resolves from the SELECTED config          roll_at=12:45, cache=day - and NIGHT is
     (argparse bakes parser-build-time defaults: it was           unchanged. One flag moves policy + band +
@@ -1214,9 +1330,17 @@ W7  [DONE 2026-09-01] offline parity for a single-session   -> verified: bit-ide
     run_backtest over that session's bars alone - which          caught. DAY+NIGHT = 39725 in-session bars,
     is what results.tsv's DAY rows actually assume.              matching V0's own count exactly. 9 tests,
     Uses each deployment's OWN pinned emitter.                   no GPU needed.
+W7a [DONE 2026-09-02] tape-spanning parity: the shipped     -> verified: 592 rolls, 0 differing minutes,
+    tape vs the series the live warm-up would build, at        all four tapes. Not planned - it came out of
+    every roll. TAPE_REBUILD_PLAN 0.5/5.3, run by              TAPE_REBUILD_PLAN 0.5 and it FOUND 2.4's
+    tools/roll_parity.py.                                      defect: DAY spliced at 15:30, 183/183 rolls.
+                                                               Fixed the same day; NIGHT unmoved.
 W8  5-minute dryrun inside a real DAY session   [MARKET]   -> verify: start-up, warm-up, banner, first bar
                                                               [DOES NOT touch the shared Shioaji account —
                                                               dryrun never calls a broker order API]
+                                                              [UNBLOCKED 2026-09-02 - it was worth holding
+                                                              for 2.4: on the old warm-up this would have
+                                                              measured the defect, not the deployment]
 W9  soak                                        [MARKET]   -> verify: V5's terms, applied to DAY
                                                               [DOES touch the shared account — same
                                                               contract/account as the NIGHT soak. Unresolved:
@@ -1227,9 +1351,16 @@ W9  soak                                        [MARKET]   -> verify: V5's terms
                                                               conflation history (the 6-lot startup_refused).]
 ```
 
-W0–W5 need no market. **W5 is the long pole**; everything downstream waits on it.
-C3 (inside W1) is worth doing on its own merits whatever is decided here, and
-**W4b is a prerequisite for trusting W5b's acceptance test at all** (§2.2).
+W0–W5 need no market. **W5 was the long pole**; everything downstream waited on
+it. C3 (inside W1) was worth doing on its own merits whatever was decided here,
+and **W4b is a prerequisite for trusting W5b's acceptance test at all** (§2.2).
+
+> **RESOLVED 2026-09-01 — the blockquote below is history, kept because it is the
+> reasoning that produced the order the work actually ran in.** The rebuild
+> landed (T0–T7), D1 and D2 were both taken, W4b was superseded by T5's
+> re-measurement on the new tape, and W5a/W5b were re-measured on it — §2.3. The
+> sequencing constraint it states was honoured: nothing downstream of W5 was
+> decided against 16.3122.
 
 > **W5 is blocked on `TAPE_REBUILD_PLAN.md`, and that plan's constraint is not
 > resolved by lifting D3's hold.** Recorded here because §5 is the sequencing

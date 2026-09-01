@@ -73,21 +73,30 @@ rather than changing the code to match the old one. That direction is right —
 
 **Every step T0–T7 is done.** The tape is rebuilt, the diff is attributed, NIGHT
 is re-pinned, and the DAY numbers are re-measured. What is left is **not process
-in this plan** — it is four hand-offs, listed here so they are not mistaken for
-unfinished rebuild work.
+in this plan** — it is five hand-offs, listed here so they are not mistaken for
+unfinished rebuild work. **Hand-offs 1 (2026-09-01) and 5 (2026-09-02) are
+applied**; 2–4 are still open. **5 was not on the original list** — §5.3's parity
+check found it after this table was written, which is the clearest argument that
+the check was worth building.
 
 | | what | where it is written up |
 |---|---|---|
-| **1** | **The T7 ledger edits, deliberately not applied.** Three DAY rows on `...@2026-09-01`, the two `PROVISIONAL` markers resolved, `DAY_SESSION_PLAN.md` §2.3's numbers, and `PINNED_DAY` re-pointed to Calmar **1.6937** on the new vintage (same cell — re-measure, not re-select). Left to the user at their instruction. | §5.2, "Decided … deliberately NOT applied here" |
+| ~~**1**~~ | **APPLIED 2026-09-01 — the T7 ledger edits.** Three DAY rows on `...@2026-09-01` at warmup 676 123 (probe `keep` 0.4129, pin `keep` 1.6937, `0.005/0.8` `reject` 37.6428 on 9 trades), the two `PROVISIONAL` markers resolved in place, `DAY_SESSION_PLAN.md` §2.3 updated, and `PINNED_DAY` re-pointed to `3c3ae38` at Calmar **1.6937** on the new vintage (same cell — re-measure, not re-select). **Both deployments are on one vintage; the two-vintage state D1 rejected is closed.** | §5.2, "Decided … and applied 2026-09-01" |
 | **2** | **The phase confound is unresolved.** 16.3122 → 3.6006 is the tape correction *and* a fresh forecast-grid phase draw, in unknown proportion. A sweep at `538 790 + k` would separate them (~4.5 min a run). Offered and declined; nothing depends on it, but no one should quote 3.6006 as "the tape cost 4.5×" until it is done. | §5.1 |
 | **3** | **Two findings this rebuild produced that belong to other plans.** (a) The live path fills ~47 minutes a roll from the *outgoing* contract at a basis-sized offset, silently, into the warm-up context — `SHIOAJI_PLAN.md` records nothing about it. (b) Neither deployment beats buy-and-hold on the corrected tape; NIGHT went **+13 258.65 → −9 204.96**. | §2.4 and §5.2 |
 | **4** | **A full-day deployment still needs everything in D2's list.** The rebuild closed exactly one item on it — the tape, now `TXF_RPT_minute_fullday.csv` (§2.5). The `results.tsv` session column, the two one-session guards, `forced_close_on_session_end`, and a tuned configuration are all untouched. | §6 D2 |
+| ~~**5**~~ | **APPLIED 2026-09-02 — DAY's warm-up spliced at 15:30 while its tape and its roll schedule used 12:45.** Found by §5.3's parity check. `live/cli.py` now binds `cfg.policy` into the backfill's `front_month_at`, and `live/roll.py` makes that argument **required** so the omission cannot recur. **A no-op for NIGHT** (night's own `roll_at_time()` *is* the 15:30 default), now asserted rather than assumed. Re-measured: **592 rolls, zero differences** — day 5 → 188, combined 5 → 188, fullday 4 → 104, night 112 → 112. | §5.3 |
 
-**One thing became checkable that was not before.** §0.5 records a *tape-spanning*
-parity check — replaying the real evaluated series across a roll against the live
-loop — as impossible while the two series structurally differed at every roll.
-They no longer do. That check is now possible and has still not been run; it is
-the most direct remaining test of what this whole plan was for.
+**The thing that became checkable has been checked — 2026-09-01.** §0.5 recorded a
+*tape-spanning* parity check — replaying the real evaluated series across a roll
+against the live path — as impossible while the two series structurally differed
+at every roll. They no longer do, and the check is
+[tools/roll_parity.py](tools/roll_parity.py). **NIGHT passes exactly: 112 rolls of
+112.** It is the most direct test of what this whole plan was for, and the plan
+passes it. It also found something no other check could have: **DAY diverged at
+every roll that traded**, 183 of 183, because its warm-up spliced an hour after
+its own roll schedule. **Fixed 2026-09-02; all four tapes now pass — 592 rolls,
+zero differing minutes.** See §5.3.
 
 **All committed** on branch `night`, 2026-09-01: `3c3ae38` (the T7 band sweep),
 `190fed6` (the full-day tape), `0a49592` (the documentation sweep) — on top of
@@ -270,6 +279,13 @@ rediscover:
   series across a roll — **has not been done, and cannot pass today**, because
   the two series structurally differ there. That is a real gap, it is not W7,
   and it only becomes checkable after this rebuild.
+
+**RUN 2026-09-01, after the rebuild — see §5.3.** NIGHT passes exactly (112 rolls
+of 112, at ±24 h and ±96 h), which is the first direct evidence that the tape and
+the live path are one series and not merely one rule in source. DAY fails at every
+roll that traded (183 of 183): its warm-up backfill splices at 15:30 while its tape
+and its own roll schedule use 12:45, so 60 minutes of each roll day carry the
+outgoing month. The check is [tools/roll_parity.py](tools/roll_parity.py).
 
 ### 0.6 Two more defects, found while building T1's intermediate
 
@@ -879,26 +895,45 @@ pick. Every number in it is about a third of what it was.
 > — part of that swing is the forecast-grid re-phase, not the tape — but the
 > direction is not something a phase draw was expected to do.
 
-#### Decided 2026-09-01, deliberately NOT applied here
+#### Decided 2026-09-01 — and applied 2026-09-01
 
 **`PINNED_DAY` keeps `band 0.001 / min_prob 0.65` and moves to the new vintage** —
 re-measure, not re-select, the same discipline D1 chose for NIGHT. Its
-`source_calmar` becomes **1.6937** on `TXF_RPT_minute_day.csv@2026-09-01`. The
+`source_calmar` is **1.6937** on `TXF_RPT_minute_day.csv@2026-09-01`. The
 `0.00125/0.65` cell is the better one on this tape and is recorded as evidence,
 but pinning it would be a parameter change dressed as a re-measurement.
 
-**The ledger edits and the `live/config.py` change are left to the user**, at
-their instruction — this section is the record, not the act. What is still owed:
+**The edits were held back at the user's instruction and then applied, in full,
+the same day.** What landed:
 
-- three DAY rows on `...@2026-09-01`, warmup **676 123**: the W5a probe
-  (`keep`, 0.4129), the re-measured pin (`keep`, 1.6937), and the new degenerate
-  counter-example `0.005/0.8` (`reject`, full 37.6428 on **9 trades**) — which
-  earns its place because it now tops the *worst-half* ranking, not just the
-  full-window one;
-- the `PROVISIONAL` markers on the two existing DAY rows resolved to point at
-  their re-measurements;
-- `DAY_SESSION_PLAN.md` §2.3's provisional numbers updated;
-- `PINNED_DAY` re-pointed as above.
+- three DAY rows on `...@2026-09-01`, warmup **676 123**, all tagged `3c3ae38`
+  (the commit that produced the measurement, as `e0dda6c` tagged T5's row
+  `4282d33`): the W5a probe (`keep`, 0.4129, net +5 973.6154, dd −14 467.8270),
+  the re-measured pin (`keep`, 1.6937, net +9 748.0117, dd −5 755.5022), and the
+  new degenerate counter-example `0.005/0.8` (`reject`, full 37.6428 on **9
+  trades**, net +35 357.2575, dd −939.2829) — which earns its place because it
+  now tops the *worst-half* ranking, not just the full-window one;
+- the `PROVISIONAL` markers on the two existing DAY rows resolved **in place**,
+  each pointing at its re-measurement rather than being deleted — the old rows
+  stay in the ledger as the `@2026-08-21` history D1 said they should;
+- `DAY_SESSION_PLAN.md` §2.3's "still owed" note replaced with what landed, and
+  its W6 banner sample re-rendered;
+- `PINNED_DAY` re-pointed as above, with its provenance comment rewritten: the
+  W5a cost is now 3.6006 → 0.4129 rather than 16.3122 → 0.2671, caveat (2) is
+  the phase confound instead of the `PROVISIONAL` marker, and the buy-and-hold
+  shortfall is −24 419.
+
+The drawdowns are `net / |calmar|` from the sweep table, exact to the cent
+against the two the prose already quoted (−14 467.83, −5 755.50). Two tests
+moved with the pin — the banner-provenance assertion in `test_live_cli.py` and
+`test_day_provenance_records_that_it_has_not_earned_a_deployment`, which
+required the word `provisional` in `source_note` and now requires `never
+traded`. The session-scoped drift guard resolves `PINNED_DAY` to the 1.6937 row
+unaided, which is the check that this edit is self-consistent.
+
+**Both deployments are now on the `@2026-09-01` vintage.** The two-vintage state
+D1 explicitly rejected — NIGHT on the rebuilt tape, DAY on the retired one — is
+closed.
 
 Every number needed is in the table above, in
 [docs/tools/band_sweep.md](docs/tools/band_sweep.md), and in
@@ -922,6 +957,133 @@ the overwrite.
 > rows** are measured on, so the truncation points that reconstruct it now live
 > in `dataset/NOTE.md` ("The `@2026-05-15` vintage") rather than in the
 > filesystem.
+
+---
+
+### 5.3 The tape-spanning parity check — run 2026-09-01
+
+§0.5 records this as the one check that "has not been done, and cannot pass
+today", and §1 says why: at a roll the evaluated series and the series a
+deployment would really hold differ **structurally**, so any parity check
+spanning one trips over it. The rebuild removed that reason. The check is
+[tools/roll_parity.py](tools/roll_parity.py) — see
+[its page](docs/tools/roll_parity.md) — and it has now been run.
+
+**Both sides come from the per-contract intermediate, and only one is rebuilt.**
+The tape side is the shipped CSV, read as-is, because that is the file
+`results.tsv`'s numbers were measured on. The live side is
+`live/backfill.collapse_front_month` **called**, with the `front_month_at`
+`live/cli.py:645` really passes and over the months `_warmup_contracts` can
+really reach. Neither rule is restated here; a check that copies the rule it
+checks proves only that the copy was faithful, which is `tests/test_tape_build.py`'s
+job at the unit level and not this one's.
+
+| deployment | splice | rolls | identical | minutes on the wrong month | tape-only minutes |
+|---|---|---|---|---|---|
+| **night** | 15:30 | 112 | **112** | 0 | 0 |
+| day | 12:45 | 188 | 5 | **10 979** | 0 |
+| combined | 12:45 | 188 | 5 | 14 122 | 8 |
+| fullday | 12:45 | 104 | 4 | 8 949 | 2 |
+
+**NIGHT is exact — 112 rolls out of 112**, bar for bar and contract for contract,
+at ±24 h around each roll and again at ±96 h. That is the direct evidence this
+whole plan was for, and it had never been produced: every claim that the rebuilt
+tape and the live path are now "one rule" rested on the rule being shared in
+source, not on the two series having been compared. They have now been compared,
+on nine years of real prints, and they agree.
+
+#### What it found: the DAY deployment's warm-up splices at the wrong instant
+
+**Every DAY roll that traded diverges — 183 of 183.** (The five "identical" DAY
+rolls are days the market was shut: four Lunar New Year dates and 2024-09-17. On
+those, both series are empty.) The divergence is not scattered: it is exactly the
+**60 minutes 12:45–13:44** on each roll day, and it points the same way in every
+one of the 183 — the tape holds the **incoming** month, the live warm-up holds the
+**outgoing** one.
+
+The cause is one argument at one call site. `RollSchedule` is constructed with
+`policy=cfg.policy` (`live/cli.py:1005`), so the deployment's *trading* roll fires
+at its own instant — 12:45 for DAY, which is what C4 decided and what the tape was
+built on. But the **warm-up backfill** at `live/cli.py:645` passes `front_month_at`
+**unbound**, and its default is the module's `ROLL_AT` — NIGHT's 15:30 — for every
+deployment. So a DAY run rolls its position at 12:45 and splices its history at
+15:30, and the hour in between is sourced from the month it has already stopped
+trading.
+
+`front_month_at`'s own docstring explains why the default is unbound, and the
+reasoning is sound as far as it goes: *"threading a policy through it would have
+moved a pinned deployment's context as a side effect of a day-session decision"*.
+That protects NIGHT. It leaves DAY reading a different series from the one
+`PINNED_DAY`'s Calmar was measured on.
+
+**What it is worth.** Over the 10 979 minutes, `|Δclose|` is **median 27 points,
+p95 183, max 463** — the inter-month basis of §0.4, not noise; only 127 of them
+happen to agree. At `contract_multiplier=200` the median minute is NT$5 400 of
+price offset. DAY's `warmup_days_default()` is **84**, so *every* DAY start-up
+warms on a window containing about three roll days, and roughly **180 of its
+3 008 context bars — 6 % — carry the wrong month's price.** It is not a
+once-a-year event; it is every start-up the deployment will ever do.
+
+**It is confined to the warm-up path.** The live stream is aggregated from the
+contract the run actually holds, and that follows `RollSchedule`, which is
+policy-keyed and correct. So this is history the model is primed on, not prints it
+trades against — which is why nothing downstream would ever raise.
+
+> **APPLIED 2026-09-02, and the check now passes on all four tapes.** Two changes,
+> at the user's instruction:
+>
+> 1. `live/cli.py` binds `cfg.policy` into the `front_month_at` it hands the
+>    warm-up backfill, so the splice follows the deployment's own instant.
+> 2. `live/roll.py` makes that argument **required** on `front_month_at` and
+>    `front_month_series` — the default is gone, not merely corrected at one call
+>    site. Fixing (1) alone would have left the trap for the next caller, and the
+>    same repair has already been made once in this codebase for the same class of
+>    bug: `fetch_bars` has no session default because it once defaulted to
+>    `("DAY",)` while the strategy was tuned on NIGHT, *and nothing could detect
+>    it*. Passing `None` still means the module constant; the point is that a
+>    caller has to say so.
+>
+> **NIGHT does not move by a single bar** — `SessionPolicy.night().roll_at_time()`
+> **is** 15:30, exactly the property the unbound default was protecting, and it is
+> now an explicit assertion in `tests/test_live_roll.py` rather than a side effect
+> of a default. The soaking deployment's warm-up is identical before and after.
+>
+> **Re-measured after the change — 592 rolls, zero differing minutes:**
+>
+> | deployment | rolls | identical, before → after |
+> |---|---|---|
+> | night | 112 | 112 → **112** |
+> | day | 188 | 5 → **188** |
+> | combined | 188 | 5 → **188** |
+> | fullday | 104 | 4 → **104** |
+>
+> The check tracks the call site rather than the correct answer — point
+> `live_series`' splice back at the bare function and the old numbers reproduce
+> exactly — so this is a passing check, not a check rewritten to pass.
+
+#### And a smaller one: two tapes carry minutes the live path cannot reach
+
+The combined and full-day tapes hold **8 and 2 minutes** — across six 2017–2019
+rolls — that the live path would not have built at all. Between 12:45 and 15:30
+the tape's front month is the incoming one, so a minute only the incoming month
+printed is an ordinary tape bar; to the live rule that same month is still
+*later* than its own front, so it is out of reach and the minute is dropped.
+
+All eight were checked individually: each falls between **15:04 and 15:26**, and in
+each the *only* contract that printed was the incoming month. The clustering is
+liquidity, not chance — the 12:45–13:44 half of the disagreement window is liquid
+enough that the outgoing month always prints, while the 2017–2019 night session is
+the thin one §2.5 measured. A hole of the §0.2 kind arriving by a different door:
+same symptom, different cause, and **8 bars against §0.2's 2 782**. It does not
+touch the day or night tapes, and no deployment runs on the combined ones.
+
+**Closed 2026-09-02 by the same one-line fix**, which was not its intent and is
+worth stating: once the live splice moves to 12:45, the incoming month is
+*reachable* from 12:45 rather than "later until 15:30", so those ten minutes can
+be built after all. Both findings had one cause.
+
+Tables: `outputs/roll_parity_{night,day,combined,fullday}_20260902.csv` (after the
+fix) and `..._20260901.csv` (the run that found it).
 
 ---
 
