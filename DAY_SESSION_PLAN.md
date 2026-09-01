@@ -57,6 +57,35 @@ rather than as new steps:
   code that produced it. Committing is therefore a prerequisite of W5, not
   housekeeping.
 
+**Updated 2026-09-01 (later) — W5a and W5b are done, PROVISIONALLY.** The user
+directed W5a first, then W5b. Both ran on §5's *provisional* branch — measured
+against Calmar 16.3122 while the tape rebuild is still pending — and both
+re-measure after `TAPE_REBUILD_PLAN.md` T0–T4 regardless of their verdict. §2.3
+is the record of that choice and of the results:
+
+- **W5a: night's configuration does not transfer** — Calmar 0.2671 vs 16.3122,
+  drawdown 4× worse on a fifth the PnL, fee drag 35 % vs 2.8 %.
+- **But the reason is not "no signal", and that inverts the D2 verdict.** Night's
+  `information_coefficient` is −0.0119 against day's −0.0049: *neither* session's
+  forecast is directionally accurate. Night's Calmar comes from payoff asymmetry
+  produced by the emitter gates — which is exactly what the search tunes. So the
+  probe said *search*, and W5b ran.
+- **W5b: a day configuration exists** — `band 0.001 + min-prob 0.65`, Calmar
+  **4.6805**, 73 trades, 17× the probe. It **does not beat buy-and-hold** (−9 273
+  over the eval window, where night is +13 259), and it is **not** a live pin.
+- **The selection rule had to change.** Ranking by full-window Calmar — the rule
+  every NIGHT `keep:` row was chosen by — picks a 27-trade artefact scoring
+  14.7697. Candidates were scored on the two halves of the eval window separately
+  and selected on the worst. That rejected cell is in `results.tsv` as `reject`.
+- **One follow-up, not acted on:** the night chain has never had this
+  out-of-sample check applied to it. §2.3's last note explains why that is the
+  user's call and not this plan's.
+
+Also here: `real_data.py` gained **`--warmup-bars`**, without which §2.2's "pin
+warmup in bars" could not be expressed; §2.2's two run directories had been
+deleted, so **16.3122 was re-measured and reproduced exactly** before anything
+was compared against it.
+
 ---
 
 ## 0. What `day/forecast_eval` actually is — measured, not assumed
@@ -415,6 +444,144 @@ the evidence for the alignment trap) and
 **Data for the day side is ready:** `TXF_RPT_minute_day.csv`, 73 MB,
 1 145 145 rows, current to 2026-08-21.
 
+**Superseded 2026-09-01:** both run directories above were deleted at some point
+before today, so Calmar 16.3122 rested on this section alone with no run behind
+it. It was **re-measured and reproduced exactly** as part of W5a — see §2.3.
+
+---
+
+### 2.3 W5a and W5b — the day search, run 2026-09-01 · **PROVISIONAL**
+
+Both steps are done. **Both are provisional in the sense §5's blocking note
+defines:** they were run on the branch that measures against Calmar 16.3122
+while `TAPE_REBUILD_PLAN.md` is still pending, on the stated understanding that
+their numbers are re-measured after T0–T4 whatever the verdict. §5 says the
+indefensible thing is running W5a *without recording which branch was chosen*;
+this is that record.
+
+#### The aligned warmup, and why it is not night's fraction
+
+§2.2 requires the probe to use "the day tape's own aligned warmup" and to compare
+against 16.3122. For that comparison to mean anything the two runs must cover the
+**same calendar window**, so warmup was chosen as the day-tape index of the night
+baseline's first eval bar: **674 498 bars** (58.9 % of the tape). Day then
+evaluates `2020-03-06 08:45 → 2026-08-21`, night `2020-03-05 17:45 → 2026-08-21`.
+
+Reusing night's *30 % split* would have started day's evaluation in **2015-08**
+and compared two different market regimes. Recorded because the 30 % figure is
+the obvious thing to carry across and it is the wrong one.
+
+`real_data.py` had no way to express this — only `--lookback-frac`.
+**`--warmup-bars` was added** (§2.2's "warmup must be recorded in bars" made
+operational), and validated by reproducing the night aligned run bit-for-bit from
+`--warmup-bars 520004` instead of the reverse-engineered
+`--lookback-frac 0.290844409`.
+
+#### W5a — the transfer probe: night's configuration does not transfer
+
+| | NIGHT baseline | DAY probe |
+|---|---|---|
+| Calmar | **16.3122** | **0.2671** |
+| net PnL (pts) | +46 603.21 | +3 111.64 |
+| max drawdown | −2 856.95 | **−11 649.12** |
+| trades | 208 | 257 |
+| **gross pts / trade** | **230.42** | **18.65** |
+| fees / trade | 6.36 | 6.54 |
+| **fee drag** | **2.8 %** | **35.1 %** |
+| win/loss size ratio | 2.53 | 1.45 |
+| median hold | 3 d 23:17 | 4 d 00:30 |
+
+Run: `outputs/real_data_day_probe_W5a_20260901/`. The night re-measurement is
+`outputs/real_data_night_aligned_W4b_repro_20260901/` and reproduces §2.2 to the
+last digit (208 trades, +46 603.2099, −2 856.9506, +11 835.4348 over buy-and-hold).
+
+#### The reason the probe's verdict is *not* "so the search is futile"
+
+The obvious reading of a failed transfer is that the day session has no signal.
+**Measured, that reading is wrong, and it is worth stating because it inverts the
+conclusion.** The day forecast's `information_coefficient` is −0.0049 and its
+`direction_hit_rate` 0.4987 — but **night's are −0.0119 and 0.5008**. Night's
+forecast is no more directionally accurate than day's.
+
+Night's Calmar does not come from forecast skill. It comes from **payoff
+asymmetry**: it cuts losers at 329 and lets winners run to 833. Day, with the
+same gates at night's settings, does the reverse — winners cut at 586, losers
+held to 404. That asymmetry is produced by the trend filter, the momentum gate
+and the probability gate, which are **exactly what the `edit:`/`keep:` loop
+tunes**. So the probe's answer to D2 is *yes, search* — for a reason opposite to
+the one its headline number suggests.
+
+#### W5b — the search, and the selection rule it forced
+
+The emitter never changes the forecasts, so the whole search runs off **one** GPU
+precompute via `run_backtest(forecasts_cache=…)`: 110 s once, then **~2 s per
+candidate** instead of ~4 min. The baseline cell reproduces the W5a CLI run
+exactly (0.2671 / 3111.6436 / −11649.1183), which is what licenses the rest.
+
+Widening the band fixes all three of day's problems at once — fewer trades, more
+points each, fee drag collapsing. Night's ±0.00045 was simply far too tight for a
+**300-bar** session where night has **840**.
+
+**But ranking by full-window Calmar picks a fiction.** The top cell is
+`band=0.004` at **Calmar 14.7697** — a number that reads as "day nearly matches
+night". It is **27 trades, 10 of them in the out-of-sample half**, with a
+first-half Calmar of 2.2781. It is the degenerate trade-almost-never corner.
+
+So every candidate was scored on the **two halves of the eval window separately**
+(split 2023-06-01) and selected on **worst half**, not full window:
+
+| band | min_prob | n | h1 Calmar | h2 Calmar | worst | full |
+|---|---|---|---|---|---|---|
+| **0.001** | **0.65** | **73** | **5.6296** | **3.1557** | **3.1557** | **4.6805** |
+| 0.0015 | 0.50 | 73 | 2.4754 | 2.4088 | 2.4088 | 3.4160 |
+| 0.003 | 0.65 | 42 | 2.3325 | 2.4653 | 2.3325 | 3.2794 |
+| 0.00125 | 0.65 | 65 | 2.8920 | 2.3173 | 2.3173 | 3.1805 |
+| *0.004* | *0.50* | *27* | *2.2781* | *14.3684* | *2.2781* | *14.7697* |
+
+Across the 33-cell grid **spearman(h1, h2) = 0.45, pearson = 0.09** — full-window
+rank is weak evidence on this tape. A stable ridge does exist around
+`band 0.001–0.0015 × min_prob 0.5–0.65`, holding Calmar ≈ 2.0–3.2 in both halves.
+
+**Result — `results.tsv` gains three DAY rows** (all at commit `e073e73`, dataset
+`TXF_RPT_minute_day.csv@2026-08-21`, warmup 674 498):
+
+- the **W5a probe** (`keep`, 0.2671) — the DAY chain's baseline;
+- the **rejected** `band=0.004` cell (`reject`, 14.7697) — kept as the evidence
+  for the selection rule, not as a candidate;
+- the **pinned DAY row** (`keep`, **4.6805**) — `band 0.001 + min-prob 0.65`,
+  73 trades, reproduced through the CLI in
+  `outputs/real_data_day_W5b_pinned_20260901/`; fee drag 35.1 % → 1.7 %,
+  win/loss 1.45 → 2.09, hit rate 0.420 → 0.534.
+
+`_best_row` in `tests/test_live_config.py` now filters on `status == "keep"`.
+Without it the `reject` row is the highest DAY Calmar in the file and would
+become "the best known DAY config" — the ledger's own counter-example promoted to
+its recommendation. One new test covers this.
+
+#### Two caveats that belong with the number
+
+- **It does not beat buy-and-hold.** Over the eval window the pinned DAY config
+  nets +24 472 against a passive +33 745 — **−9 273**. Night beats its own floor
+  by **+13 259**. Day's Calmar 4.68 is earned by a *small drawdown* (−5 228), not
+  by out-earning the index. (The CLI's own printed delta, −11 669, spans warmup +
+  eval and is unfair to day, whose warmup is 58.9 % of the tape; −9 273 is the
+  like-for-like figure.)
+- **This is not a live pin.** There is no `PINNED_DAY` in `live/config.py` and W6
+  has not run. C1 proposed a second pinned value; what exists now is the row it
+  would be pinned *to*, which is the prerequisite, not the act.
+
+#### A follow-up this raised about NIGHT, not acted on
+
+The out-of-sample split that rejected day's 14.7697 has **never been applied to
+the night chain**. Every `keep:` decision in those 18 commits was made by
+full-window Calmar on a single window — the exact rule that, on the day tape,
+selects a 27-trade artefact. This is *not* a claim that 16.3122 is overfit: night
+has 208 trades, a coherent payoff story, and has not been tested. It is that the
+evidence standard behind it cannot tell the two cases apart, and W5b now leaves
+behind a harness that could check it in minutes. **The user's call, not assumed
+here** — and it is a live-deployment question with the 2026-09-15 roll in flight,
+so it belongs beside `TAPE_REBUILD_PLAN.md` §6's D1 rather than in this plan.
+
 ---
 
 ## 3. What ports free — verified by reading
@@ -764,16 +931,16 @@ night tree too.
 
 **The work itself — all of it in `night/forecast_eval`:**
 
-> **CURRENT STAGE, 2026-09-01: W4 is the last step done. W5a is next in the
-> list and is blocked; W6 and W7 are the available work.**
+> **CURRENT STAGE, 2026-09-01 (later): W5a and W5b are done on the
+> PROVISIONAL branch. W6 and W7 are the available work.**
 >
 > | | |
 > |---|---|
-> | Done | W0, W1, W2, W3, **W4**, W4b — all offline, no market |
-> | Blocked | **W5a** — the tape rebuild, plus that plan's D1/D2 untaken (below) |
+> | Done | W0, W1, W2, W3, **W4**, W4b, **W5a**, **W5b** — all offline, no market |
+> | Done but PROVISIONAL | **W5a**, **W5b** — measured against Calmar 16.3122, which the tape rebuild invalidates; both re-measure after T0–T4 (§2.3) |
 > | Available now | **W6**, **W7** — neither reads the tape; code and tests are CPU-only, but their *verification* runs need the GPU (see the header) |
-> | Not started | W5b (downstream of W5a), W8, W9 — the last two need a market |
-> | Prerequisite for any pinned row | commit the tree (header) |
+> | Not started | W8, W9 — both need a market |
+> | Prerequisite for any pinned row | ~~commit the tree~~ — **done**, tree is clean at `e073e73` |
 >
 > Nothing here is waiting on a decision except W5a. The port has not begun to
 > touch the entry point yet — **no day deployment exists**; what is built so far
@@ -798,11 +965,19 @@ W4  [DONE 2026-08-31] C6 - policy-derived warm-up window    -> verified: Session
                                                               into cli.py's --warmup-days default; 2 new tests
 W4b [DONE 2026-08-24] re-baseline on the NEW tape (2.2)   -> verified: 185 trades reproduce bit-identically;
                                                               208 trades, Calmar 16.3122 on the new tape
-W5a [BLOCKED on the tape rebuild - see below]              -> verify: one ~4-min run vs Calmar 16.3122;
-    [D2] TRANSFER PROBE - night-pinned params over the day       pin warmup in BARS, not a fraction (2.2)
-    file, aligned warmup. Decides whether W5b is worth it.
-W5b C1 - full edit:/keep: search on the day file, only if  -> verify: a pinned row + reproduction, 2.13-style
-    the probe warrants it
+W5a [DONE 2026-09-01, PROVISIONAL] [D2] TRANSFER PROBE     -> verified: Calmar 0.2671 vs NIGHT 16.3122.
+    - night-pinned params over the day file, warmup 674498      Does NOT transfer: dd -2857 -> -11649 on a
+    bars (aligned to the NIGHT eval start so the calendar       fifth the PnL, fee_drag 0.351 vs 0.028,
+    windows match). Ran on the PROVISIONAL branch - see the     18.65 gross pts/trade vs 230.42. Verdict:
+    blocking note below; its number is re-measured after        the search IS warranted, for a reason the
+    the tape rebuild regardless of the verdict.                 probe alone would have got backwards - see
+                                                               2.3. 257 trades, all tagged DAY.
+W5b [DONE 2026-09-01, PROVISIONAL] C1 - day search         -> verified: band 0.001 + min-prob 0.65 ->
+    -> PINNED DAY row, band 0.001 / min-prob 0.65,              Calmar 4.6805 (73 trades), 17x the probe.
+    Calmar 4.6805. Selected on WORST-HALF Calmar, not           Reproduced through the CLI; the swept and
+    full-window - the full-window max is a 27-trade             CLI numbers agree exactly. Rejected cell
+    artefact and is in results.tsv as a `reject` row.           (band 0.004, Calmar 14.7697) recorded as
+    See 2.3 for the method and the caveat.                      evidence. NOT a live pin - see 2.3.
 W6  C2 - `--config day` at the entry point                 -> verify: dryrun banner shows DAY provenance
 W7  offline parity for DAY, V0-style                       -> verify: live loop = run_backtest, bit-identical
 W8  5-minute dryrun inside a real DAY session   [MARKET]   -> verify: start-up, warm-up, banner, first bar
