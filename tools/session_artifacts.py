@@ -176,12 +176,64 @@ def load_price_series(run_dir: Path) -> Optional[pd.DataFrame]:
                          "price": df["price"].astype(float)})
 
 
+def seed_ledger(result: BacktestResult, run_dir: Path, *, config: str,
+                soak_id: Optional[str] = None) -> int:
+    """Append a finished run's fills to the deployment's ledger, for `--resume`.
+
+    Returns the number appended, or -1 when it refuses.
+    """
+    # Tech: resolve the deployment's ledger and soak id, refuse if rows for that
+    #       soak are already there, then append.
+    # Why:  this is a MIGRATION and not part of the ordinary path — a live run
+    #       keeps its own ledger current as it goes. It exists because the
+    #       position a soak holds today can predate the ledger entirely, and then
+    #       `--resume` has nothing to replay, falls back to the synthetic fill,
+    #       and loses a history that is sitting in a log on disk.
+    #
+    #       The idempotence guard is not optional. Appending twice would double
+    #       every fill, which breaks the reconciliation in `cli.py` — and that
+    #       check is the only thing standing between a wrong ledger and a
+    #       confidently wrong `trades.csv`.
+    from forecast_eval.live.config import config_named
+    from forecast_eval.live.ledger import FillLedger, ledger_path, net_position
+
+    cfg = config_named(config)
+    if soak_id is None:
+        epoch = run_dir.parent / "soak_epoch.json"
+        if not epoch.exists():
+            print(f"ERROR: no {epoch} — pass --soak-id explicitly", file=sys.stderr)
+            return -1
+        soak_id = json.loads(epoch.read_text(encoding="utf-8"))["soak_id"]
+
+    path = ledger_path(run_dir.parent, cfg.policy)
+    if FillLedger(path, soak_id=soak_id).replay():
+        print(f"ERROR: {path} already has rows for {soak_id}. Appending again "
+              f"would double every fill and break the reconciliation in cli.py.",
+              file=sys.stderr)
+        return -1
+
+    added = FillLedger(path, soak_id=soak_id).sync(result.fills)
+    print(f"  ledger       {path}")
+    print(f"               +{added} fill(s) under {soak_id}, "
+          f"net {net_position(result.fills):+d}")
+    print(f"               a --resume on --config {config} replays these; cli.py "
+          f"refuses them unless the venue agrees with that net")
+    return added
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("run_dir", type=Path)
     ap.add_argument("--no-report", action="store_true")
     ap.add_argument("--force", action="store_true",
                     help="overwrite artifacts that are already there")
+    ap.add_argument("--seed-ledger", action="store_true",
+                    help="append this run's fills to the deployment's ledger, "
+                         "so a later --resume replays them")
+    ap.add_argument("--config", default="night",
+                    help="which deployment's ledger to seed (default: night)")
+    ap.add_argument("--soak-id", default=None,
+                    help="soak to tag the rows with (default: the epoch on disk)")
     args = ap.parse_args(argv)
 
     session = args.run_dir / "session.jsonl"
@@ -221,6 +273,10 @@ def main(argv=None) -> int:
                         auto_report=not args.no_report, report_ticks=ticks)
     for name, path in sorted(written.items()):
         print(f"  {name:12} {path}")
+
+    if args.seed_ledger and seed_ledger(result, args.run_dir, config=args.config,
+                                        soak_id=args.soak_id) < 0:
+        return 4
     return 0
 
 

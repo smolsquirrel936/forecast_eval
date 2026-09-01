@@ -128,3 +128,61 @@ def test_a_partial_final_line_is_skipped(tmp_path):
 
 def test_a_missing_session_file_is_an_error_not_a_crash(tmp_path):
     assert main([str(tmp_path), "--no-report"]) == 2
+
+
+# ---- seeding the ledger, which is a migration and not the ordinary path ------
+
+
+def _epoch(run_dir, soak_id="soak_test"):
+    import json as _json
+    (run_dir.parent / "soak_epoch.json").write_text(
+        _json.dumps({"soak_id": soak_id, "retired": []}), encoding="utf-8")
+
+
+def test_seeding_writes_the_deployments_ledger(tmp_path):
+    """The migration this exists for: the position a soak holds can predate the
+    ledger, and then --resume has nothing to replay even though the history is
+    sitting in a log on disk."""
+    from forecast_eval.live.config import PINNED
+    from forecast_eval.live.ledger import FillLedger, ledger_path, net_position
+
+    d = _session(tmp_path)
+    _epoch(d)
+    assert main([str(d), "--no-report", "--seed-ledger", "--config", "night"]) == 0
+
+    led = FillLedger(ledger_path(tmp_path, PINNED.policy), soak_id="soak_test")
+    replayed = led.replay()
+    assert len(replayed) == 2
+    assert net_position(replayed) == 0        # this fixture opens and closes
+
+
+def test_seeding_twice_is_refused(tmp_path, capsys):
+    """Appending again doubles every fill, which breaks the reconciliation in
+    cli.py — and that check is the only thing between a wrong ledger and a
+    confidently wrong trades.csv."""
+    d = _session(tmp_path)
+    _epoch(d)
+    assert main([str(d), "--no-report", "--seed-ledger"]) == 0
+    assert main([str(d), "--no-report", "--force", "--seed-ledger"]) == 4
+    assert "already has rows" in capsys.readouterr().err
+
+
+def test_seeding_needs_a_soak_to_tag_the_rows_with(tmp_path, capsys):
+    """Untagged rows would be replayed by every soak, including one that
+    --fresh-start deliberately started clean."""
+    d = _session(tmp_path)
+    assert main([str(d), "--no-report", "--seed-ledger"]) == 4
+    assert "--soak-id" in capsys.readouterr().err
+
+
+def test_day_and_night_ledgers_stay_separate_when_seeding(tmp_path):
+    """The C5 rule again: seeding a night run must not put fills where a DAY
+    deployment will replay them."""
+    from forecast_eval.live.config import PINNED_DAY
+    from forecast_eval.live.ledger import FillLedger, ledger_path
+
+    d = _session(tmp_path)
+    _epoch(d)
+    main([str(d), "--no-report", "--seed-ledger", "--config", "night"])
+    day = FillLedger(ledger_path(tmp_path, PINNED_DAY.policy), soak_id="soak_test")
+    assert day.replay() == []

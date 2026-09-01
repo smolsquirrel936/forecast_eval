@@ -58,6 +58,30 @@ price line is the series the run actually saw.
 run's own `trades.csv` too, not an artifact of the reconstruction. The `fill`
 records do carry `bar_idx`, so it is recoverable if it is ever wanted.
 
+## Seeding the ledger — a migration, not the ordinary path
+
+`--seed-ledger` appends a finished run's fills to the deployment's
+[fill ledger](../live/ledger.md), so a later `--resume` replays them:
+
+```powershell
+uv run python -m forecast_eval.tools.session_artifacts `
+  outputs\live_20260824_150112 --seed-ledger --config night
+```
+
+A live run keeps its own ledger current as it goes, so this is needed only once:
+the position a soak is holding **today** can predate the ledger entirely, and
+then `--resume` has nothing to replay, falls back to the synthetic single fill,
+and loses a history that is sitting in a log on disk.
+
+Rows are tagged with the soak on disk (`soak_epoch.json`) unless `--soak-id` says
+otherwise; without a soak they would be replayed by every future soak, including
+one that `--fresh-start` deliberately started clean.
+
+**Seeding twice is refused.** Appending again doubles every fill, and the
+reconciliation in `cli.py` — which compares the replay's net against what the
+venue holds — is the only thing standing between a wrong ledger and a
+confidently wrong `trades.csv`.
+
 ## The overwrite guard
 
 A run that wrote its own artifacts from the loop holds the **primary** record;
@@ -72,6 +96,7 @@ already exist and asks for `--force` rather than deciding.
 | `rebuild(records)` | function | the event lists a `LiveLoop` held, as a `BacktestResult` |
 | `check_alignment(result, records)` | function | complains when a fill lands outside the run's bars |
 | `load_price_series(run_dir)` | function | `ticks.csv` as the report's price frame |
+| `seed_ledger(result, run_dir, *, config, soak_id)` | function | append the fills to a deployment's ledger, once |
 | `main(argv)` | function | CLI: rebuild, verify, write, render |
 | `VENUE_UTC_OFFSET` | constant | `timedelta(hours=8)` — Asia/Taipei, no DST |
 
