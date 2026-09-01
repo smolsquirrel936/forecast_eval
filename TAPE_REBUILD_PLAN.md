@@ -18,6 +18,14 @@ session-split of another (§2.3). D1's scope sub-question is settled the same da
 **(a) re-measure, do not re-search**. `roll_at_time()` was amended so any policy
 trading DAY rolls at 12:45 (`DAY_SESSION_PLAN.md` C4).
 
+**Updated 2026-09-01 (T1) — the rebuild changes THREE things, not one.** §3's
+"the code change is small" holds for the front-month rule and for nothing else.
+Building the intermediate surfaced two further defects in the shipped tape, both
+of them silent, both corrected by the rebuild rather than caused by it: the
+minute **open/close depend on an unstable sort**, and **volume is doubled**
+wherever a raw file carries a stale copy of an earlier session. See **§0.6** —
+and note that §3.1's blast-radius estimate covers only the first cause.
+
 **Re-verified 2026-09-01 — still true, and both defects are still in the file.**
 The day tape was re-measured end-to-end against §0; the numbers confirm it, one
 new finding is added, and one cross-plan claim in §1 turns out not to hold as
@@ -196,6 +204,83 @@ rediscover:
   the two series structurally differ there. That is a real gap, it is not W7,
   and it only becomes checkable after this rebuild.
 
+### 0.6 Two more defects, found while building T1's intermediate
+
+Neither is the front-month rule, neither was known when this plan was written,
+and both are **corrected** by the rebuild. They are recorded because they change
+what T4's diff means: a bar that moves between the old tape and the new one now
+has three possible causes, not one.
+
+#### Defect C — the minute open/close rest on an unstable sort
+
+`close` is the only OHLC column the backtest reads (`real_data.load_minute_bars`
+projects `price = df["close"]`), and **~14 % of closes change** on a faithful
+rebuild — independently of any front-month decision.
+
+Measured: the raw carries **no sub-second precision at all**. Files before ~2015
+are `HHMMSSCC` with `CC` always `00`; later files are plain `HHMMSS`. So several
+prints share a timestamp key, and which of them is a minute's first or last is
+decided purely by row order. Notebook cell 11 sorts with `sort_index()`, whose
+default `quicksort` is **not stable**, over rows whose order had already been
+disturbed by cell 7's `merge`. The answer is therefore arbitrary and not
+reproducible — there is no way to rebuild the shipped tape's open/close, and no
+way to isolate the front-month change by holding them fixed.
+
+The rebuild stable-sorts and preserves raw file order, which is the exchange's
+dissemination sequence and the only ordering information that exists. Verified
+the raw is already time-ordered: 4 out-of-order transitions per file, all of them
+the boundaries between its three trading-date blocks.
+
+`high` and `low` are **identical** either way (0 % differ, both tapes) — they are
+order-independent, which is exactly why this hid.
+
+| | full span, 2 933 058 bars (T1) | recent window only |
+|---|---|---|
+| `close` differs | **7.59 %** | 14.19 % |
+| `open` differs | 16.42 % | 25.56 % |
+| `high` / `low` differ | **0 %** | 0 % |
+| delta median / p95 / max | — | 1 pt / 9 pts / 54 pts |
+
+**Confirmed as ordering, not data:** on all 222 655 bars where `close` differs,
+**100.0000 %** of both the shipped and the rebuilt value lie inside that bar'''s own
+high/low. The print set is identical; only which print is last moved. (The rate
+is roughly twice as high in recent years as across the whole span — the tape
+gets denser, so more prints share a second.)
+
+#### Defect D — duplicated source files, doubled volume, and a lost session
+
+A few raw files carry a **stale copy of an earlier session instead of their
+own**. `Daily_2026_07_13.rpt` repeats 2026-07-09's night block — 29 899 TX
+prints, byte-identical to the copy in `Daily_2026_07_10.rpt`. The notebook
+concatenated both and summed `quantity`, so the shipped tape reads **1 596 lots
+at 2026-07-09 15:00 where the source has 798**.
+
+It hid for the same reason Defect C did: duplicating identical prints cannot move
+a min or a max, so `high` and `low` are untouched and only `volume` betrays it.
+
+**And the session the stale copy displaced is simply gone.** 2026-07-10's night
+session appears in no file at all. `dataset/NOTE.md` records "~108 evening blocks
+(15:00–23:00) are absent" and attributes them to the front-month roll; this is a
+**second cause** for that symptom, and it is not fixable from the data on hand —
+those prints are not in `extracted_data/`.
+
+**Frequency, measured across the full span in T1** (the 2026-only scan that found
+this understated it): **12 dates** affected, the earliest **2019-09-27**, and
+**8 853 duplicate bars** dropped from 4 560 212. Some sessions appear in *three*
+files, not two — the shipped/rebuilt volume ratio runs **exactly 2.000 (median)
+to 3.000**, with 66.7 % of affected bars doubled and the rest tripled. Integer
+multiples are the proof it is whole-file duplication: a partial overlap would
+give fractional ratios.
+
+Dropped by the T1 builder, which asserts the duplicates are byte-identical first
+so a genuine disagreement between two files would surface rather than be resolved
+by `keep="first"`. That assertion held over the whole rebuild: 15 505 rows in
+duplicate groups, no field disagreeing.
+
+> **`dataset/NOTE.md` should gain both of these**, and its "Known gaps" section
+> in particular now has an incomplete root cause. Not edited from here — it sits
+> outside `forecast_eval/`.
+
 ---
 
 ## 1. Why this is worth fixing rather than documenting
@@ -310,20 +395,39 @@ of this section had it the other way round, on the pre-amendment 15:30.)
 the front-month filter at cell 7 and writes `TXF_RPT_ticks.csv` at cell 9, so
 that file already has the wrong months in it. A rebuild cannot start from it.
 
+**REVISED 2026-09-01 — the front-month selection moves *after* the minute
+aggregation, and the tick file is not rebuilt at all.** The pipeline below front-
+filters at cell 7, which fixes **one** splice instant into everything downstream.
+§2.3 needs **two** (day and combined at 12:45, night at 15:30) and none of the
+three tapes is a session-split of another, so a single front-filtered series
+cannot produce them. The expensive pass therefore stops *before* choosing a front
+month:
+
 ```
-dataset/RPT/TaifexRPT/**.zip      (raw, all months)      <- the only clean source
-  -> extracted_data/Daily_*.rpt   (3 832 files, all months)
-  -> [cell 7: front-month rule]   <- THE CHANGE, one cell
-  -> TXF_RPT_ticks.csv            (288 943 166 rows)     <- must be rebuilt
-  -> TXF_RPT_minute.csv           (2 933 058 bars)       <- must be rebuilt
-  -> tools/split_session_txf_ohlc.py
-  -> TXF_RPT_minute_{day,night}.csv                      <- must be rebuilt
+dataset/RPT/TaifexRPT/**.zip        (raw, all months)     <- the only clean source
+  -> extracted_data/Daily_*.rpt     (3 832 files, ~55 GB)
+  -> tools/build_minute_bycontract.py        <- ONE pass, no front-month choice
+       TX only, spreads dropped, two nearest months kept,
+       minute OHLCV per (contract, minute), deduped
+  -> TXF_RPT_minute_bycontract.csv  (~9 M bars)           <- NEW intermediate
+       |
+       +- front_month_series(ts, day())   -> TXF_RPT_minute_day.csv     12:45
+       +- front_month_series(ts, both())  -> TXF_RPT_minute.csv         12:45
+       +- front_month_series(ts, night()) -> TXF_RPT_minute_night.csv   15:30
 ```
 
-The code change is small — replace the per-`trading_date` `min(contract)` with
-a per-*timestamp* rule keyed on `roll_at`. The cost is the full re-derivation,
-which `NOTE.md` calls the expensive path (incremental append exists precisely to
-avoid touching the 9.2 GB file).
+**`TXF_RPT_ticks.csv` is not rebuilt.** `NOTE.md` calls it an intermediate — "the
+minute files are what analysis code reads" — and nothing in the repo reads it.
+Rebuilding it would cost 8.6 GB and could still only carry one splice instant.
+The pre-rebuild copy is kept in `_prerebuild_backup_20260901/`.
+
+**Why two nearest months rather than all of them:** the front-month choice belongs
+to the splice rule, and any rule between two adjacent months needs both present.
+Measured on a roll date, the two nearest are **86 903 of 87 007** TX prints
+(99.88 %); the rest are far months nothing trades.
+
+The gain is that a **fourth deployment later is a filter, not a 55 GB rebuild** —
+which matters now that D2 anticipates one.
 
 ### 3.1 Estimated blast radius on the night tape
 
@@ -336,6 +440,16 @@ avoid touching the 9.2 GB file).
 16.3122, were both measured on the current tape. A 6 % re-attribution plus
 60 000 new bars is a different series; the config has to be re-tuned against it,
 and `results.tsv` needs a new `dataset` vintage (the column already exists — W0).
+
+> **Understated, 2026-09-01.** These figures are the front-month rule alone. §0.6
+> adds two more causes measured since: **~14 % of `close` values** move on a
+> faithful rebuild (Defect C, the unstable sort), and volume is corrected
+> wherever Defect D doubled it. `close` is the only OHLC column the backtest
+> reads, so the series changes by more than this table implies — and the pinned
+> config is invalidated more thoroughly, not less. D1 = (a) still holds: T5
+> re-measures the existing parameters rather than re-searching, and the number it
+> produces reflects all three causes together, which is why **T4 must attribute
+> them separately** or T5's delta cannot be read.
 
 ---
 
@@ -379,13 +493,25 @@ against a first live roll on **2026-09-15**, with V5 not yet passed.
 ```
 T0  pin the new rule as one function, with tests        -> verify: agrees with front_month_at on every
     (shared by the notebook and front_month_at)            splice 2017-2026; no dead-contract minutes
-T1  rebuild TXF_RPT_ticks.csv from extracted_data/      -> verify: row count within the expected delta;
-                                                           byte sizes recorded for rollback
-T2  rebuild TXF_RPT_minute.csv                          -> verify: day + night reconcile to the total
-T3  re-split day/night                                  -> verify: 0 bars on a dead contract; the
-                                                           per-roll holes in 0.2 are gone
+T1  [DONE 2026-09-01] build                             -> VERIFIED: applying the OLD rule to the
+    TXF_RPT_minute_bycontract.csv from extracted_data/      intermediate reproduces the shipped tape's
+    -- one pass, NO front-month choice.                     2 933 058 bars EXACTLY: 0 missing, 0 extra.
+    [REVISED: not the tick file, see 3]                     high/low differ 0%; close 7.59% and open
+    4 551 359 bars, 190 contracts, 0.27 GB, 28 min.         16.42% (Defect C -- 100% of both values sit
+    8 853 duplicates dropped, byte-identical asserted.      inside the bar's own high/low, so ordering
+    Backup at _prerebuild_backup_20260901/.                 only); volume 0.172% (Defect D -- shipped
+                                                           /rebuilt ratio exactly 2.000-3.000).
+T2  apply front_month_series per policy -> the three    -> verify: day + night reconcile to the combined
+    tapes [12:45, 12:45, 15:30]                            total; 0 bars on a dead contract
+T3  (folded into T2 -- the split IS the front-month     -> verify: the per-roll holes in 0.2 are gone
+    selection now, not a separate pass)
 T4  diff old vs new tape                                -> verify: a measured table -- bars changed,
-                                                           bars added, by roll
+                                                           bars added, by roll, ATTRIBUTED TO THE THREE
+                                                           CAUSES (front-month rule / Defect C ordering /
+                                                           Defect D volume). Without the attribution the
+                                                           table cannot be read: 0.6 measures ~14% of
+                                                           closes moving for reasons unrelated to the
+                                                           splice.
 T5  re-run the pinned config on the NEW night tape      -> verify: the number that replaces 16.3122
     [D1 = (a): re-measure only. The edit:/keep: chain          (and W4b's, which rests on the same run)
     is NOT re-run; parameters stay, tape changes.]
