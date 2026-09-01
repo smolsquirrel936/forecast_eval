@@ -47,8 +47,11 @@ rather than as new steps:
 - **The GPU is a shared resource with the NIGHT soak, and every live-CLI run
   takes it.** `LiveRuntime.__init__` calls `config.build_forecaster()`
   unconditionally (`live/runtime.py:174`), so a `--broker dryrun` start-up
-  loads the model exactly as a soak does — W6's banner check and W7's parity
-  are GPU work, not just W5. The NIGHT soak restarts **2026-09-01 14:50**
+  loads the model exactly as a soak does — W6's banner check is GPU work, not
+  just W5. (**Corrected 2026-09-01:** W7 turned out *not* to be — it drives
+  `LiveLoop` directly with V0's deterministic fake forecaster, as V0 does, so
+  it never constructs a `LiveRuntime` and never loads the model. It runs in
+  ~19 s on CPU.) The NIGHT soak restarts **2026-09-01 14:50**
   (`SHIOAJI_PLAN.md`, "SCHEDULED"), and holds the card until stopped.
 - **`results.tsv` rows need a commit that exists.** The tree is 15 modified
   files and 9 untracked paths ahead of `7d1af99`, including whole modules
@@ -967,14 +970,15 @@ night tree too.
 
 **The work itself — all of it in `night/forecast_eval`:**
 
-> **CURRENT STAGE, 2026-09-01 (later still): W5a, W5b and W6 are done. W7 is
-> the available work; W8 is the first step that needs a market.**
+> **CURRENT STAGE, 2026-09-01 (end of day): W0–W7 are all done. The entire
+> offline half of the port is complete; W8 is the first step that needs a
+> market, and the first that needs Shioaji credentials.**
 >
 > | | |
 > |---|---|
-> | Done | W0, W1, W2, W3, **W4**, W4b, **W5a**, **W5b**, **W6** — all offline, no market |
+> | Done | W0, W1, W2, W3, **W4**, W4b, **W5a**, **W5b**, **W6**, **W7** — all offline, no market |
 > | Done but PROVISIONAL | **W5a**, **W5b** — measured against Calmar 16.3122, which the tape rebuild invalidates; both re-measure after T0–T4 (§2.3) |
-> | Available now | **W7** — does not read the tape; code and tests are CPU-only, but its *verification* run needs the GPU (see the header) |
+> | Available now | *(nothing offline remains)* — every step that does not need a market is done |
 > | Not started | W8, W9 — both need a market, and W8 needs Shioaji credentials the W6 check did not have |
 > | Prerequisite for any pinned row | ~~commit the tree~~ — **done**, tree is clean at `e073e73` |
 >
@@ -1021,7 +1025,13 @@ W6  [DONE 2026-09-01] C2 - `--config night|day` at the      -> verified: banner 
     (argparse bakes parser-build-time defaults: it was           unchanged. One flag moves policy + band +
     always NIGHT's 30, which would have re-opened C6).           gate + warm-up + roll + cache together.
                                                                15 new tests.
-W7  offline parity for DAY, V0-style                       -> verify: live loop = run_backtest, bit-identical
+W7  [DONE 2026-09-01] offline parity for a single-session   -> verified: bit-identical for BOTH deployments
+    deployment, V0-style. V0 is session-blind (it drives         over a mixed tape - DAY 10500 bars / 250
+    LiveLoop directly); W7 filters through the REAL              forecasts / 33 fills, NIGHT 29225 / 874 /
+    TickAggregator on each policy, then compares against         169. Non-vacuous: 2 mutation checks, both
+    run_backtest over that session's bars alone - which          caught. DAY+NIGHT = 39725 in-session bars,
+    is what results.tsv's DAY rows actually assume.              matching V0's own count exactly. 9 tests,
+    Uses each deployment's OWN pinned emitter.                   no GPU needed.
 W8  5-minute dryrun inside a real DAY session   [MARKET]   -> verify: start-up, warm-up, banner, first bar
                                                               [DOES NOT touch the shared Shioaji account —
                                                               dryrun never calls a broker order API]
