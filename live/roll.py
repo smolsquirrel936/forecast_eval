@@ -227,37 +227,90 @@ def roll_at(yyyymm: str, policy: Any = None) -> datetime:
         days=ROLL_LEAD_DAYS)
 
 
-def front_month_at(ts: Any) -> str:
+def _next_month(yyyymm: str) -> str:
+    # Tech: the delivery month after `yyyymm`.
+    # Why:  one place for the December wrap, which three call sites had inline.
+    y, m = int(yyyymm[:4]), int(yyyymm[4:6])
+    return f"{y + 1}01" if m == 12 else f"{y}{m + 1:02d}"
+
+
+def roll_calendar(first_month: str, last_month: str, policy: Any = None):
+    """Every roll instant from `first_month` to `last_month`, ascending.
+
+    Returns `(boundaries, months)` where `months[i]` is the delivery month in
+    force *until* `boundaries[i]`, and `months[-1]` after the last one. This is
+    the whole splice rule expressed once, as data — `front_month_at` reads it
+    for one timestamp and `front_month_series` for millions.
+
+    **TAPE_REBUILD_PLAN T0.** The tape builder and `front_month_at` used to be
+    two rules that were supposed to agree and did not (§0.3: the tape spliced
+    1 d 8 h 30 m after this one, every month). Two rules cannot diverge if there
+    is only one, so the notebook and the live path now both come here.
+    """
+    months = [first_month]
+    while months[-1] < last_month:
+        months.append(_next_month(months[-1]))
+    return [roll_at(m, policy) for m in months], months
+
+
+def front_month_at(ts: Any, policy: Any = None) -> str:
     """Which delivery month a timestamp belongs to, under the roll schedule.
 
-    **Deliberately not policy-keyed, and deliberately not changed when DAY got
-    its own `ROLL_AT` (2026-08-25).** This is the *bar cache splice* rule, not
-    the roll schedule; they share `roll_at` only by history. Threading a policy
-    through here would have moved a live deployment's warm-up context as a side
-    effect of a day-session decision.
+    A timestamp belongs to its own calendar month until that month's
+    `roll_at`, and to the following month afterwards.
 
-    It also does not currently do what the comment below claims — see
-    `DAY_SESSION_PLAN.md` §4 C4a. MEASURED 2026-08-25 against
-    `TXF_RPT_minute_night.csv`: this rule flips **1 day 8 h 30 m before** the
-    tape actually splices, every month from 202601 to 202608. Left as-is
-    pending a decision, because changing it moves the pinned deployment's
-    context."""
-    # Tech: a timestamp belongs to its own calendar month until that month's
-    #       roll instant, and to the following month afterwards.
-    # Why:  this is the splice rule the bar cache uses, and it has to be the
-    #       *same* rule the live stream switches on — otherwise the warm-up
-    #       context and the tape disagree for a day and a half every month, in a
-    #       way nothing would detect. MEASURED 2026-08-23: the evaluated series
-    #       (`TXF_RPT_minute_night.csv`) carries exactly one contract per minute
-    #       and switches on the calendar, so `load_minute_bars`'s highest-volume
-    #       collapse never chose anything there — volume is not the convention the
-    #       model was evaluated on, and a calendar rule is.
+    **`policy` defaults to None, which is NIGHT's 15:30 — the module default —
+    so the live deployment's warm-up context does not move.** This parameter was
+    added for TAPE_REBUILD_PLAN T0 and is deliberately opt-in: the reason this
+    function resisted being policy-keyed is that threading a policy through it
+    would have moved a *pinned* deployment's context as a side effect of a
+    day-session decision. Passing one is now how the **tape builder** asks for a
+    given deployment's splice; nothing on the live path passes one.
+
+    §0.3's divergence (this rule flipping 1 d 8 h 30 m before the tape spliced)
+    is not fixed by changing this function — it is fixed by the tape adopting
+    it. See `roll_calendar`.
+    """
+    # Why:  the bar cache and the live stream must switch on the *same* rule, or
+    #       the warm-up context and the tape disagree for a day and a half every
+    #       month in a way nothing would detect. MEASURED 2026-08-23: the
+    #       evaluated series carries exactly one contract per minute and switches
+    #       on the calendar, so `load_minute_bars`'s highest-volume collapse
+    #       never chose anything there — volume is not the convention the model
+    #       was evaluated on, and a calendar rule is.
     ts = datetime(ts.year, ts.month, ts.day, ts.hour, ts.minute)
     this_month = f"{ts.year}{ts.month:02d}"
-    if ts < roll_at(this_month):
+    if ts < roll_at(this_month, policy):
         return this_month
-    y, m = (ts.year + 1, 1) if ts.month == 12 else (ts.year, ts.month + 1)
-    return f"{y}{m:02d}"
+    return _next_month(this_month)
+
+
+def front_month_series(timestamps: Any, policy: Any = None):
+    """`front_month_at` for a whole column, as a numpy array of month strings.
+
+    Same rule, same answers — asserted against the scalar form over every minute
+    of the tape's span. Vectorised because the tape builder applies it to
+    288 943 166 tick rows, where a per-row Python call is not an option.
+    """
+    # Tech: the front month is the first one whose roll instant is still ahead,
+    #       so a right-side `searchsorted` into the ascending roll calendar is
+    #       the whole computation.
+    # Why:  equivalent to the scalar branch above — a timestamp in month m is
+    #       before `roll_at(m)` exactly when `searchsorted` places it at m's
+    #       index, and `roll_at(m-1)` already lies in the previous calendar
+    #       month so it can never be the answer.
+    import numpy as np
+    import pandas as pd
+
+    ts = pd.DatetimeIndex(pd.to_datetime(timestamps)).floor("min")
+    if len(ts) == 0:
+        return np.array([], dtype=object)
+    first = f"{ts.min().year}{ts.min().month:02d}"
+    last = _next_month(f"{ts.max().year}{ts.max().month:02d}")
+    bounds, months = roll_calendar(first, last, policy)
+    idx = np.searchsorted(np.array(bounds, dtype="datetime64[ns]"),
+                          ts.to_numpy(), side="right")
+    return np.asarray(months, dtype=object)[idx]
 
 
 @dataclass

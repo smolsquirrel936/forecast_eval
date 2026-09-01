@@ -26,8 +26,10 @@ from forecast_eval.live.roll import (
     RollSchedule,
     RollWatch,
     front_month_at,
+    front_month_series,
     last_trading_day,
     roll_at,
+    roll_calendar,
     roll_at,
 )
 from forecast_eval.live.sessions import SessionPolicy
@@ -877,3 +879,117 @@ def test_a_full_day_deployment_rolls_on_the_same_schedule_as_day():
             == roll_at("202609", SessionPolicy.day()))
     assert (roll_at("202609", SessionPolicy.both())
             != roll_at("202609", SessionPolicy.night()))
+
+
+# ---- TAPE_REBUILD_PLAN T0 — one splice rule, shared by the tape and the cache -
+#
+# T0's acceptance is two claims: the rule agrees with `front_month_at` on every
+# splice 2017-2026, and it never names a contract that has stopped trading.
+# Both are asserted here over the tape's full span rather than sampled.
+
+T0_FIRST, T0_LAST = "201705", "202612"          # the tape's span, plus runway
+
+
+def _all_months(first=T0_FIRST, last=T0_LAST):
+    out = [first]
+    while out[-1] < last:
+        y, m = int(out[-1][:4]), int(out[-1][4:6])
+        out.append(f"{y + 1}01" if m == 12 else f"{y}{m + 1:02d}")
+    return out
+
+
+def test_roll_calendar_is_ascending_and_covers_every_month():
+    bounds, months = roll_calendar(T0_FIRST, T0_LAST)
+    assert months == _all_months()
+    assert bounds == sorted(bounds), "roll instants must be ascending"
+    assert len(set(bounds)) == len(bounds), "two months cannot roll at once"
+    # one roll per delivery month, and TAIFEX lists one per calendar month
+    assert len(bounds) == len(months)
+
+
+@pytest.mark.parametrize("policy", [None, SessionPolicy.night(),
+                                    SessionPolicy.day(), SessionPolicy.both()])
+def test_vectorised_rule_equals_the_scalar_one_at_every_splice(policy):
+    """T0's first acceptance criterion. Checked at the splice instants and the
+    minutes either side of them -- where the two forms could disagree -- for
+    every month 2017-2026."""
+    probes = []
+    for m in _all_months():
+        r = roll_at(m, policy)
+        probes += [r - timedelta(minutes=1), r, r + timedelta(minutes=1)]
+    got = front_month_series(probes, policy)
+    for ts, g in zip(probes, got):
+        assert g == front_month_at(ts, policy), f"{ts} under {policy}"
+
+
+def test_vectorised_rule_equals_the_scalar_one_across_the_whole_span():
+    """Not just at the splices: every 6 h from 2017 to 2026."""
+    ts = pd.date_range("2017-05-15", "2026-12-31", freq="6h")
+    got = front_month_series(ts)
+    for t, g in zip(ts, got):
+        assert g == front_month_at(t)
+
+
+def test_the_rule_never_names_a_contract_that_has_stopped_trading():
+    """T0's second acceptance criterion -- "no dead-contract minutes".
+
+    The expiring month stops trading at 13:30 on its last trading day. A splice
+    rule that ever returned a month already past that instant would attribute
+    prints to a contract that cannot produce them, which is Defect A (0.2) in
+    rule form rather than in the data."""
+    ts = pd.date_range("2017-05-15", "2026-12-31", freq="1h")
+    got = front_month_series(ts)
+    for t, month in zip(ts, got):
+        dies = datetime.combine(last_trading_day(month), time(13, 30))
+        assert t.to_pydatetime() < dies, (
+            f"{t} was attributed to {month}, which stopped trading {dies}"
+        )
+
+
+def test_every_policy_splices_before_the_contract_it_leaves_dies():
+    """The same claim from the other side: each roll instant precedes the death
+    of the month being left, with the whole ROLL_WINDOW still to spare."""
+    for policy in (None, SessionPolicy.night(), SessionPolicy.day(),
+                   SessionPolicy.both()):
+        for m in _all_months():
+            dies = datetime.combine(last_trading_day(m), time(13, 30))
+            assert roll_at(m, policy) + ROLL_WINDOW < dies, (m, policy)
+
+
+def test_day_and_full_day_splice_together_and_night_does_not():
+    """TAPE_REBUILD_PLAN 2.3 as amended -- three tapes, two splice points."""
+    day, night, both = (SessionPolicy.day(), SessionPolicy.night(),
+                        SessionPolicy.both())
+    for m in _all_months():
+        assert roll_at(m, day) == roll_at(m, both)
+        assert roll_at(m, night) != roll_at(m, day)
+        # night splices later on the same date
+        assert roll_at(m, night) > roll_at(m, day)
+        assert roll_at(m, night).date() == roll_at(m, day).date()
+
+
+def test_the_two_splice_points_disagree_by_2h45m_on_every_roll_date():
+    """The window in which the day/combined tapes and the night tape hold
+    DIFFERENT delivery months: 12:45-15:30 on the roll date. Only 15:00-15:30 of
+    it is inside a traded session, so it costs 30 traded minutes a roll -- but
+    the tapes disagree for the whole 2h45m, which is what a reconciliation
+    between them has to allow for."""
+    day, night = SessionPolicy.day(), SessionPolicy.night()
+    for m in _all_months():
+        gap = roll_at(m, night) - roll_at(m, day)
+        assert gap == timedelta(hours=2, minutes=45)
+
+
+def test_default_policy_is_night_so_the_pinned_context_does_not_move():
+    """The reason this function resisted a policy parameter. Omitting it must
+    reproduce the module default exactly."""
+    for m in _all_months():
+        assert roll_at(m) == roll_at(m, SessionPolicy.night())
+    ts = pd.date_range("2020-01-01", "2026-12-31", freq="7h")
+    a = front_month_series(ts)
+    b = front_month_series(ts, SessionPolicy.night())
+    assert list(a) == list(b)
+
+
+def test_front_month_series_handles_an_empty_column():
+    assert len(front_month_series([])) == 0
