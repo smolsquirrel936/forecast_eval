@@ -7,6 +7,11 @@ instants. Investigating that turned up a larger defect in the tape itself.
 **Nothing has been built and no rebuild has been run.** Two decisions in §6 are
 the user's and are not assumed anywhere above them.
 
+**Re-verified 2026-09-01 — still true, and both defects are still in the file.**
+The day tape was re-measured end-to-end against §0; the numbers confirm it, one
+new finding is added, and one cross-plan claim in §1 turns out not to hold as
+written. See **§0.5**.
+
 **Status of the proposal:** the user proposed re-making the tape on a new rule
 rather than changing the code to match the old one. That direction is right —
 §1 is the evidence — but the specific instant proposed needs adjusting (§2.2).
@@ -111,6 +116,74 @@ months, and they are not close:
 
 The strategy's band is **0.00045**, so the two series differ by **4×–16× a band
 width** across ~1 500 minutes a month.
+
+### 0.5 Re-verification, 2026-09-01 — the defects survived the 2026-08-24 regeneration
+
+Measured directly on
+`D:\…\dataset\RPT\TXF_RPT_minute_day.csv`, asked as a plain question: does
+this file still need rebuilding? **Yes.**
+
+The file has not changed since this plan was written: mtime **2026-08-24
+03:53:26**, 73 743 465 bytes. That regeneration (`DAY_SESSION_PLAN.md` §2.2)
+extended coverage to 2026-08-21 but kept `min(contract)` per `trading_date`, so
+it fixed neither defect. §0's own figures reproduce exactly — 1 145 145 rows,
+2011-01-03 → 2026-08-21, 188 splices.
+
+**Defect A — confirmed, and quantified across the whole tape.** §0.2 measured a
+representative roll; this is all 189 of them:
+
+| | measured 2026-09-01 |
+|---|---|
+| last-trading-day sessions | 189 |
+| median bars on one | **285** (a full DAY session is 300) |
+| ending 13:29 or 13:30 rather than 13:44 | **187 / 189** |
+| total bars missing | **2 782** |
+| missing inside `DAY_SESSION_PLAN` W5's eval window | **1 157**, across 79 expiries |
+
+Every one of the last nine expiries is short by 14–15 bars, `202608` on
+2026-08-19 included — the same contract §0.2 measured at tick level.
+
+**Defect B — confirmed.** **183 of 187** splices land exactly **1 calendar day**
+after the outgoing contract's last trading day, which is §0.3's "the session
+after expiry" rule seen from the day side. The four exceptions are the holiday
+cases §0.3 already names.
+
+**New — 1 215 rows the tape carries and nothing consumes.** Not in §0, found on
+the way. Rows stamped **13:45**, on ~32 % of dates, median volume **4** against
+**2 191** on the 13:44 bar. Both `SessionPolicy.day().label()` and
+`environment.classify_session()` return `None` for 13:45, so the live aggregator
+and `run_backtest` **both already drop them** — this is not a correctness defect
+and it is not an argument for the rebuild. It matters for one reason: it makes
+raw row counts disagree with in-session bar counts (the night tape has 82 such
+rows), which is how `real_data.py` came to print a train/eval split it was not
+using. Fixed there; recorded here so the rebuild does not reintroduce it or
+"fix" it into something the session filters would start accepting.
+
+**Consequence the rebuild has to plan for: `warmup_bars` will not survive it.**
+`DAY_SESSION_PLAN` §2.2 made warmup-in-bars the reproducibility mechanism, and
+that holds for a tape growing **at the end**. A bar count is an index into the
+in-session sequence, so **inserting** bars *before* the split moves what it
+points at — and fixing Defect A restores ~15 day bars at **every** expiry, ~63 of
+which precede 2020-03. After T0–T4, `674 498` names a different bar than it does
+today. **Every `warmup_bars` in `results.tsv` must be recomputed from a target
+timestamp, not carried across as a number**, or the re-measurement reproduces
+§2.2's alignment trap with a new cause.
+
+**§1's W7 claim does not hold as written.** §1 says the roll holes make this
+rebuild "a prerequisite for `DAY_SESSION_PLAN.md` W7, not an unrelated cleanup",
+while that plan's §5 says W7 "does not read the tape" and is unaffected. **W7 was
+built 2026-09-01 the way its own plan specifies — V0-style, on synthetic ticks
+with a deterministic fake forecaster — so it never spans a real roll and passed
+without touching any of this.** Both statements are therefore true of different
+things, and the disagreement is worth naming rather than leaving for someone to
+rediscover:
+
+- the *transcription* parity W7 delivers (live loop ≡ `run_backtest`, same bars
+  in) is genuinely independent of the tape, and is done;
+- the *tape-spanning* parity §1 is describing — replaying the real evaluated
+  series across a roll — **has not been done, and cannot pass today**, because
+  the two series structurally differ there. That is a real gap, it is not W7,
+  and it only becomes checkable after this rebuild.
 
 ---
 
