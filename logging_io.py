@@ -11,7 +11,7 @@ Persists the four backtest artifacts as parquet (fallback to CSV when
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, fields as dc_fields
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence, Union
@@ -79,11 +79,39 @@ def _write(df: pd.DataFrame, path: Path) -> Path:
     return path
 
 
+# Tech: the columns each artifact carries when it has no rows.
+# Why:  MEASURED 2026-09-02. `pd.DataFrame([])` has no columns, so an empty
+#       artifact was written as a bare newline and `pd.read_csv` raised
+#       `EmptyDataError: No columns to parse from file` — which made
+#       `generate_report` fail on any run with no trades. That is the *normal*
+#       state of a live run (0.18-0.37 orders/night) and of any short one, so a
+#       soak's report silently never rendered. Deriving the names from the
+#       dataclasses keeps them tracking the event definitions; `signals` has no
+#       dataclass, so its keys are stated where the loop builds them.
+_EMPTY_COLUMNS = {
+    "fills": [f.name for f in dc_fields(FillEvent)],
+    "orders": [f.name for f in dc_fields(OrderEvent)],
+    "trades": [f.name for f in dc_fields(TradeRecord)],
+    "forecasts": ["timestamp", "horizon_bars", "predicted_return",
+                  "predicted_price", "last_price"],
+    "signals": ["timestamp", "direction", "price", "session", "strength"],
+}
+
+
+def _frame(rows, kind: str) -> pd.DataFrame:
+    # Tech: build the frame, falling back to the named schema when there are no
+    #       rows.
+    # Why:  an empty artifact must still be *readable* — a reader that raises on
+    #       "no trades yet" cannot distinguish it from a corrupt file, and every
+    #       consumer would need its own special case.
+    return pd.DataFrame(rows) if rows else pd.DataFrame(columns=_EMPTY_COLUMNS[kind])
+
+
 def write_fills(fills: Sequence[FillEvent], path: PathLike) -> Path:
     # Tech: turn each FillEvent dataclass into a row and write the frame.
     # Why:  asdict flattens the dataclass to columns automatically, so the schema
     #       tracks the event definition with no manual field list to keep in sync.
-    df = pd.DataFrame([asdict(f) for f in fills])
+    df = _frame([asdict(f) for f in fills], "fills")
     return _write(df, Path(path))
 
 
@@ -91,7 +119,7 @@ def write_orders(orders: Sequence[OrderEvent], path: PathLike) -> Path:
     # Tech: same dataclass→rows conversion for OrderEvents.
     # Why:  the orders log captures intent (including orders that never filled),
     #       which fills alone can't show — useful for debugging missed executions.
-    df = pd.DataFrame([asdict(o) for o in orders])
+    df = _frame([asdict(x) for x in orders], "orders")
     return _write(df, Path(path))
 
 
@@ -111,7 +139,7 @@ def write_forecasts(forecasts: Sequence[Forecast], path: PathLike) -> Path:
             "predicted_price": payload.get("predicted_price"),
             "last_price": payload.get("last_price"),
         })
-    return _write(pd.DataFrame(rows), Path(path))
+    return _write(_frame(rows, "forecasts"), Path(path))
 
 
 def write_signals(signals: Iterable[dict], path: PathLike) -> Path:
@@ -119,14 +147,14 @@ def write_signals(signals: Iterable[dict], path: PathLike) -> Path:
     # Why:  the run loop records signals as dicts (with emit-time price/session); no
     #       conversion is needed, and materializing the iterable to a list lets pandas
     #       infer columns in one shot.
-    return _write(pd.DataFrame(list(signals)), Path(path))
+    return _write(_frame(list(signals), "signals"), Path(path))
 
 
 def write_trades(trades: Sequence[TradeRecord], path: PathLike) -> Path:
     # Tech: flatten each TradeRecord dataclass to a row.
     # Why:  round-trips are the unit of trading analysis; persisting them means
     #       reports/notebooks can read PnL per trade without re-pairing fills.
-    df = pd.DataFrame([asdict(t) for t in trades])
+    df = _frame([asdict(x) for x in trades], "trades")
     return _write(df, Path(path))
 
 

@@ -44,3 +44,18 @@ is conservative: every existing caller must keep producing the same artifact.
 
 ## Related
 [metrics.py](metrics.md) · [reports.py](reports.md) · [run.py](run.md) · [SPEC §8](../SPEC.md)
+
+## Empty artifacts carry their columns
+
+MEASURED 2026-09-02, from a real live run. `pd.DataFrame([])` has no columns, so
+an artifact with no rows was written as a bare newline and `pd.read_csv` raised
+`EmptyDataError: No columns to parse from file`. `generate_report` therefore
+failed on **any** run that took no trades — which is the ordinary state of a live
+run at 0.18–0.37 orders/night, and of every short one — and because `write_all`
+swallows report failures by design, the only symptom was a run directory with no
+`report.html` in it.
+
+`_EMPTY_COLUMNS` names the schema for each artifact so the header is written
+either way. The names come from the dataclasses (`FillEvent`, `OrderEvent`,
+`TradeRecord`) so they track the event definitions; `signals` has no dataclass,
+so its keys are stated there and match where `LiveLoop` builds them.

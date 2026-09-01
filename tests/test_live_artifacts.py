@@ -128,6 +128,46 @@ def test_generate_report_renders_from_a_live_run_directory(live_dir):
     assert (live / "report.html").exists()
 
 
+# ---- the empty run, which is what a live run normally is --------------------
+
+
+@pytest.fixture(scope="module")
+def empty_dir(tmp_path_factory):
+    """A run that saw a few bars and took no trades — the ordinary live case at
+    0.18-0.37 orders/night, and what a short run always looks like."""
+    from forecast_eval.run import BacktestResult
+
+    d = tmp_path_factory.mktemp("empty")
+    write_all(BacktestResult(portfolio=Portfolio(contract_multiplier=MULTIPLIER),
+                             n_bars=3, n_signals=0, n_orders=0, n_forecasts=0),
+              d, ext=".csv", auto_report=False)
+    return d
+
+
+@pytest.mark.parametrize("name", ARTIFACTS)
+def test_an_empty_artifact_still_carries_its_columns(name, empty_dir):
+    """MEASURED 2026-09-02, from a real live run. `pd.DataFrame([])` has no
+    columns, so an empty artifact was written as a bare newline and `read_csv`
+    raised `EmptyDataError: No columns to parse from file`. A reader cannot tell
+    that apart from a corrupt file, and every consumer would need its own special
+    case for "nothing happened yet"."""
+    df = pd.read_csv(empty_dir / f"{name}.csv")
+    assert len(df) == 0
+    assert list(df.columns), f"{name}.csv has no header row"
+
+
+def test_the_report_renders_for_a_run_that_took_no_trades(empty_dir):
+    """The symptom that found it: a live run wrote its artifacts, printed
+    `artifacts: ...`, and had no report — because `write_all` swallows report
+    failures by design, so the `EmptyDataError` never surfaced. A soak whose
+    first night takes zero orders is the normal case, not a broken one."""
+    pytest.importorskip("matplotlib")
+    from forecast_eval.reports import generate_report
+
+    assert generate_report(empty_dir)
+    assert (empty_dir / "report.html").exists()
+
+
 # ---- the gates, which are the only genuinely new behaviour -----------------
 
 
