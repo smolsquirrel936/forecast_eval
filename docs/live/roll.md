@@ -230,12 +230,25 @@ differed, the warm-up context and the tape would disagree for a day and a half
 every month and nothing would detect it.
 
 **MEASURED 2026-08-23**, which is why the rule is a calendar and not volume: all
-three RPT files — including `TXF_RPT_minute_night.csv`, the one the pinned config
-was evaluated on — carry **exactly one contract per minute**, so
-`load_minute_bars`'s highest-volume collapse never chose anything. The evaluated
-series is spliced by calendar, switching one day after each expiry, with a seam
-whose median jump is **0.70 %** (95 points) against a median ordinary minute of
-0.0095 %. Volume was never the convention; a calendar is.
+four RPT tapes — including `TXF_RPT_minute_night.csv`, the one the pinned config
+is evaluated on — carry **exactly one contract per minute**, so
+`load_minute_bars`'s highest-volume collapse never chose anything. Volume was
+never the convention; a calendar is.
+
+**The tape adopted *this* calendar on 2026-09-01** (`TAPE_REBUILD_PLAN.md` T2).
+It used to splice one day *after* each expiry; it now splices at
+`roll_at(month, policy)` — the instant the deployment actually rolls. Measured on
+the night tape, over the same 112 roll seams, that made the seam markedly
+smaller:
+
+| | median \|jump\| at a roll seam | in points | median ordinary minute |
+|---|---|---|---|
+| pre-rebuild (one day after expiry) | 0.7267 % | ~116 | 0.0096 % |
+| **rebuilt (`roll_at`)** | **0.2533 %** | **~40** | 0.0096 % |
+
+Splicing *before* expiry rather than after lands the seam where the two delivery
+months are closer, so the evaluated series is now not only aligned with live but
+discontinuous by about a third as much.
 
 Live's seam is smaller than the evaluated one — the switch happens mid-session, so
 the jump is pure basis rather than basis plus a whole day session's move — and it

@@ -33,11 +33,17 @@ month *behind* it matters at exactly one moment — a warm-up that spans a roll:
 - **expired contracts are delisted** (§2.8 Finding D), so the month that just
   settled cannot be fetched from the venue at all.
 
-**The splice rule is a calendar, and that was measured** (2026-08-23). All three
-RPT files — including `TXF_RPT_minute_night.csv`, the file the pinned config was
-evaluated on — carry **exactly one contract per minute**, so the highest-volume
-collapse never chose anything: the evaluated series is spliced by calendar,
-switching one day after each expiry. Volume was therefore never the convention.
+**The splice rule is a calendar, and that was measured** (2026-08-23, re-verified
+2026-09-01). All four RPT tapes — including `TXF_RPT_minute_night.csv`, the file
+the pinned config was evaluated on — carry **exactly one contract per minute**, so
+the highest-volume collapse never chose anything. Volume was therefore never the
+convention.
+
+**Which calendar instant changed on 2026-09-01** (`TAPE_REBUILD_PLAN.md` T2). The
+tape used to switch **one day after each expiry** — a rule no deployment could
+execute, since the roll must precede expiry to be tradeable. It now switches at
+`roll_at(month, policy)`, i.e. at this module's own `front_month_at`. Tape and
+live stream are one rule, and the §0.3 divergence of 1 d 8 h 30 m is closed.
 It stays as the *tie-break*, because a minute the front month did not print is
 better filled from the other month than dropped.
 

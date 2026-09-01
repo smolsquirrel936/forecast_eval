@@ -124,9 +124,22 @@ Three invariants make this honest (all enforced in code + tests):
 | [test_toto2.py](test_toto2.md) | Toto2 smoke test | the smallest "is the model wired up" check |
 | [tests/](tests.md) | Unit + integration suite | what's covered and how to run it |
 
+**Offline tools** — run by hand, never imported by the framework. The first three
+are the evaluated-tape rebuild (`TAPE_REBUILD_PLAN.md`), in the order they run.
+
+| file | what it is | open it when you want… |
+|---|---|---|
+| [tools/build_minute_bycontract.py](tools/build_minute_bycontract.md) | raw `.rpt` → minute bars per `(contract, minute)` | to rebuild the tape source from 55 GB of TAIFEX files (~28 min) |
+| [tools/build_session_tapes.py](tools/build_session_tapes.md) | that intermediate → the four evaluated tapes | to re-cut day / night / combined / full-day on their own splice instants (33 s) |
+| [tools/diff_tapes.py](tools/diff_tapes.md) | old tape vs new, attributed by cause | to know *why* a bar moved — splice, unstable sort, duplicate file, or session filter |
+| [tools/band_sweep.py](tools/band_sweep.md) | band × min-prob search, scored out-of-sample | to re-run W5b's grid off one GPU precompute (~160 s for 33 cells) |
+| [tools/roll_at_measure.py](tools/roll_at_measure.md) | per-session liquidity around the roll | the raw evidence behind `ROLL_AT` (C4) |
+
 > `__init__.py` files (`forecast_eval/__init__.py`, and the package `__init__.py`
 > under `data/`, `forecaster/`, `strategy/`, `exits/`, `tests/`, `live/`,
 > `live/broker/`) are empty or near-empty package markers — nothing to document.
+> `tools/` has no `__init__.py` — it is a namespace package, which is why the
+> tools run as `python -m forecast_eval.tools.<name>` from `night/`.
 
 ## The live path
 

@@ -358,7 +358,10 @@ folder-scope rule. Under Shape A they matter less — no live work happens in
 
 Found while verifying this plan on 2026-08-24, and not known to any section above
 it. `dataset/RPT/` was regenerated at **03:53**, with `.bak` copies of the
-previous files left beside the new ones:
+previous files left beside the new ones. **Those `.bak` files were deleted
+2026-09-01** — the row counts below are unaffected (they were counted from the
+files while they existed), and the vintage itself is reconstructible from
+`_prerebuild_backup_20260901/` by the recipe in `dataset/NOTE.md`:
 
 | file | rows before → after | coverage ends |
 |---|---|---|
@@ -752,7 +755,8 @@ front-month-continuous — one contract per minute, measured 2026-08-23 and
 recorded in `real_data.load_minute_bars`' own docstring. On the roll date
 2026-08-18 it holds 300 day-session rows, **all `202608`**; the incoming month is
 absent. `TXF_RPT_ticks.csv` is the same series at tick resolution and is equally
-front-month-only.
+front-month-only. (That file left `RPT/` on 2026-09-01 — archive copy only, in
+`_prerebuild_backup_20260901/`; the observation still holds of it.)
 
 The raw TAIFEX `dataset/RPT/extracted_data/Daily_*.rpt` files carry **every**
 listed month and are the only source here that can. Measured from them, product

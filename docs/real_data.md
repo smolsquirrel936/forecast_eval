@@ -38,13 +38,21 @@ and prints the metric pack plus a buy-and-hold floor.
 ## The contract collapse is a no-op — measured
 `load_minute_bars` keeps the highest-volume row per minute when a `contract`
 column is present, on the assumption that several months print the same minute.
-**They do not.** All three RPT files carry exactly one contract per minute (2026-08-23):
+**They do not.** All four RPT tapes carry exactly one contract per minute —
+measured 2026-08-23 and re-measured 2026-09-01 on the rebuilt vintage:
 
 | file | rows | minutes with >1 contract |
 |---|---|---|
-| `TXF_RPT_minute_night.csv` | 1 733 348 | **0** |
-| `TXF_RPT_minute_day.csv` | 1 124 790 | **0** |
-| `TXF_RPT_minute.csv` | 2 858 138 | **0** |
+| `TXF_RPT_minute_night.csv` | 1 849 007 | **0** |
+| `TXF_RPT_minute_day.csv` | 1 146 712 | **0** |
+| `TXF_RPT_minute.csv` | 2 995 727 | **0** |
+| `TXF_RPT_minute_fullday.csv` | 2 364 417 | **0** |
+
+The one file that *would* trip the collapse is
+`TXF_RPT_minute_bycontract.csv` — the rebuild's intermediate, which carries two
+delivery months per minute by design. It is not an evaluated tape and must never
+be passed to this loader; see
+[tools/build_session_tapes.md](tools/build_session_tapes.md).
 
 So the files arrive already front-month-continuous, spliced by **calendar** — 106
 of 108 seams land exactly one day after the expiring month's last trading day.

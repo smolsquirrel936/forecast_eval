@@ -1,7 +1,7 @@
 # [tools/build_minute_bycontract.py](../../tools/build_minute_bycontract.py)
 
 **Role:** rebuild the evaluated tape's *source* from raw TAIFEX files, stopping **before** the front-month choice.
-**Pipeline:** `dataset/RPT/extracted_data/Daily_*.rpt` (3 832 files, ~55 GB) → `TXF_RPT_minute_bycontract.csv` (4 551 359 bars, 0.27 GB) → `front_month_series(ts, policy)` → the three session tapes.
+**Pipeline:** `dataset/RPT/extracted_data/Daily_*.rpt` (3 832 files, ~55 GB) → `TXF_RPT_minute_bycontract.csv` (4 551 359 bars, 0.27 GB) → `front_month_series(ts, policy)` → the four session tapes.
 **Depends on:** nothing in the package (pandas only)   **Used by:** run by hand, once per rebuild — `TAPE_REBUILD_PLAN.md` T1
 
 ```powershell
@@ -20,7 +20,7 @@ The shipped pipeline (`process_txf.ipynb` cell 7) picks the front month with
 bakes **one** splice instant into the tick file and every tape derived from it.
 
 `TAPE_REBUILD_PLAN.md` §2.3 needs **two** — day and the combined full-day tape
-splice at 12:45, night at 15:30 — and none of the three tapes is a session-split
+splice at 12:45, night at 15:30 — and none of the three deployment tapes is a session-split
 of another. A single front-filtered series cannot express that. So the expensive
 pass stops one step earlier: it keeps the **two nearest listed months** and
 aggregates to minute bars *per contract*, leaving the choice to

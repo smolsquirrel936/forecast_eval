@@ -285,7 +285,7 @@ When `forced_close=True`, `metrics["trading"]` is replaced by `metrics["trading_
 
 * **Run from `night/`, not from inside `forecast_eval/`.** The `uv run python -m forecast_eval.xxx` form requires the parent. Direct execution (`python real_data.py`) only works for files with the `sys.path.insert(parent.parent)` trampoline at the top.
 * **Use `uv run` (the local `.venv`, Python 3.12) for anything touching `toto2`, `lightning`, or `pytest`.** See [AGENTS.md](../AGENTS.md) / [UV_SETUP.md](../UV_SETUP.md).
-* **The 1-min TXF file is ~17 % NaN rows** (session gaps / halts). [real_data.py:load_minute_bars](real_data.py) drops them — Toto2 propagates NaN otherwise.
+* **NaN rows depend entirely on which file you load** (measured 2026-09-01; an earlier "~17 %" here was right about neither). The legacy `tick/TXF_OHLC_1min.csv` is **47.9 % NaN** — it carries a row per calendar minute, most of which the market was closed for. The four `RPT/` minute tapes carry **0 NaN closes**: they hold only minutes that actually printed. [real_data.py:load_minute_bars](real_data.py) drops NaN closes either way, which matters because Toto2 propagates them.
 * **`context_length` must divide the model's `patch_size`** ([forecaster/toto2.py](forecaster/toto2.py) truncates automatically, but if you see a shape mismatch this is why).
 * **No-flip rule** ([SPEC.md §4.2](SPEC.md)): a SELL while long closes only — it does not flip to short. Same for BUY while short. Pyramiding is also disabled.
 * **Reusing stateful emitters / forecasters across sweep iterations is silently wrong.** Use factories (`make_emitter=lambda: ...`) for any object with per-run state.

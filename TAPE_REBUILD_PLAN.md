@@ -4,8 +4,11 @@
 `front_month_at` and the evaluated tape splice delivery months at different
 instants. Investigating that turned up a larger defect in the tape itself.
 
-**Nothing has been built and no rebuild has been run.** Two decisions in §6 are
-the user's and are not assumed anywhere above them.
+~~**Nothing has been built and no rebuild has been run.**~~ **Superseded — the
+rebuild ran on 2026-09-01 and T0–T7 are all complete.** Two decisions in §6 were
+the user's; both were taken. **See "Status" immediately below** — the numbered
+updates that follow it are a chronological log, and several of them state things
+("T6 is not started") that were true when written and are not true now.
 
 **Updated 2026-09-01 — §6's D1 and D2 are both taken, so the rebuild is no
 longer gated on a decision.** D1: NIGHT moves to the new tape, one vintage, not
@@ -56,12 +59,38 @@ recomputed from the target timestamp (520 004 → 538 790); a control run on the
 pre-rebuild tape reproduced 16.3122 exactly, so the change is the tape and not
 tree drift. But the forecast grid necessarily re-phased, and W4b measured phase
 *alone* moving Calmar 13.6742 → 8.7651. **§5.1** has the full table and says what
-that does and does not license. **T6 is not started** — re-pinning a mid-soak
-deployment to 3.6006 is a decision this run does not make on its own.
+that does and does not license. **T6 was not started at the time of writing** —
+re-pinning a mid-soak deployment to 3.6006 is a decision that run did not make on
+its own. (It was taken later the same day; see T6 and the Status block.)
 
 **Status of the proposal:** the user proposed re-making the tape on a new rule
 rather than changing the code to match the old one. That direction is right —
 §1 is the evidence — but the specific instant proposed needs adjusting (§2.2).
+
+---
+
+## Status — 2026-09-01, end of the rebuild
+
+**Every step T0–T7 is done.** The tape is rebuilt, the diff is attributed, NIGHT
+is re-pinned, and the DAY numbers are re-measured. What is left is **not process
+in this plan** — it is four hand-offs, listed here so they are not mistaken for
+unfinished rebuild work.
+
+| | what | where it is written up |
+|---|---|---|
+| **1** | **The T7 ledger edits, deliberately not applied.** Three DAY rows on `...@2026-09-01`, the two `PROVISIONAL` markers resolved, `DAY_SESSION_PLAN.md` §2.3's numbers, and `PINNED_DAY` re-pointed to Calmar **1.6937** on the new vintage (same cell — re-measure, not re-select). Left to the user at their instruction. | §5.2, "Decided … deliberately NOT applied here" |
+| **2** | **The phase confound is unresolved.** 16.3122 → 3.6006 is the tape correction *and* a fresh forecast-grid phase draw, in unknown proportion. A sweep at `538 790 + k` would separate them (~4.5 min a run). Offered and declined; nothing depends on it, but no one should quote 3.6006 as "the tape cost 4.5×" until it is done. | §5.1 |
+| **3** | **Two findings this rebuild produced that belong to other plans.** (a) The live path fills ~47 minutes a roll from the *outgoing* contract at a basis-sized offset, silently, into the warm-up context — `SHIOAJI_PLAN.md` records nothing about it. (b) Neither deployment beats buy-and-hold on the corrected tape; NIGHT went **+13 258.65 → −9 204.96**. | §2.4 and §5.2 |
+| **4** | **A full-day deployment still needs everything in D2's list.** The rebuild closed exactly one item on it — the tape, now `TXF_RPT_minute_fullday.csv` (§2.5). The `results.tsv` session column, the two one-session guards, `forced_close_on_session_end`, and a tuned configuration are all untouched. | §6 D2 |
+
+**One thing became checkable that was not before.** §0.5 records a *tape-spanning*
+parity check — replaying the real evaluated series across a roll against the live
+loop — as impossible while the two series structurally differed at every roll.
+They no longer do. That check is now possible and has still not been run; it is
+the most direct remaining test of what this whole plan was for.
+
+**Not committed as of this writing:** the T7 tooling (`tools/band_sweep.py` and
+its docs page), the full-day tape work, and the documentation edits above.
 
 ---
 
@@ -384,6 +413,13 @@ it does not roll — **the position expires**. So:
 **Day and combined share a splice; night is the odd one out.** (An earlier draft
 of this section had it the other way round, on the pre-amendment 15:30.)
 
+**AMENDED 2026-09-01 — there are four files, because the combined tape cannot be
+both the record and the tuning window.** See **§2.5**: `TXF_RPT_minute.csv` keeps
+every in-session minute back to 2011, and `TXF_RPT_minute_fullday.csv` is the
+slice from 2018-01-01 that a full-day deployment can actually be tuned on. Same
+policy, same 12:45 splice, same rows on every shared minute — only the window
+differs.
+
 > **This contradicts §3's pipeline, and the contradiction has to be resolved in
 > T0/T1 rather than discovered in T3.** §3 draws one front-month rule at cell 7
 > producing one tick file, one combined minute file, and then a *session split*
@@ -456,6 +492,64 @@ as a data-completeness one.
 > a basis-sized offset — into the warm-up context, silently. Nothing in
 > `SHIOAJI_PLAN.md` records it. Out of this plan's scope; worth its own look.
 
+### 2.5 The full-day tape — a fourth file, added 2026-09-01
+
+D2 reserved `TXF_RPT_minute.csv` as the full-day deployment's evaluated series
+and nobody checked what was in it. **A fifth of it is not full-day data.**
+
+**Measured.** TAIFEX had no after-hours session until **2017-05-15**, so the
+combined tape's first **468 524 bars (15.6 %)** — all of 2011–2016 — are DAY-only.
+There, a "session" is 300 bars where a full-day deployment's is 1 140.
+
+**The night hours did not change; the liquidity did.** The post-midnight tail
+ends at **04:59 in every month from 2017-05 onward**, so the session was always
+15:00–05:00. What ramps is how many of those 840 minutes actually print:
+
+| | median night coverage (bars / 840) |
+|---|---|
+| 2017-05 (launch month) | 0.479 |
+| 2017-06 … 2017-12 | **0.84 – 0.90** |
+| 2018-01 | 0.931 |
+| **2018-02** | **0.989** — first month at the plateau |
+| 2018-03 onward | 0.95 – 1.00 |
+
+So "full-day data" has two honest answers: it **exists** from 2017-05-15, and it
+becomes **representative** in 2018-02.
+
+**The cut is 2018-01-01**, a round boundary that excludes the whole 2017 ramp.
+January 2018 (0.931) is still short of the plateau and is kept anyway — one
+transitional month out of 8.6 years is a smaller distortion than an
+unexplainable start date. `FULLDAY_START` in
+[tools/build_session_tapes.py](tools/build_session_tapes.py) is the one place to
+change it: 2018-02-01 for the strict reading, 2017-05-15 to take every full-day
+minute that exists.
+
+| | |
+|---|---|
+| file | `dataset/RPT/TXF_RPT_minute_fullday.csv` |
+| bars | **2 364 417** (78.9 % of the combined tape) |
+| span | 2018-01-02 08:45 → 2026-08-21 13:44 |
+| splice | **12:45**, `SessionPolicy.both()` — identical to `TXF_RPT_minute.csv` |
+| bytes | 154 418 391 |
+
+**Why not just truncate the combined tape.** The two files answer different
+questions and one file cannot answer both. `TXF_RPT_minute.csv` is the *record* —
+every in-session minute the source has, and the DAY deployment's history
+genuinely reaches back to 2011, so truncating would discard six years of real
+data. `TXF_RPT_minute_fullday.csv` is the *tuning window*.
+
+**It is a window, never a second splice rule.** The builder truncates *after* the
+front-month selection and asserts on every run that the result equals the
+combined tape's suffix bar-for-bar — verified `True`. A start date that quietly
+changed which contract a minute carries would be exactly the class of hidden
+second rule this whole plan exists to remove.
+
+> **This does not make a full-day deployment ready.** §6 D2's "what a third
+> deployment would still need" list is unchanged and none of it is done — the
+> `results.tsv` session column, the two one-session guards, `forced_close`, and a
+> tuned configuration of its own. What changes is only that the *data* it would
+> be tuned on now exists as a named file instead of as a trap inside another one.
+
 ---
 
 ## 3. Scope — what has to be rebuilt
@@ -489,6 +583,15 @@ dataset/RPT/TaifexRPT/**.zip        (raw, all months)     <- the only clean sour
 minute files are what analysis code reads" — and nothing in the repo reads it.
 Rebuilding it would cost 8.6 GB and could still only carry one splice instant.
 The pre-rebuild copy is kept in `_prerebuild_backup_20260901/`.
+
+> **And it left `RPT/` entirely on 2026-09-01.** Once the session tapes no longer
+> derive from it, a 9.19 GB file that nothing opens and that still carries the
+> old front-month rule is a liability rather than an asset — the next person to
+> find it would have no way to tell from the filename that it is the *un*fixed
+> series. It is byte-identical inside `_prerebuild_backup_20260901/`
+> (`sha256 9b8ec441…`), which is the right place for it: an archive, labelled as
+> one. `dataset/NOTE.md` keeps its documented quirks, which are the evidence
+> behind §0.6's Defect C.
 
 **Why two nearest months rather than all of them:** the front-month choice belongs
 to the splice rule, and any rule between two adjacent months needs both present.
@@ -582,8 +685,12 @@ against a first live roll on **2026-09-15**, with V5 not yet passed.
 ## 5. Order of work
 
 ```
-T0  pin the new rule as one function, with tests        -> verify: agrees with front_month_at on every
-    (shared by the notebook and front_month_at)            splice 2017-2026; no dead-contract minutes
+T0  [DONE 2026-09-01, commit 8ed6add] pin the new rule  -> VERIFIED: roll_calendar / front_month_series
+    as one function, with tests (shared by the tape         in live/roll.py, asserted against the scalar
+    builder and front_month_at)                             front_month_at over the tape's whole span;
+    [marker added retrospectively -- the step was            covered in tests/test_live_roll.py. The
+    committed but never ticked here]                         dead-contract half was verified in T2 (0 in
+                                                            all four tapes).
 T1  [DONE 2026-09-01] build                             -> VERIFIED: applying the OLD rule to the
     TXF_RPT_minute_bycontract.csv from extracted_data/      intermediate reproduces the shipped tape's
     -- one pass, NO front-month choice.                     2 933 058 bars EXACTLY: 0 missing, 0 extra.
@@ -643,10 +750,20 @@ T6  [DONE 2026-09-01] re-pin NIGHT to the new row (D1)  -> VERIFIED: results.tsv
                                                            outside config.py. Identical orders before
                                                            and after, so there is no behaviour to
                                                            re-soak; V4's 3 fill-gap samples stay valid.
-T7  re-run W4b, W5a and W5b on the new tape             -> verify: the DAY rows lose PROVISIONAL.
-    [NOT "only then run W5a/W5b" -- those are already          warmup_bars must be RECOMPUTED from a
-    done provisionally, see 4. This is the re-measure.]        target timestamp, never carried across
-                                                              as a number (0.5)
+T7  [MEASURED 2026-09-01] re-run W4b, W5a and W5b on    -> W4b: satisfied by T5 -- the night baseline IS
+    the new tape.                                          that run (16.3122 -> 3.6006). Not re-run.
+    [NOT "only then run W5a/W5b" -- those are already    -> W5a: 0.2671 -> 0.4129 (230 trades). Night's
+    done provisionally, see 4. This is the re-measure.]     config still does NOT transfer, but the gap
+    DAY warmup RECOMPUTED 674 498 -> 676 123, holding      narrowed from 61x to 8.7x -- because NIGHT
+    the eval window at 2020-03-11 08:49 (carrying the      fell, not because DAY rose.
+    number would have started 2020-03-03).              -> W5b: the RIDGE survives, the LEVEL does not.
+    W5b re-run by tools/band_sweep.py -- W5b's own          band 0.001-0.0015 x min_prob 0.5-0.65 is
+    harness was ad hoc and did not survive as a file.       still where the non-degenerate cells sit;
+    Three cells CLI-confirmed against the sweep.           worst-half 3.1557 -> 0.9967 for the pinned
+                                                           cell. spearman(h1,h2) 0.45 -> 0.39.
+                                                        -> NEW: the worst-half rule is INSUFFICIENT as
+                                                           written -- see 5.2. And neither deployment
+                                                           now beats buy-and-hold (5.2).
 ```
 
 T0–T4 need no GPU. T5 is ~4 minutes (§2.13's instrument).
@@ -700,14 +817,101 @@ calendar windows and called the difference the tape.
 time was the binding constraint, on the implicit expectation that the pinned
 parameters would still be worth pinning. A Calmar of 3.6006 that also trails
 buy-and-hold by 10 638 points is the case that expectation did not cover. Whether
-that reopens D1 is the user's call and is **not assumed here**; T6 is not started.
+that reopens D1 is the user's call and is **not assumed here**. (Written before
+T6; the user chose to re-pin as measured rather than reopen D1.)
+
+### 5.2 T7's results, and two things the rebuild exposed
+
+DAY warmup recomputed from its target timestamp, **674 498 → 676 123**, holding
+the eval window at 2020-03-11 08:49 → 2026-08-21 13:44. Carrying the number
+across would have started it 2020-03-03, eight days early.
+
+| | provisional (old tape) | **re-measured (new tape)** |
+|---|---|---|
+| NIGHT baseline (W4b) | 16.3122 | **3.6006** — this is T5, not re-run |
+| W5a transfer probe | 0.2671 | **0.4129** (230 trades, net +5 973.62, dd −14 467.83) |
+| W5b pinned cell `0.001/0.65` | 4.6805 | **1.6937** (67 trades, net +9 748.01, dd −5 755.50) |
+| W5b best non-degenerate | `0.001/0.65`, worst 3.1557 | **`0.00125/0.65`, worst 1.1664**, full 1.8859 |
+| spearman(h1, h2) | 0.45 | 0.39 |
+
+**W5a's verdict stands, but its arithmetic inverted.** Night's configuration
+still does not transfer to day — 0.4129 against 3.6006 — but the gap fell from
+**61× to 8.7×**, and it fell because **NIGHT dropped**, not because DAY improved.
+W5a's own reasoning is untouched: it argued the probe's verdict is "search, not
+futile" from *forecast quality being equally poor on both sides*, and that
+remains true (day IC −0.0040 / hit rate 0.4967).
+
+**W5b's ridge survives, its level does not.** The stable region is still
+`band 0.001–0.0015 × min_prob 0.5–0.65`, and the best cell is adjacent to the old
+pick. Every number in it is about a third of what it was.
+
+> **The worst-half selection rule is insufficient as written, and only the
+> rebuilt tape showed it.** On the old tape the degenerate corner won the
+> *full-window* ranking, so ranking on the worse half was enough to exclude it.
+> On the rebuilt tape the top cell **by worst half** is `band=0.005, min_prob=0.8`
+> — **9 trades**, 5 and 4 across the halves, with an **infinite** h2 Calmar
+> because a 4-trade half never drew down. W5b supplied a minimum-trades floor by
+> judgment and never wrote it down; `tools/band_sweep.py` now states its `n >= 40`
+> filter instead of implying it. This is the same failure W5b diagnosed, one
+> level up: a selection rule that works because of where the artefacts happened
+> to land is not a rule.
+
+> **Neither deployment beats buy-and-hold on the rebuilt tape.** Like-for-like
+> over each eval window, which is the comparison W5b insisted on:
+>
+> | | strategy | buy-and-hold | delta |
+> |---|---|---|---|
+> | NIGHT (T5) | +24 135.60 | +33 340.56 | **−9 204.96** (was **+13 258.65**) |
+> | DAY `0.001/0.65` | +9 748.01 | +34 166.58 | **−24 418.57** (was −9 272.64) |
+>
+> Night's "+13 259 over the floor" was one of the strongest claims in the
+> ledger, and on the corrected tape it is negative. Read it with §5.1's confound
+> — part of that swing is the forecast-grid re-phase, not the tape — but the
+> direction is not something a phase draw was expected to do.
+
+#### Decided 2026-09-01, deliberately NOT applied here
+
+**`PINNED_DAY` keeps `band 0.001 / min_prob 0.65` and moves to the new vintage** —
+re-measure, not re-select, the same discipline D1 chose for NIGHT. Its
+`source_calmar` becomes **1.6937** on `TXF_RPT_minute_day.csv@2026-09-01`. The
+`0.00125/0.65` cell is the better one on this tape and is recorded as evidence,
+but pinning it would be a parameter change dressed as a re-measurement.
+
+**The ledger edits and the `live/config.py` change are left to the user**, at
+their instruction — this section is the record, not the act. What is still owed:
+
+- three DAY rows on `...@2026-09-01`, warmup **676 123**: the W5a probe
+  (`keep`, 0.4129), the re-measured pin (`keep`, 1.6937), and the new degenerate
+  counter-example `0.005/0.8` (`reject`, full 37.6428 on **9 trades**) — which
+  earns its place because it now tops the *worst-half* ranking, not just the
+  full-window one;
+- the `PROVISIONAL` markers on the two existing DAY rows resolved to point at
+  their re-measurements;
+- `DAY_SESSION_PLAN.md` §2.3's provisional numbers updated;
+- `PINNED_DAY` re-pointed as above.
+
+Every number needed is in the table above, in
+[docs/tools/band_sweep.md](docs/tools/band_sweep.md), and in
+`outputs/day_band_sweep_T7_20260901.csv`. Runs:
+`outputs/real_data_day_probe_W5a_T7_20260901/`,
+`real_data_day_W5b_pinned_T7_20260901/`,
+`real_data_day_W5b_candidate_T7_20260901/`.
 
 ---
 
 **Rollback.** `NOTE.md`'s incremental procedure records byte sizes so
 `truncate -s <size>` is an exact undo. That does **not** apply to a full rebuild:
-**take a copy of all four CSVs first** (~9.5 GB). The existing `.bak` files are
-the pre-2026-08-24 vintage and are not a substitute.
+**take a copy of all four CSVs first** (~9.5 GB). Done — the pre-rebuild bytes
+are in `dataset/RPT/_prerebuild_backup_20260901/`, hash-verified identical before
+the overwrite.
+
+> **The `.bak` files this paragraph used to point at were deleted 2026-09-01.**
+> They were the pre-2026-08-24 vintage and were never a substitute for the
+> backup; they were also byte-identical *prefixes* of it, so nothing unique was
+> lost. They were, however, the `@2026-05-15` vintage that **13 `results.tsv`
+> rows** are measured on, so the truncation points that reconstruct it now live
+> in `dataset/NOTE.md` ("The `@2026-05-15` vintage") rather than in the
+> filesystem.
 
 ---
 
@@ -806,6 +1010,11 @@ the pre-2026-08-24 vintage and are not a substitute.
   - It needs its own tuned configuration. Neither `PINNED` nor `PINNED_DAY`
     transfers — W5a measured that going one direction (Calmar 16.3122 → 0.2671),
     and a 1 140-bar session is a third regime again.
+  - ~~It needs a tape it can actually be tuned on.~~ **Done 2026-09-01 —
+    `TXF_RPT_minute_fullday.csv`, §2.5.** This one was not on the list and should
+    have been: the combined tape D2 reserved for this deployment spans 2011, and
+    its first 15.6 % has no night session at all. That is the only item here the
+    rebuild has closed.
 
 ---
 
