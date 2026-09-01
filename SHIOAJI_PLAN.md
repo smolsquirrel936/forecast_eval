@@ -28,7 +28,52 @@ This is a correction of a real habit: a 45-minute shakedown was proposed for the
 §2.20 resume fix when every line it touches runs before the first bar. Ten
 minutes covered it.
 
-## ▶ NEXT SESSION — START HERE (written 2026-08-23, updated 2026-09-01)
+## ▶ NEXT SESSION — START HERE (written 2026-08-23, updated 2026-09-02)
+
+> ### ⏹ DECIDED 2026-09-02 — **the soak is stopped, deliberately, and V4 is deferred**
+>
+> **This overrides "Do not stop the soak once V5's checklist is done" below.** The
+> user's reasoning: the whole live path will get **more than a month of testing
+> once it is built**, and V4's fill-gap samples accrue during that testing for
+> free. Paying 2–3.5 months of soak now to pre-collect them buys nothing that the
+> later window does not.
+>
+> **Two measurements support it, both taken 2026-09-02.**
+>
+> - **The pinned configuration never places a passive order.** `aggression_ticks=0`
+>   puts the limit *at* the reference print, which is marketable under SPEC §4.5 —
+>   **471 of 471** orders in the T5 run, backtest fill rate 100 %. So §2.1's
+>   "biggest risk", the *passive* branch where the backtest assumes queue priority
+>   it may not have, **is not exercised by this pin at all**. What the gap can still
+>   catch is slippage on marketable fills, and the three samples so far are
+>   **−10, −33, 0** — sign convention makes positive mean live did worse, so two of
+>   three had live doing *better*.
+> - **The gate's priority was set against numbers that no longer hold.** V4 was
+>   ranked "hard gate before real money" when NIGHT scored 16.3122 and beat
+>   buy-and-hold by **+13 258.65**. On the rebuilt tape it scores **3.6006** and
+>   **trails by −9 204.96** (`TAPE_REBUILD_PLAN.md` §5.2). Measuring second-order
+>   slippage on a strategy whose first-order claim is open is the wrong order of
+>   work.
+>
+> **What this costs, stated so it is not rediscovered as a surprise:**
+>
+> - Nothing accrues while down — the same sentence that has always been true here.
+> - **The 2026-09-15 15:30 roll will not be demonstrated by this soak.** It is
+>   built, tested offline and still undemonstrated, and it is what killed the
+>   2026-08-17 soak. It is *not* lost: TAIFEX rolls every month, so any test window
+>   longer than a month contains one, and the user's ">1 month after the whole part
+>   is built" covers it. But it is no longer on a known date.
+> - The account is **not flat** — LONG 1 @ 44555, open since 2026-08-25, adopted by
+>   this segment. Stopping the process does **not** close it. **0 orders were placed
+>   this segment**, so there are no working orders to strand.
+>
+> **Restarting later** is `--resume` (not `--fresh-start`, which is refused while a
+> position is held), and no restart backoff is owed provided the stop was clean —
+> a single Ctrl-C reaches `guard.end()` through the `finally` block, which zeroes
+> `consecutive_failures`. Killing the process instead leaves `run_in_flight=True`
+> and charges the *next* start a phantom failure.
+
+
 
 **801 tests green. §2.24 is PROVEN LIVE. §2.6 — the contract roll — was found by
 a dead soak and is now built, tested and undemonstrated.** Nothing offline is
@@ -176,8 +221,10 @@ is Phase INT yet:
    nights for 20 samples**, the rough size needed for a real slippage
    distribution rather than 3 anecdotes. This keeps accruing automatically as
    long as the soak keeps running with `--broker shioaji` — no separate action
-   needed, just time. **Do not stop the soak once V5's checklist is done; V4
-   is why it keeps running.** (The 2026-09-01 06:40 stop was deliberate and
+   needed, just time. ~~**Do not stop the soak once V5's checklist is done; V4
+   is why it keeps running.**~~ **OVERRIDDEN 2026-09-02 — the soak is stopped
+   and V4 is deferred to the post-build test window; see the decision block at
+   the top of this file for the reasoning and the two measurements behind it.** (The 2026-09-01 06:40 stop was deliberate and
    bounded — taken in the 05:00–15:00 dead zone, to land the item-3 guard fix
    and the `session_event` fix before a long run started on top of them. It
    cost 0 fill-gap samples, since the stopped segment produced none. Restart
