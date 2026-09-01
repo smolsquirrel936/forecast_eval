@@ -4,6 +4,7 @@ The live loop itself is covered by test_live_runtime.py; what matters here is
 that the CLI cannot be talked into something dangerous: placing real orders, or
 starting without the VRAM the model needs.
 """
+import json
 import pathlib
 from datetime import datetime, timedelta
 
@@ -391,6 +392,25 @@ def test_an_explicit_out_still_wins_over_the_derived_name():
     a default must not take that away."""
     args = cli.build_parser().parse_args(["--out", "outputs/whatever"])
     assert args.out == pathlib.Path("outputs/whatever")
+
+
+def test_the_missing_flag_is_reported_before_the_restart_guard(monkeypatch, tmp_path):
+    """MEASURED 2026-09-02. A command missing --resume was refused by the BACKFILL
+    CAP instead, because the guard gated at start-up while this check sat next to
+    the broker it protects, 150 lines later. The operator was told "something is
+    restarting this process repeatedly" when the answer was one missing flag."""
+    monkeypatch.setenv("SHIOAJI_API_KEY", "test-key")
+    monkeypatch.setenv("SHIOAJI_SECRET_KEY", "test-secret")
+    state = tmp_path / "live_restart.json"
+    state.write_text(json.dumps({
+        "run_in_flight": False, "scored": True, "consecutive_failures": 0,
+        "trading_day": cli.RestartGuard.trading_day(datetime.now()),
+        "backfills_today": 99,          # the cap is long spent
+    }), encoding="utf-8")
+
+    rc = cli.main(["--broker", "shioaji", "--i-understand-this-places-orders",
+                   "--out", str(tmp_path / "run"), "--state-file", str(state)])
+    assert rc == 5, "5 is the preflight refusal; 3 would be the restart guard"
 
 
 def test_there_is_no_bare_session_flag():

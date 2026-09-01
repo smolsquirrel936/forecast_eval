@@ -455,6 +455,21 @@ def main(argv=None) -> int:
     # Why:  §2.8b — every start performs a backfill, so an unsupervised crash loop
     #       becomes a login+query loop, and Shioaji answers that with an IP/ID
     #       suspension that repeated logins then extend. Gate first, connect after.
+    # Tech: the pure argument checks run BEFORE the restart guard.
+    # Why:  MEASURED 2026-09-02 — a command missing `--resume` was refused by the
+    #       *backfill cap* instead, because the guard gated at start-up and this
+    #       check sat 150 lines later, next to the broker it protects. The
+    #       operator was told "something is restarting this process repeatedly"
+    #       when the real answer was one missing flag. A deterministic check on
+    #       `args` alone has no side effects and cannot fail for an environmental
+    #       reason, so it belongs in front of every gate that touches persisted
+    #       state or the venue.
+    if args.broker == "shioaji":
+        refusal = _preflight_orders(args)
+        if refusal:
+            alerter.fatal("startup_refused", refusal, gate="preflight")
+            return 5
+
     guard = RestartGuard(RestartPolicy(state_file=state_file))
     try:
         guard.begin(datetime.now())
@@ -614,10 +629,6 @@ def main(argv=None) -> int:
                 fee_rate=cfg.fee_rate, tick_size=cfg.tick_size,
                 flatten_aggression_ticks=args.flatten_aggression_ticks,
             )
-            refusal = _preflight_orders(args)
-            if refusal:
-                alerter.fatal("startup_refused", refusal, gate="preflight")
-                return 5
             # Tech: wrap the venue broker so an offline `Execution` sees the same
             #       orders and the two can be diffed.
             # Why:  V4's deliverable. `results.tsv` rests on a fill model that
