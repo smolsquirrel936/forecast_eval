@@ -208,44 +208,66 @@ PINNED = LiveConfig(
 
 
 # Tech: the DAY deployment's configuration, pinned to the best `keep` DAY row in
-#       `results.tsv` (commit fdd1348, Calmar 4.6805, 73 trades, net +24 471.87
-#       points, max drawdown -5 228.43).
+#       `results.tsv` (commit 3c3ae38, Calmar 1.6937, 67 trades, net +9 748.01
+#       points, max drawdown -5 755.50, on `TXF_RPT_minute_day.csv@2026-09-01`).
 # Why:  DAY_SESSION_PLAN C1/C2. The band and the probability gate are the only
 #       knobs that differ from NIGHT, and they differ a long way: +-0.001 against
 #       +-0.00045, min_prob 0.65 against 0.5. That is not a tuning nicety. NIGHT's
-#       band on the day tape trades 257 times for 18.65 gross points each and
-#       hands 35.1 % of the gross back in fees; DAY's own band trades 73 times and
-#       pays 1.7 %. The measured cost of running this deployment on NIGHT's values
-#       is Calmar 16.3122 -> 0.2671 (W5a), which is why `--config` selects the
+#       band on the day tape trades 230 times and scores 0.4129 against this
+#       cell's 1.6937 (W5a, re-measured), which is why `--config` selects the
 #       whole value and there is no `--session` flag: the policy must not be able
 #       to move without the parameters that were tuned for it.
 #
 #       Everything else is deliberately NIGHT's: same checkpoint, context, stride
 #       and horizon (the search never moved them), same execution shape, and
-#       `forced_close=False` for the same reason -- median hold is 4 days here
-#       too, so closing at every session end is a different strategy (C8).
+#       `forced_close=False`.
+#
+#       **The reason given for that last one was wrong, MEASURED 2026-09-02.**
+#       It read "median hold is 4 days here too, so closing at every session end
+#       is a different strategy". It is not 4 days: over this cell's 67 trades
+#       the median hold is **20 days**, p90 57 days, max 173, and **100 %** span
+#       more than one calendar day against NIGHT's 90 % at 4 d 00 h. So the
+#       conclusion may still hold -- forced-closing a 20-day position at 13:45
+#       every day is certainly a different strategy -- but it no longer rests on
+#       the two deployments being alike, because they are not. A DAY position
+#       rides ~20 calendar days of night sessions and weekends unmanaged, which
+#       is DAY_SESSION_PLAN C8 and is still open.
+#
+#       **Re-measured, not re-selected (TAPE_REBUILD_PLAN T7, 2026-09-01.)** The
+#       parameters did not move; the tape under them did. On the rebuilt day tape
+#       this cell scores **1.6937** where the retired `@2026-08-21` vintage said
+#       4.6805, and its worst-half score -- the number W5b actually selected on --
+#       fell 3.1557 -> 0.9967. The `0.00125/0.65` cell is now the better one
+#       (worst 1.1664), and the pin was deliberately NOT moved to it: that would
+#       be a parameter change dressed as a re-measurement, and D1 chose the
+#       opposite discipline for NIGHT. The old row survives in `results.tsv` as
+#       history; this pin is the forward policy.
 #
 #       THREE THINGS THIS VALUE IS NOT, all measured, none of them tuning bugs:
-#       (1) It does not beat buy-and-hold. Over the evaluated window it nets
-#           +24 472 against a passive +33 745 -- it TRAILS by 9 273 points, where
-#           NIGHT beats its own floor by +13 259. The Calmar is earned by a small
-#           drawdown (-5 228), not by out-earning the index.
-#       (2) It is PROVISIONAL. It was measured against NIGHT's Calmar 16.3122
-#           while `TAPE_REBUILD_PLAN.md` is still pending, and that plan
-#           invalidates 16.3122. Both W5a and W5b re-measure after its T0-T4.
+#       (1) It does not beat buy-and-hold, and the gap got worse. Over the
+#           evaluated window it nets +9 748 against a passive +34 167 -- it
+#           TRAILS by 24 419, where the pre-rebuild shortfall was 9 273. NIGHT no
+#           longer beats its own floor either (-9 205, was +13 259). The Calmar is
+#           earned by a small drawdown (-5 755), not by out-earning the index.
+#       (2) It carries the phase confound, not just a tape correction. The
+#           rebuild inserts bars inside the eval window, so the forecast grid
+#           necessarily re-phased; `DAY_SESSION_PLAN.md` 2.2 measured phase ALONE
+#           moving 13.6742 -> 8.7651 on NIGHT. Read 4.6805 -> 1.6937 with
+#           `TAPE_REBUILD_PLAN.md` 5.1 before calling it a 2.8x decay.
 #       (3) It has never traded, not even in simulation -- W8 has not run.
 #
 #       So this is what a DAY deployment WOULD trade, wired so it can be dry-run
 #       and parity-checked. Sending it at a broker is a separate decision with
 #       V4's fill gap in front of it (DAY_SESSION_PLAN 7).
 PINNED_DAY = LiveConfig(
-    source_commit="fdd1348",
-    source_calmar=4.6805,
+    source_commit="3c3ae38",
+    source_calmar=1.6937,
     source_dataset=r"\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_day.csv",
     source_note=(
-        "W5b day search; band 0.001 + min-prob 0.65; 73 trades; "
-        "net +24471.87 pts; max dd -5228.43; PROVISIONAL (pre tape-rebuild); "
-        "trails eval-window buy-and-hold by -9272.64"
+        "TAPE_REBUILD_PLAN T7 re-measure of the W5b day search on the rebuilt "
+        "tape (@2026-09-01); band 0.001 + min-prob 0.65 unchanged, tape "
+        "corrected; 67 trades; net +9748.01 pts; max dd -5755.50; has never "
+        "traded (W8 unrun); trails eval-window buy-and-hold by -24418.57"
     ),
     policy=SessionPolicy.day(),
     checkpoint="Datadog/Toto-2.0-1B",

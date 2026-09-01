@@ -445,9 +445,14 @@ def test_day_inherits_the_risk_shape_the_backtest_measured():
 
 
 def test_day_provenance_records_that_it_has_not_earned_a_deployment():
-    """The three caveats are part of the value, not a comment above it: the
-    config travels into the recorder's meta header, so an artifact carries them
-    even when the plan is not to hand."""
+    """The caveats are part of the value, not a comment above it: the config
+    travels into the recorder's meta header, so an artifact carries them even
+    when the plan is not to hand.
+
+    The `provisional` marker this used to require was resolved by
+    TAPE_REBUILD_PLAN T7 -- the pin now names a measurement on the shipped tape.
+    What T7 did not resolve is that the cell still trails its own passive floor
+    and has still never traded, so those two are what the note must carry."""
     note = PINNED_DAY.source_note.lower()
-    assert "provisional" in note
+    assert "never traded" in note
     assert "buy-and-hold" in note or "buy and hold" in note

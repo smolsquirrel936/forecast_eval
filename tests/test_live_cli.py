@@ -413,7 +413,7 @@ def test_the_banner_carries_the_selected_deployments_provenance():
     header, so a running process can be identified from its own output."""
     text = PINNED_DAY.describe()
     assert "DAY" in text
-    assert "fdd1348" in text          # the commit that produced the row
-    assert "4.6805" in text           # its Calmar
+    assert "3c3ae38" in text          # the commit that produced the row
+    assert "1.6937" in text           # its Calmar
     assert "0.001" in text            # the band that differs from NIGHT
     assert "NIGHT" not in text
