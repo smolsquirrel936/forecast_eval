@@ -173,3 +173,81 @@ PINNED = LiveConfig(
     forecast_horizon_bars=30,
     forecast_stride_bars=30,
 )
+
+
+# Tech: the DAY deployment's configuration, pinned to the best `keep` DAY row in
+#       `results.tsv` (commit fdd1348, Calmar 4.6805, 73 trades, net +24 471.87
+#       points, max drawdown -5 228.43).
+# Why:  DAY_SESSION_PLAN C1/C2. The band and the probability gate are the only
+#       knobs that differ from NIGHT, and they differ a long way: +-0.001 against
+#       +-0.00045, min_prob 0.65 against 0.5. That is not a tuning nicety. NIGHT's
+#       band on the day tape trades 257 times for 18.65 gross points each and
+#       hands 35.1 % of the gross back in fees; DAY's own band trades 73 times and
+#       pays 1.7 %. The measured cost of running this deployment on NIGHT's values
+#       is Calmar 16.3122 -> 0.2671 (W5a), which is why `--config` selects the
+#       whole value and there is no `--session` flag: the policy must not be able
+#       to move without the parameters that were tuned for it.
+#
+#       Everything else is deliberately NIGHT's: same checkpoint, context, stride
+#       and horizon (the search never moved them), same execution shape, and
+#       `forced_close=False` for the same reason -- median hold is 4 days here
+#       too, so closing at every session end is a different strategy (C8).
+#
+#       THREE THINGS THIS VALUE IS NOT, all measured, none of them tuning bugs:
+#       (1) It does not beat buy-and-hold. Over the evaluated window it nets
+#           +24 472 against a passive +33 745 -- it TRAILS by 9 273 points, where
+#           NIGHT beats its own floor by +13 259. The Calmar is earned by a small
+#           drawdown (-5 228), not by out-earning the index.
+#       (2) It is PROVISIONAL. It was measured against NIGHT's Calmar 16.3122
+#           while `TAPE_REBUILD_PLAN.md` is still pending, and that plan
+#           invalidates 16.3122. Both W5a and W5b re-measure after its T0-T4.
+#       (3) It has never traded, not even in simulation -- W8 has not run.
+#
+#       So this is what a DAY deployment WOULD trade, wired so it can be dry-run
+#       and parity-checked. Sending it at a broker is a separate decision with
+#       V4's fill gap in front of it (DAY_SESSION_PLAN 7).
+PINNED_DAY = LiveConfig(
+    source_commit="fdd1348",
+    source_calmar=4.6805,
+    source_dataset=r"\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_day.csv",
+    source_note=(
+        "W5b day search; band 0.001 + min-prob 0.65; 73 trades; "
+        "net +24471.87 pts; max dd -5228.43; PROVISIONAL (pre tape-rebuild); "
+        "trails eval-window buy-and-hold by -9272.64"
+    ),
+    policy=SessionPolicy.day(),
+    checkpoint="Datadog/Toto-2.0-1B",
+    context_length=3008,
+    forecast_horizon_bars=30,
+    forecast_stride_bars=30,
+    buy_threshold=0.001,
+    sell_threshold=-0.001,
+    min_prob=0.65,
+)
+
+
+# Tech: the deployments this entry point can run, by name.
+# Why:  C2 — `cli.py` used to be `cfg = PINNED`, so a DAY deployment could not be
+#       expressed at all. A bare `--session` flag would have been worse than the
+#       gap: it changes the policy while leaving NIGHT's tuned parameters in
+#       place, which runs a night strategy on a day tape and reports nothing
+#       unusual while doing it. Selecting the whole config keeps the policy
+#       travelling inside the value it belongs to, so the two cannot disagree.
+CONFIGS = {
+    "night": PINNED,
+    "day": PINNED_DAY,
+}
+
+
+def config_named(name: str) -> LiveConfig:
+    # Tech: look a deployment up by name, raising on an unknown one.
+    # Why:  the caller is a CLI flag with `choices=`, so this should be
+    #       unreachable from the command line; it exists so programmatic callers
+    #       fail loudly rather than silently defaulting to NIGHT — which is the
+    #       failure C2 is about, arriving by a different door.
+    try:
+        return CONFIGS[name]
+    except KeyError:
+        raise ValueError(
+            f"unknown config {name!r}; known deployments: {sorted(CONFIGS)}"
+        ) from None

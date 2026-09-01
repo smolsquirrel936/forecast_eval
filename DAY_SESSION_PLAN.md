@@ -637,7 +637,7 @@ parameters over the day file, unchanged, one ~4-minute run) comes before any
 search, and its Calmar and median hold decide whether the full `edit:`/`keep:`
 loop is worth launching. Sequenced as W5a → W5b.
 
-### C2 — the entry point cannot express a DAY deployment · build, small
+### C2 — the entry point cannot express a DAY deployment · **DONE 2026-09-01 (W6)**
 
 `cli.py:314` is `cfg = PINNED`; `LiveConfig` is frozen. A bare `--session` flag
 would be the 2026-08-11 defect by the front door: changing the policy without
@@ -645,6 +645,42 @@ changing the *strategy* runs night-tuned parameters on a day tape, undetectably.
 
 **Proposed:** `--config night|day` selecting the whole config, policy travelling
 inside the value it belongs to.
+
+**DONE 2026-09-01 (W6), as proposed.** `live/config.py` gained `PINNED_DAY`
+(pinned to W5b's row) and a `CONFIGS` registry; `cli.py` gained
+`--config night|day`, defaulting to **night** — the deployment that has actually
+soaked. There is no `--session` flag and a test asserts there never is one.
+
+**One trap this step nearly re-opened, recorded because it is invisible in a
+diff.** `--warmup-days` took its default from `PINNED.warmup_days_default()`
+*in the argument declaration*. Argparse evaluates that when the parser is
+**built**, before `--config` has been read — so the default is always NIGHT's
+30, and `--config day` would have silently inherited it. That is exactly the C6
+defect W4 removed, re-entering through the entry point W6 added: at DAY's 300
+bars/session, 30 days reaches ~109 emitter boundaries and about 4 non-HOLD
+samples against the floor of 3 that `_check_primed` refuses below. The flag now
+defaults to `None` and `main` resolves it from the **selected** config.
+
+**Verified — the banner under each flag** (real `LiveRuntime`, real forecaster;
+everything after the Shioaji login, which was not performed):
+
+```
+$ ... --config night --broker dryrun
+LiveConfig[e44a047 calmar=13.6742 ['NIGHT']] ... band=±0.00045 min_prob=0.5 ...
+[warm-up] 30 days (840 bars/session)   [policy] roll_at=15:30:00 cache=night
+
+$ ... --config day --broker dryrun
+LiveConfig[fdd1348 calmar=4.6805 ['DAY']] ... band=±0.001 min_prob=0.65 ...
+[warm-up] 84 days (300 bars/session)   [policy] roll_at=12:45:00 cache=day
+```
+
+One flag moves the policy, the band, the probability gate, the warm-up window,
+the roll time and the cache key together — W1's C5, W2's C4 and W4's C6 all
+light up from the single selection, and NIGHT is unchanged. **15 new tests.**
+
+**Not changed:** `v1_check.py` and `v4_probe.py` still import `PINNED`
+directly. Both are NIGHT-specific probes, so that is correct today; if either is
+ever wanted for DAY it needs the same treatment, and neither is on W6's path.
 
 ### C3 — `settle_rolled_leg(session="NIGHT")` · build, one line · **silent**
 
@@ -931,15 +967,15 @@ night tree too.
 
 **The work itself — all of it in `night/forecast_eval`:**
 
-> **CURRENT STAGE, 2026-09-01 (later): W5a and W5b are done on the
-> PROVISIONAL branch. W6 and W7 are the available work.**
+> **CURRENT STAGE, 2026-09-01 (later still): W5a, W5b and W6 are done. W7 is
+> the available work; W8 is the first step that needs a market.**
 >
 > | | |
 > |---|---|
-> | Done | W0, W1, W2, W3, **W4**, W4b, **W5a**, **W5b** — all offline, no market |
+> | Done | W0, W1, W2, W3, **W4**, W4b, **W5a**, **W5b**, **W6** — all offline, no market |
 > | Done but PROVISIONAL | **W5a**, **W5b** — measured against Calmar 16.3122, which the tape rebuild invalidates; both re-measure after T0–T4 (§2.3) |
-> | Available now | **W6**, **W7** — neither reads the tape; code and tests are CPU-only, but their *verification* runs need the GPU (see the header) |
-> | Not started | W8, W9 — both need a market |
+> | Available now | **W7** — does not read the tape; code and tests are CPU-only, but its *verification* run needs the GPU (see the header) |
+> | Not started | W8, W9 — both need a market, and W8 needs Shioaji credentials the W6 check did not have |
 > | Prerequisite for any pinned row | ~~commit the tree~~ — **done**, tree is clean at `e073e73` |
 >
 > Nothing here is waiting on a decision except W5a. The port has not begun to
@@ -978,7 +1014,13 @@ W5b [DONE 2026-09-01, PROVISIONAL] C1 - day search         -> verified: band 0.0
     full-window - the full-window max is a 27-trade             CLI numbers agree exactly. Rejected cell
     artefact and is in results.tsv as a `reject` row.           (band 0.004, Calmar 14.7697) recorded as
     See 2.3 for the method and the caveat.                      evidence. NOT a live pin - see 2.3.
-W6  C2 - `--config day` at the entry point                 -> verify: dryrun banner shows DAY provenance
+W6  [DONE 2026-09-01] C2 - `--config night|day` at the      -> verified: banner reads
+    entry point; PINNED_DAY + a CONFIGS registry; no             LiveConfig[fdd1348 calmar=4.6805 [DAY]]
+    `--session` flag, and a test that there never is one.        band=+-0.001 min_prob=0.65, warm-up 84d,
+    --warmup-days now resolves from the SELECTED config          roll_at=12:45, cache=day - and NIGHT is
+    (argparse bakes parser-build-time defaults: it was           unchanged. One flag moves policy + band +
+    always NIGHT's 30, which would have re-opened C6).           gate + warm-up + roll + cache together.
+                                                               15 new tests.
 W7  offline parity for DAY, V0-style                       -> verify: live loop = run_backtest, bit-identical
 W8  5-minute dryrun inside a real DAY session   [MARKET]   -> verify: start-up, warm-up, banner, first bar
                                                               [DOES NOT touch the shared Shioaji account —

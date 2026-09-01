@@ -45,7 +45,7 @@ from forecast_eval.live.broker.shadow import ShadowBroker         # noqa: E402
 from forecast_eval.live.broker.shioaji import ShioajiBroker       # noqa: E402
 from forecast_eval.live.broker.sim import SimBroker               # noqa: E402
 from forecast_eval.live.capture import TickCapture                # noqa: E402
-from forecast_eval.live.config import PINNED                      # noqa: E402
+from forecast_eval.live.config import CONFIGS, PINNED, config_named  # noqa: E402
 from forecast_eval.live.contracts import (                        # noqa: E402
     contract_month, dated_months, resolve_txf, txf_root)
 from forecast_eval.live.alerts import Alerter                     # noqa: E402
@@ -288,18 +288,41 @@ def build_parser() -> argparse.ArgumentParser:
                          "session.jsonl files across restarts can be read as "
                          "one soak; bootstraps the first epoch if none exists "
                          "yet.")
+    # Tech: --config names the whole deployment; the policy travels inside the
+    #       value rather than beside it.
+    # Why:  DAY_SESSION_PLAN C2. This used to be `cfg = PINNED` with no way to
+    #       say DAY at all. The obvious repair -- a `--session day` flag -- is
+    #       worse than the gap: it moves the policy while leaving NIGHT's tuned
+    #       band and probability gate in place, which is a night strategy on a
+    #       day tape and raises nothing. W5a measured that mistake at Calmar
+    #       16.3122 -> 0.2671. Selecting the config makes the pairing unbreakable.
+    ap.add_argument("--config", choices=sorted(CONFIGS), default="night",
+                    help="Which pinned deployment to run. Selects the WHOLE "
+                         "config -- policy, band, probability gate and "
+                         "provenance together. Default night (the deployment "
+                         "that has soaked); day is DAY_SESSION_PLAN's port and "
+                         "has never traded.")
     ap.add_argument("--contract", default="TXFR1")
     ap.add_argument("--duration-minutes", type=float, default=None,
                     help="Stop after this long. Default: run until the session "
                          "ends or Ctrl-C.")
-    ap.add_argument("--warmup-days", type=int,
-                    default=PINNED.warmup_days_default(),
+    # Tech: default None here and resolved from the selected config after
+    #       parsing, NOT baked from PINNED at parser-build time.
+    # Why:  DAY_SESSION_PLAN C6, and this is where that fix would have been
+    #       undone. Argparse evaluates defaults when the parser is built, before
+    #       --config has been read, so a baked default is always NIGHT's 30. DAY
+    #       needs 84: at 300 bars/session, 30 days reaches ~109 emitter
+    #       boundaries and about 4 non-HOLD samples against the floor of 3 that
+    #       `_check_primed` refuses below -- "one quiet fortnight from refusing
+    #       to start". A DAY run silently inheriting 30 is exactly the failure W4
+    #       removed, re-entering through the entry point W6 added.
+    ap.add_argument("--warmup-days", type=int, default=None,
                     help="Calendar days of history to request for the context "
                          "and emitter priming. Default is derived from the "
-                         "pinned policy's bars-per-session (DAY_SESSION_PLAN "
-                         "C6), not a flat constant — currently "
-                         f"{PINNED.warmup_days_default()} for "
-                         f"{sorted(PINNED.policy.sessions)}")
+                         "SELECTED config's policy bars-per-session "
+                         "(DAY_SESSION_PLAN C6), not a flat constant — "
+                         f"{PINNED.warmup_days_default()} for night, "
+                         f"{config_named('day').warmup_days_default()} for day")
     ap.add_argument("--out", type=Path, default=None,
                     help="Output dir; default outputs/live_<timestamp>")
     ap.add_argument("--state-file", type=Path, default=None,
@@ -375,7 +398,11 @@ def _warmup_contracts(api: Any, front: Any) -> list:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    cfg = PINNED
+    cfg = config_named(args.config)
+    # Tech: resolve the warm-up default now that the config is known.
+    # Why:  see --warmup-days above; None means "whatever this deployment needs".
+    if args.warmup_days is None:
+        args.warmup_days = cfg.warmup_days_default()
 
     out = args.out or Path("outputs") / f"live_{datetime.now():%Y%m%d_%H%M%S}"
     out.mkdir(parents=True, exist_ok=True)

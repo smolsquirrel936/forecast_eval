@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from forecast_eval.live import cli, soak_epoch
-from forecast_eval.live.config import PINNED
+from forecast_eval.live.config import CONFIGS, PINNED, PINNED_DAY, config_named
 from forecast_eval.live.recorder import Recorder
 from forecast_eval.live.runtime import LiveRuntime
 from forecast_eval.live.sessions import SessionPolicy
@@ -298,8 +298,22 @@ def test_capture_is_on_by_default():
 
 def test_warmup_window_defaults_wide_enough_for_priming():
     """Priming needs ~21 night sessions worth of boundaries (measured: the
-    longest observed HOLD run is 385 boundaries)."""
-    assert cli.build_parser().parse_args([]).warmup_days >= 30
+    longest observed HOLD run is 385 boundaries).
+
+    W6 moved *where* this default is resolved: the parser now leaves it None and
+    `main` fills it from the selected config, because a parser-build-time default
+    is always NIGHT's regardless of --config. The property being protected is
+    unchanged, so it is asserted on the resolved value -- and on every registered
+    deployment, since DAY's shorter sessions need a wider window for the same
+    number of boundaries, not the same one."""
+    assert cli.build_parser().parse_args([]).warmup_days is None
+    assert config_named("night").warmup_days_default() >= 30
+    for name, cfg in CONFIGS.items():
+        got = cfg.warmup_days_default()
+        # >= 21 sessions of boundaries, expressed in calendar days for this policy
+        assert got * 5 / 7 * cfg.policy.bars_per_session() >= 21 * 840, (
+            f"{name}: {got} days is too narrow to prime"
+        )
 
 
 # ---- feed repair budget (§2.24) --------------------------------------------
@@ -325,3 +339,81 @@ def test_repair_budget_never_disarms_the_repair():
     assert cli._repair_budget(10.0, 60.0) == 1
     assert cli._repair_budget(900.0, 0.0) == 1
     assert cli._repair_budget(900.0, -1.0) == 1
+
+
+# ---- W6 / C2: the entry point can express a DAY deployment ------------------
+
+
+def test_config_flag_selects_the_whole_deployment_not_just_a_policy():
+    """C2. The failure this replaces is a `--session day` flag: it moves the
+    policy and leaves NIGHT's band and probability gate in place, which is a
+    night strategy on a day tape and raises nothing. W5a measured that at
+    Calmar 16.3122 -> 0.2671."""
+    night = config_named(cli.build_parser().parse_args([]).config)
+    day = config_named(cli.build_parser().parse_args(["--config", "day"]).config)
+
+    assert night is PINNED
+    assert day is PINNED_DAY
+    # the policy moved *and* so did the parameters tuned for it
+    assert sorted(night.policy.sessions) == ["NIGHT"]
+    assert sorted(day.policy.sessions) == ["DAY"]
+    assert day.buy_threshold != night.buy_threshold
+    assert day.min_prob != night.min_prob
+
+
+def test_there_is_no_bare_session_flag():
+    """The flag C2 rejects must not exist. If someone adds one later, the
+    pairing this whole design protects is breakable again."""
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["--session", "day"])
+
+
+def test_night_remains_the_default_deployment():
+    """NIGHT is the deployment that has soaked; DAY has never traded. A missing
+    flag must not silently start the unproven one."""
+    assert cli.build_parser().parse_args([]).config == "night"
+
+
+def test_warmup_days_default_follows_the_selected_config_not_pinned():
+    """DAY_SESSION_PLAN C6, and the regression for where W6 could have undone it.
+
+    Argparse evaluates defaults when the parser is *built*, before --config has
+    been read, so a baked `default=PINNED.warmup_days_default()` is always
+    NIGHT's 30. A DAY run inheriting 30 reaches ~109 emitter boundaries and about
+    4 non-HOLD samples against `_check_primed`'s floor of 3."""
+    for argv, expected in ([], 30), (["--config", "day"], 84):
+        args = cli.build_parser().parse_args(argv)
+        # unresolved at parse time -- that is the point
+        assert args.warmup_days is None
+        cfg = config_named(args.config)
+        assert cfg.warmup_days_default() == expected
+
+
+def test_an_explicit_warmup_days_still_wins_over_the_derived_default():
+    args = cli.build_parser().parse_args(["--config", "day", "--warmup-days", "7"])
+    assert args.warmup_days == 7
+
+
+def test_config_named_refuses_an_unknown_deployment():
+    """Reachable only programmatically -- the CLI has `choices=` -- but a silent
+    fallback to NIGHT would be C2's failure arriving by another door."""
+    with pytest.raises(ValueError, match="unknown config"):
+        config_named("weekend")
+
+
+def test_every_registered_config_trades_exactly_one_session():
+    """A `both()` policy would make "the best row for this deployment"
+    undefined, and `results.tsv` is scoped by a single session name."""
+    for name, cfg in CONFIGS.items():
+        assert len(cfg.policy.sessions) == 1, f"{name} trades {cfg.policy.sessions}"
+
+
+def test_the_banner_carries_the_selected_deployments_provenance():
+    """`cfg.describe()` goes on the console banner and into the recorder's meta
+    header, so a running process can be identified from its own output."""
+    text = PINNED_DAY.describe()
+    assert "DAY" in text
+    assert "fdd1348" in text          # the commit that produced the row
+    assert "4.6805" in text           # its Calmar
+    assert "0.001" in text            # the band that differs from NIGHT
+    assert "NIGHT" not in text

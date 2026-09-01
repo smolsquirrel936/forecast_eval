@@ -12,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from forecast_eval.live.config import PINNED, LiveConfig
+from forecast_eval.live.config import (CONFIGS, PINNED, PINNED_DAY, LiveConfig,
+                                        config_named)
 from forecast_eval.live.sessions import SessionPolicy
 from forecast_eval.strategy.threshold import ThresholdEmitter
 
@@ -305,3 +306,98 @@ def test_best_row_is_none_when_a_session_has_no_rows():
     silently compare against NIGHT."""
     rows = [{"commit": "night_a", "session": "NIGHT", "calmar": "13.6742"}]
     assert _best_row(rows, "DAY") is None
+
+
+# ---- PINNED_DAY (W6 / C1) ---------------------------------------------------
+#
+# The same drift guards as PINNED, applied to the second deployment. C1 asked
+# for "a drift test keyed to a session-tagged row" — these are it. They are
+# written against `config_named` rather than the constant so that adding a third
+# deployment later cannot leave it unguarded by accident.
+
+
+def _row_for(config):
+    """The row a deployment is pinned to: its session's best `keep` row.
+
+    Not a lookup by commit. W5a and W5b were produced by one code commit
+    (`fdd1348`), so three DAY rows share it and the commit alone does not
+    identify a row -- unlike the NIGHT chain, where every edit:/keep: step was a
+    separate commit. Resolving through `_best_row` is what the pin actually
+    means anyway: "the best known configuration for this deployment"."""
+    session = _session_of(config)
+    row = _best_row(_rows(), session)
+    if row is None:
+        pytest.fail(f"results.tsv has no {session} rows to pin against")
+    return row
+
+
+@pytest.mark.skipif(not RESULTS.exists(), reason="results.tsv not present")
+@pytest.mark.parametrize("name", sorted(CONFIGS))
+def test_every_deployment_is_pinned_to_the_best_keep_row_for_its_session(name):
+    """Fails when research finds something better *for that deployment*, and
+    when a pin drifts from the row it claims. The session scoping is what lets
+    two pins coexist: a DAY row cannot re-pin NIGHT."""
+    cfg = config_named(name)
+    session = _session_of(cfg)
+    assert _rows_for(session), f"results.tsv has no {session} rows"
+    row = _row_for(cfg)
+    assert row["status"] == "keep", (
+        f"{name} is pinned to a {row['status']!r} row — a rejected result is "
+        f"evidence, not a configuration"
+    )
+    assert row["commit"] == cfg.source_commit, (
+        f"results.tsv now has a better {session} row: {row['commit']} "
+        f"calmar={row['calmar']} vs pinned {cfg.source_commit} "
+        f"calmar={cfg.source_calmar}. Re-pin live/config.py deliberately."
+    )
+    assert float(row["calmar"]) == pytest.approx(cfg.source_calmar), (
+        f"{name}'s pinned Calmar disagrees with results.tsv — provenance was "
+        f"edited without the values, or vice versa"
+    )
+
+
+@pytest.mark.skipif(not RESULTS.exists(), reason="results.tsv not present")
+@pytest.mark.parametrize("name", sorted(CONFIGS))
+def test_every_deployment_row_agrees_with_its_policy_and_dataset(name):
+    """The pairing C2 exists to protect. A policy that disagrees with the row it
+    was tuned on is the 2026-08-11 defect, and it starts exactly here."""
+    cfg = config_named(name)
+    row = _row_for(cfg)
+    assert row["session"] == _session_of(cfg)
+    row_file = row["dataset"].split("@")[0]
+    assert row_file.lower() in cfg.source_dataset.lower().replace("\\", "/")
+    assert _session_of(cfg).lower() in cfg.source_dataset.lower(), (
+        f"{name}'s dataset {cfg.source_dataset!r} does not name its own session"
+    )
+
+
+def test_the_two_deployments_do_not_share_a_tuned_band():
+    """W5a, MEASURED. Running NIGHT's band on the day tape is Calmar
+    16.3122 -> 0.2671; the two deployments having equal parameters would mean
+    one of them is untuned."""
+    assert PINNED_DAY.buy_threshold != PINNED.buy_threshold
+    assert PINNED_DAY.min_prob != PINNED.min_prob
+    # ...but the model itself was never re-tuned, so these must still agree
+    assert PINNED_DAY.checkpoint == PINNED.checkpoint
+    assert PINNED_DAY.context_length == PINNED.context_length
+    assert PINNED_DAY.forecast_stride_bars == PINNED.forecast_stride_bars
+    assert PINNED_DAY.forecast_horizon_bars == PINNED.forecast_horizon_bars
+
+
+def test_day_inherits_the_risk_shape_the_backtest_measured():
+    """C8 is open, not silently answered. `forced_close=False` here is the same
+    deliberate choice as NIGHT's: median hold is ~4 days on the day tape too, so
+    closing at every session end would be a different strategy."""
+    assert PINNED_DAY.aggression_ticks == 0
+    assert PINNED_DAY.max_position == 1
+    assert PINNED_DAY.max_aggression_ticks is None
+    assert PINNED_DAY.forced_close_on_session_end is False
+
+
+def test_day_provenance_records_that_it_has_not_earned_a_deployment():
+    """The three caveats are part of the value, not a comment above it: the
+    config travels into the recorder's meta header, so an artifact carries them
+    even when the plan is not to hand."""
+    note = PINNED_DAY.source_note.lower()
+    assert "provisional" in note
+    assert "buy-and-hold" in note or "buy and hold" in note
