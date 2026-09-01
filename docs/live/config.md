@@ -35,9 +35,24 @@ not a source of truth for live and is deliberately left untouched.
 | `warmup_days_default(*, emitter_prime_boundaries=500)` | method | calendar-day `--warmup-days` default, derived from `policy.bars_per_session()` — NIGHT 30, DAY 84 — DAY_SESSION_PLAN C6 |
 
 ## What is pinned, and to what
-`results.tsv` row **`e44a047`** — Calmar **13.6742**, 185 trades, net **+39 075.63**
-points, max drawdown **−2 856.95**, on `TXF_RPT_minute_night.csv`.
+`results.tsv` row **`4282d33`** — Calmar **3.6006**, 235 trades, net **+24 135.60**
+points, max drawdown **−6 703.24**, on `TXF_RPT_minute_night.csv@2026-09-01`.
 
+**Re-pinned 2026-09-01 (TAPE_REBUILD_PLAN T6, decision D1), and not one
+executable field moved.** The evaluated tape was rebuilt to splice where the
+deployment actually rolls; the same parameters score **16.3122** on the
+pre-rebuild tape and **3.6006** on the corrected one. Only the four `source_*`
+provenance fields changed, so a live run places identical orders before and
+after — which is why this did **not** restart the V5 soak clock, decided
+explicitly rather than by default.
+
+- `e44a047` (Calmar 13.6742, `...@2026-05-15`) stays in the ledger as history.
+  The drift guards scope "the best known row" by **session and tape vintage**,
+  so a number no file on disk can reproduce cannot re-pin a deployment.
+- **3.6006 is not a clean 4.5× decay measurement.** The rebuild inserts bars
+  inside the eval window, so the forecast grid necessarily re-phased, and
+  `DAY_SESSION_PLAN.md` §2.2 measured phase *alone* moving 13.6742 → 8.7651.
+  `TAPE_REBUILD_PLAN.md` §5.1 has the control run and the caveat.
 - **NIGHT policy**, because every tuning run used the night file (verified from
   `params.json` and from all 174 trades of the latest run being tagged NIGHT).
 - **`forced_close=False` kept deliberately.** Median holding period is 4.5 days;

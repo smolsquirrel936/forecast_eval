@@ -151,21 +151,53 @@ class LiveConfig:
 
 
 # Tech: the configuration a live run trades, pinned to the best row in
-#       `results.tsv` (commit e44a047, Calmar 13.6742, 185 trades, net +39 075.63
-#       points, max drawdown -2 856.95).
+#       `results.tsv` for its session **on the tape vintage it is scored
+#       against** (commit 4282d33, Calmar 3.6006, 235 trades, net +24 135.60
+#       points, max drawdown -6 703.24, `TXF_RPT_minute_night.csv@2026-09-01`).
 # Why:  NIGHT policy because every tuning run used
 #       `TXF_RPT_minute_night.csv` — verified from `params.json` and from all 174
 #       trades of the latest run being tagged NIGHT (SHIOAJI_PLAN §2.12).
 #       `forced_close=False` is kept deliberately: median holding period is 4.5
 #       days, so closing at every session boundary would truncate ~89 % of trades
 #       and is a different strategy, not a safety setting.
+#
+#       **RE-PINNED 2026-09-01, TAPE_REBUILD_PLAN T6 (decision D1).** The
+#       evaluated tape was rebuilt to splice where the deployment actually rolls,
+#       and **not one executable field below changed** — the thresholds, the
+#       checkpoint, the cadence and the risk shape are the same values that were
+#       pinned as `e44a047`. What changed is the four provenance fields: the same
+#       parameters score **16.3122** on the pre-rebuild tape and **3.6006** on the
+#       corrected one. D1 chose one vintage over two, so the pin moves forward
+#       with the tape.
+#
+#       **The old pin is history, not a rival.** `e44a047` stays in `results.tsv`
+#       at Calmar 13.6742 on `...@2026-05-15`; `tests/test_live_config.py` scopes
+#       "the best known row" by vintage precisely so a number that can no longer
+#       be reproduced from any file on disk cannot re-pin a live deployment.
+#
+#       **This does not restart the V5 soak clock**, and that was decided
+#       explicitly rather than by default (§6 D1 requires it). The soak's terms
+#       are about operational recovery, and re-pinning ordinarily *would* restart
+#       them — but only because a re-pin ordinarily changes what the loop
+#       executes. Here it changes nothing: `params.json` from the T5 run matches
+#       every field of this object, and `source_*` is read by no module outside
+#       this one. A live run before and after this commit places identical
+#       orders, so there is no behaviour to re-soak. The V4 fill-gap samples
+#       accrued so far stay valid for the same reason.
+#
+#       **What the number does NOT establish:** 3.6006 is the tape correction
+#       *and* a fresh forecast-grid phase draw, in unknown proportion — the
+#       rebuild inserts bars inside the eval window, and `DAY_SESSION_PLAN.md`
+#       §2.2 measured phase alone moving 13.6742 -> 8.7651. See
+#       `TAPE_REBUILD_PLAN.md` §5.1 before reading this as a 4.5x decay.
 PINNED = LiveConfig(
-    source_commit="e44a047",
-    source_calmar=13.6742,
+    source_commit="4282d33",
+    source_calmar=3.6006,
     source_dataset=r"\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_night.csv",
     source_note=(
-        "+median_path mid-horizon momentum gate (path_momentum=True); "
-        "185 trades; net +39075.63 pts; max dd -2856.95"
+        "TAPE_REBUILD_PLAN T5 re-measure on the rebuilt tape "
+        "(@2026-09-01); parameters unchanged from e44a047, tape corrected; "
+        "235 trades; net +24135.60 pts; max dd -6703.24"
     ),
     policy=SessionPolicy.night(),
     checkpoint="Datadog/Toto-2.0-1B",

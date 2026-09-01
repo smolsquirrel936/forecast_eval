@@ -625,8 +625,24 @@ T5  [DONE 2026-09-01] re-run the pinned config on the   -> MEASURED: Calmar 16.3
     is NOT re-run; parameters stay, tape changes.]          the tape, not tree drift. BUT SEE 5.1 -- the
                                                            forecast grid necessarily re-phased, and W4b
                                                            measured phase ALONE moving 13.6742 -> 8.7651.
-T6  re-pin NIGHT to the new row (D1)                    -> verify: results.tsv row + dataset vintage;
-    [decided; the live-change risk is recorded at 6]           and whether the V5 soak clock restarts
+T6  [DONE 2026-09-01] re-pin NIGHT to the new row (D1)  -> VERIFIED: results.tsv row 4282d33 on
+    [decided; the live-change risk is recorded at 6]       TXF_RPT_minute_night.csv@2026-09-01,
+                                                           warmup 538790, Calmar 3.6006, keep.
+                                                           PINNED re-pointed; e44a047 stays as history.
+                                                           The drift guards now scope "best known row"
+                                                           by SESSION AND TAPE VINTAGE -- without that
+                                                           a Calmar no file on disk can reproduce
+                                                           outranks the tape actually shipped.
+                                                        -> V5 SOAK CLOCK: does NOT restart, decided
+                                                           explicitly (6 requires it). Re-pinning
+                                                           ordinarily would, but only because it
+                                                           ordinarily changes what the loop executes.
+                                                           Here NO executable field moved -- the T5
+                                                           run's params.json matches PINNED field for
+                                                           field, and source_* is read by no module
+                                                           outside config.py. Identical orders before
+                                                           and after, so there is no behaviour to
+                                                           re-soak; V4's 3 fill-gap samples stay valid.
 T7  re-run W4b, W5a and W5b on the new tape             -> verify: the DAY rows lose PROVISIONAL.
     [NOT "only then run W5a/W5b" -- those are already          warmup_bars must be RECOMPUTED from a
     done provisionally, see 4. This is the re-measure.]        target timestamp, never carried across

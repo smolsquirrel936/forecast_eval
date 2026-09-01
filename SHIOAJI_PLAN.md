@@ -93,6 +93,26 @@ assuming they match segment 2's:**
 **Next fixed date after this: 2026-09-15 15:30**, the first real contract roll
 (§2.6, `live/roll.py`, built and still undemonstrated).
 
+> **The pin moved on 2026-09-01 and the soak clock does NOT restart.**
+> `TAPE_REBUILD_PLAN.md` T6 re-pinned NIGHT from `e44a047` to `4282d33` after the
+> evaluated tape was rebuilt — the same parameters score Calmar **16.3122** on
+> the old tape and **3.6006** on the corrected one. This was decided explicitly,
+> because §6 D1 flagged that changing a configuration under a running soak
+> ordinarily restarts its clock:
+>
+> - **No executable field changed.** D1 chose (a) re-measure, not (b) re-tune, so
+>   the thresholds, checkpoint, cadence and risk shape are the values that were
+>   already pinned — verified field-for-field against the T5 run's `params.json`.
+>   Only the four `source_*` provenance fields moved, and nothing outside
+>   `live/config.py` reads them. A live run places **identical orders** before and
+>   after, so there is no behaviour to re-soak.
+> - **V4's fill-gap samples stay valid** for the same reason — they are slippage
+>   on orders this pin still places identically. Still 3 of the ~20 needed.
+> - What the new number does *not* establish is in `TAPE_REBUILD_PLAN.md` §5.1:
+>   the rebuild re-phases the forecast grid, and `DAY_SESSION_PLAN.md` §2.2
+>   measured phase alone moving 13.6742 → 8.7651, so 3.6006 is the tape
+>   correction *and* a fresh phase draw in unknown proportion.
+
 ### ⏱ THE V5 SOAK — **all checklist items PASSED; stopped 2026-09-01 06:40**
 
 **MEASURED 2026-08-31 20:40**, against `outputs/live_20260831_203923/session.jsonl`

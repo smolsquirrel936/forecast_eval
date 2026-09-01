@@ -249,9 +249,15 @@ def test_config_is_frozen():
 
 
 def test_describe_carries_provenance_for_the_log_banner():
+    # Tech: the Calmar is asserted from `PINNED`, not as a literal.
+    # Why:  it was `"13.6742"` until TAPE_REBUILD_PLAN T6 re-pinned the night
+    #       deployment, and a hardcoded copy of a provenance value is a second
+    #       place to update that nothing points at — exactly the drift this file
+    #       exists to catch, reproduced inside the guard itself. What matters is
+    #       that the banner carries whatever the pin says, so that is the test.
     text = PINNED.describe()
     assert PINNED.source_commit in text
-    assert "13.6742" in text
+    assert str(PINNED.source_calmar) in text
     assert "Toto-2.0-1B" in text
     assert "NIGHT" in text
 
@@ -352,15 +358,24 @@ def test_best_row_is_none_when_a_session_has_no_rows():
 
 
 def _row_for(config):
-    """The row a deployment is pinned to: its session's best `keep` row.
+    """The row a deployment is pinned to: its session's best `keep` row **on the
+    tape vintage that pin was measured against**.
 
     Not a lookup by commit. W5a and W5b were produced by one code commit
     (`fdd1348`), so three DAY rows share it and the commit alone does not
     identify a row -- unlike the NIGHT chain, where every edit:/keep: step was a
     separate commit. Resolving through `_best_row` is what the pin actually
-    means anyway: "the best known configuration for this deployment"."""
+    means anyway: "the best known configuration for this deployment".
+
+    The vintage comes from the pinned commit's own row (TAPE_REBUILD_PLAN T6).
+    Without it "best" spans tapes, and after the rebuild that means a Calmar of
+    16.3122 that no file on disk can reproduce outranks the 3.6006 the same
+    parameters actually score on the tape now shipped."""
     session = _session_of(config)
-    row = _best_row(_rows(), session)
+    vintage = next((r["dataset"] for r in _rows()
+                    if r["commit"] == config.source_commit
+                    and r["session"] == session), None)
+    row = _best_row(_rows(), session, vintage)
     if row is None:
         pytest.fail(f"results.tsv has no {session} rows to pin against")
     return row
