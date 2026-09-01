@@ -7,6 +7,15 @@ instants. Investigating that turned up a larger defect in the tape itself.
 **Nothing has been built and no rebuild has been run.** Two decisions in §6 are
 the user's and are not assumed anywhere above them.
 
+**Updated 2026-09-01 — §6's D1 and D2 are both taken, so the rebuild is no
+longer gated on a decision.** D1: NIGHT moves to the new tape, one vintage, not
+two — overriding this plan's recommendation, with the live risk it accepts
+recorded at §6. D2: the combined `TXF_RPT_minute.csv` **survives**, reserved for
+a future third deployment trading DAY and NIGHT as one session; its splice
+instant is `SessionPolicy.both().roll_at_time()` = **15:30**, the same as the
+night tape's, so no new rule is needed. One sub-question under D1 is still open
+and is flagged there — it gates **T5**, not T0.
+
 **Re-verified 2026-09-01 — still true, and both defects are still in the file.**
 The day tape was re-measured end-to-end against §0; the numbers confirm it, one
 new finding is added, and one cross-plan claim in §1 turns out not to hold as
@@ -239,6 +248,39 @@ serve different deployments — but it means the two files stop being two views 
 one series, and **`TXF_RPT_minute.csv` (combined) needs a stated choice or
 should stop being used for tuning**. Decision D2.
 
+**RESOLVED 2026-09-01 by D2 — three tapes, two splice points.** The combined
+file survives as the evaluated series for a future full-day deployment, so it is
+spliced on that deployment's own rule: `SessionPolicy.both().roll_at_time()` =
+**15:30**. That is the *same* instant as the night tape's, because the
+later-closing session sets the roll. So:
+
+| tape | splice | serves |
+|---|---|---|
+| `TXF_RPT_minute.csv` | **15:30** | full-day deployment (future) |
+| `TXF_RPT_minute_night.csv` | **15:30** | NIGHT deployment |
+| `TXF_RPT_minute_day.csv` | **12:45** | DAY deployment |
+
+> **This contradicts §3's pipeline, and the contradiction has to be resolved in
+> T0/T1 rather than discovered in T3.** §3 draws one front-month rule at cell 7
+> producing one tick file, one combined minute file, and then a *session split*
+> into day and night. That structure can only carry **one** splice instant. With
+> day at 12:45 it cannot produce the day tape by splitting the combined one —
+> in the window between 12:45 and 15:30 on a roll day the two tapes must hold
+> **different delivery months**, which a split of a single series cannot express.
+>
+> Night and combined still share a splice, so `TXF_RPT_minute_night.csv` remains
+> a session-split of `TXF_RPT_minute.csv`. **The day tape needs its own
+> derivation.** Two ways, not chosen here:
+>
+> - re-derive from `extracted_data/` a second time under the day rule — simple,
+>   and pays §3's "expensive path" twice;
+> - carry `contract` through to the minute stage and apply the per-policy
+>   front-month selection at the split — one derivation, but the split step stops
+>   being a filter and becomes part of the splice rule.
+>
+> §3's diagram and T1–T3 should be rewritten to whichever is chosen. Left as-is
+> above so the choice is visible rather than silently assumed.
+
 ---
 
 ## 3. Scope — what has to be rebuilt
@@ -290,6 +332,25 @@ rebuild both tapes  ->  re-baseline night  ->  W5a/W5b  ->  W6 onward
 
 against a first live roll on **2026-09-15**, with V5 not yet passed.
 
+> **SUPERSEDED 2026-09-01 — the order above was not followed, deliberately.**
+> `DAY_SESSION_PLAN.md` W5a, W5b, W6 and W7 were all run *before* this rebuild,
+> on that plan's explicitly **provisional** branch: W5a/W5b are measured against
+> Calmar 16.3122 and are re-measured after T0–T4 whatever they said. W6 and W7
+> never read the tape and are unaffected. So the remaining order is not
+> "rebuild → W5" but:
+>
+> ```
+> T0-T4 rebuild  ->  T5 re-measure NIGHT  ->  T6 re-pin (D1)
+>                ->  re-run W4b, W5a, W5b on the new tape  ->  W8 onward
+> ```
+>
+> The prediction in this section held: W5's numbers do need re-running. What it
+> bought by going first is that the *machinery* is built and tested, so the
+> re-measurement is a re-run rather than a fresh piece of work — and W5a's
+> finding that night's parameters do not transfer at all is a fact about the
+> strategy, not about the tape vintage, so it will survive the rebuild whatever
+> the numbers do.
+
 ---
 
 ## 5. Order of work
@@ -305,8 +366,15 @@ T3  re-split day/night                                  -> verify: 0 bars on a d
 T4  diff old vs new tape                                -> verify: a measured table -- bars changed,
                                                            bars added, by roll
 T5  re-run the pinned config on the NEW night tape      -> verify: the number that replaces 16.3122
-T6  decide whether to re-pin NIGHT (D1)                 -> verify: results.tsv row + dataset vintage
-T7  only then, DAY_SESSION_PLAN W5a/W5b
+    [D1 taken: NIGHT moves to the new tape. The open           (and W4b's, which rests on the same run)
+    sub-question -- re-measure only, or re-run the full
+    edit:/keep: search -- gates THIS step. Ask first.]
+T6  re-pin NIGHT to the new row (D1)                    -> verify: results.tsv row + dataset vintage;
+    [decided; the live-change risk is recorded at 6]           and whether the V5 soak clock restarts
+T7  re-run W4b, W5a and W5b on the new tape             -> verify: the DAY rows lose PROVISIONAL.
+    [NOT "only then run W5a/W5b" -- those are already          warmup_bars must be RECOMPUTED from a
+    done provisionally, see 4. This is the re-measure.]        target timestamp, never carried across
+                                                              as a number (0.5)
 ```
 
 T0–T4 need no GPU. T5 is ~4 minutes (§2.13's instrument).
@@ -318,18 +386,92 @@ the pre-2026-08-24 vintage and are not a substitute.
 
 ---
 
-## 6. Decisions needed — the user's, not assumed
+## 6. Decisions — **both taken 2026-09-01**
 
 - **D1 — does NIGHT get re-tuned now, or run on the old pin while the new tape
   is validated in parallel?** The live deployment is mid-soak with the first
   real roll on 2026-09-15. Re-pinning is a live change; validating in parallel
   costs nothing but leaves two vintages in play for a while.
-  **Recommendation: validate in parallel, do not re-pin before the roll.**
+  *(Recommendation had been: validate in parallel, do not re-pin before the
+  roll.)*
+
+  **DECIDED: NIGHT moves to the new tape — one vintage, not two.** The soaking
+  deployment is re-pinned to numbers measured on the rebuilt tape rather than
+  kept on the old pin. Reason given: the time cost of the testing is the binding
+  constraint, and validating two vintages in parallel pays it twice.
+
+  **This overrides the recommendation above, deliberately.** Recorded with the
+  risk it accepts, because §4 and `DAY_SESSION_PLAN.md` §2.2 both flagged it and
+  nothing else in this file now will:
+
+  - **Re-pinning is a live change to a deployment that is mid-soak**, with the
+    first real roll on **2026-09-15**. `SHIOAJI_PLAN.md`'s V5 soak terms were
+    measured against the *current* pin; changing the configuration under a
+    running soak is the kind of event that ordinarily restarts its clock. Decide
+    explicitly whether it does, before re-pinning — not after.
+  - **The old pin does not disappear.** `results.tsv` keeps `e44a047` at Calmar
+    13.6742 on `TXF_RPT_minute_night.csv@2026-05-15`; the new row is a new row on
+    a new vintage. One vintage is the *forward* policy, not a rewrite of the
+    ledger.
+
+  **Still open, and it changes the work by orders of magnitude — not assumed
+  here.** "Re-tuned" can mean either of two things, and the reasoning given
+  (time cost) points at the cheaper one without settling it:
+
+  | | what it costs |
+  |---|---|
+  | **(a) re-measure and re-pin** — run the *existing* pinned parameters on the rebuilt tape, record the row, re-pin to it | one ~5-minute run |
+  | **(b) re-tune** — re-run the whole `edit:`/`keep:` search on the rebuilt tape | GPU-days |
+
+  T0–T4 must land before either, so this does not block the rebuild. **Ask before
+  starting T5, not before T0.**
+
 - **D2 — does `TXF_RPT_minute.csv` (combined) survive?** With policy-dependent
   splice points it has no single correct rule. Either it is retired, or it is
   rebuilt on one named policy and documented as such.
-  **Recommendation: retire it for tuning. `real_data.py` already requires
-  `--data` explicitly, so nothing depends on it silently.**
+  *(Recommendation had been: retire it for tuning.)*
+
+  **DECIDED: it survives, reserved for a future third deployment that trades
+  DAY and NIGHT as one session.** The intended end state is three deployments —
+  **day / night / full-day** — and the combined tape is the full-day one's
+  evaluated series.
+
+  **This resolves the "no single correct rule" objection rather than overriding
+  it**, and the rule is already in the code. §2.1 splices at
+  `roll_at(month)` — *the instant the deployment actually rolls* — and a
+  `SessionPolicy.both()` deployment has one. Measured:
+
+  | policy | sessions | bars/session | `roll_at_time()` | `cache_slug()` | warm-up days |
+  |---|---|---|---|---|---|
+  | night | NIGHT | 840 | 15:30 | `night` | 30 |
+  | day | DAY | 300 | 12:45 | `day` | 84 |
+  | **both** | DAY+NIGHT | **1 140** | **15:30** | `day_night` | **22** |
+
+  So the combined tape is rebuilt at **15:30**, which is **the same instant as
+  the night tape** — the later-closing session sets the roll. §2.3's "two tapes,
+  two splice points" becomes *three tapes, two splice points*: night and combined
+  at 15:30, day at 12:45. No new splice rule is needed.
+
+  **What a third deployment would still need — none of it done, none of it in
+  this plan's scope.** Listed so the decision's cost is visible now rather than
+  discovered later:
+
+  - `results.tsv`'s session column admits only `NIGHT` / `DAY`
+    (`tests/test_live_config.py`'s `VALID_SESSIONS`). A full-day row needs a
+    third value, and `_best_row`'s scoping then extends to it for free.
+  - **Two guards assert a pinned config trades exactly one session** —
+    `_session_of` and `test_every_registered_config_trades_exactly_one_session`.
+    Both are deliberate (§C1: on Calmar the sessions are not comparable, so an
+    unscoped "best" would let one deployment re-pin another) and both would need
+    re-stating for a policy whose *single deployment* legitimately spans two
+    session labels. That is a real design question, not a line to delete.
+  - `forced_close_on_session_end` stops being moot. For day and night it is
+    `False` because the session boundary is the deployment boundary; a full-day
+    deployment crosses DAY↔NIGHT *inside* one position's life, which is exactly
+    what C8 is about and what `run.py`'s force-close latch already implements.
+  - It needs its own tuned configuration. Neither `PINNED` nor `PINNED_DAY`
+    transfers — W5a measured that going one direction (Calmar 16.3122 → 0.2671),
+    and a 1 140-bar session is a third regime again.
 
 ---
 
