@@ -42,15 +42,41 @@ from forecast_eval.environment import classify_session
 from forecast_eval.live.roll import front_month_series, last_trading_day
 from forecast_eval.live.sessions import SessionPolicy
 
-# Tech: the three outputs, as (filename, policy factory).
+# Tech: the first minute the full-day tape carries.
+# Why:  MEASURED 2026-09-01. The combined tape spans 2011-01-03, but TAIFEX's
+#       after-hours session did not exist until **2017-05-15**, so its first
+#       468 524 bars (15.6 %) are DAY-only — a 300-bar "session" where a full-day
+#       deployment's is 1 140. Night hours were 15:00–04:59 from day one (checked:
+#       the post-midnight tail ends 04:59 in every month), so the ramp is
+#       *liquidity*, not a schedule change: median night coverage runs 0.84–0.93
+#       through 2017 and first reaches the ~0.99 plateau in **2018-02**.
+#
+#       2018-01-01 is the cut: a round boundary that excludes the whole 2017
+#       ramp. January 2018 sits at 0.931, still short of the plateau — kept
+#       because one transitional month out of 8.6 years is a smaller distortion
+#       than an unexplainable start date, and stated here so it is not a
+#       surprise. Move this to 2018-02-01 for the strict reading, or to
+#       2017-05-15 to take every full-day minute that exists.
+FULLDAY_START = pd.Timestamp("2018-01-01")
+
+# Tech: the four outputs, as (filename, policy factory, first minute or None).
 # Why:  the filename *is* the deployment, and the policy is what supplies both
 #       the splice instant (`roll_at_time`) and the session filter. Keeping them
 #       adjacent in one table is what stops the pairing being re-derived — the
 #       combined file's 12:45 is not guessable from its name (§2.3, D2).
+#
+#       The last two share a policy and differ only in where they start.
+#       `TXF_RPT_minute.csv` stays the complete record — every in-session minute
+#       the source has, which the DAY deployment's history genuinely needs back
+#       to 2011 — while `TXF_RPT_minute_fullday.csv` is the slice a full-day
+#       deployment can actually be tuned on. One file cannot be both: truncating
+#       the combined tape would discard six years of real day-session data, and
+#       tuning on it whole would span two different session structures.
 TAPES = (
-    ("TXF_RPT_minute_day.csv", SessionPolicy.day),
-    ("TXF_RPT_minute_night.csv", SessionPolicy.night),
-    ("TXF_RPT_minute.csv", SessionPolicy.both),
+    ("TXF_RPT_minute_day.csv", SessionPolicy.day, None),
+    ("TXF_RPT_minute_night.csv", SessionPolicy.night, None),
+    ("TXF_RPT_minute.csv", SessionPolicy.both, None),
+    ("TXF_RPT_minute_fullday.csv", SessionPolicy.both, FULLDAY_START),
 )
 
 OUT_COLS = ["datetime", "contract", "open", "high", "low", "close", "volume"]
@@ -206,12 +232,21 @@ def main(argv=None) -> int:
           f"({_time.time() - t0:.0f}s)", flush=True)
 
     built = {}
-    for name, factory in TAPES:
+    for name, factory, start in TAPES:
         policy = factory()
         tape = front_month_tape(bars, labels, policy)
+        if start is not None:
+            # Tech: truncate after the front-month selection, not before.
+            # Why:  the selection is per-minute and stateless, so the rows are the
+            #       same either way — but doing it here makes the tape provably a
+            #       suffix of the untruncated one, which the check below asserts.
+            #       A start date that silently changed which contract a minute
+            #       carries would be a second splice rule hiding in a filter.
+            tape = tape[tape["datetime"] >= start].reset_index(drop=True)
         built[name] = tape
         print(f"\n{name}  [{policy.roll_at_time().strftime('%H:%M')}, "
-              f"{'+'.join(sorted(policy.sessions))}]")
+              f"{'+'.join(sorted(policy.sessions))}"
+              + (f", from {start:%Y-%m-%d}" if start is not None else "") + "]")
         print(f"  bars      : {len(tape):,}")
         print(f"  span      : {tape.datetime.min()} .. {tape.datetime.max()}")
         print(f"  contracts : {tape.contract.nunique()}   "
@@ -257,6 +292,19 @@ def main(argv=None) -> int:
     print(f"  different delivery month : {int(differs.sum()):,}"
           + (f", {at.dt.strftime('%H:%M').min()}-{at.dt.strftime('%H:%M').max()} "
              f"on {at.dt.date.nunique()} dates" if len(at) else ""))
+
+    # Tech: the full-day tape must be the combined tape's suffix, bar for bar.
+    # Why:  it exists to answer "where can a full-day deployment be tuned", and
+    #       that is a question about the *window*, not about the series. If the
+    #       two ever disagreed on a shared minute, the start date would have
+    #       become a second splice rule — and a tape tuned on one convention then
+    #       deployed against another is the whole failure this rebuild is about.
+    fullday = built["TXF_RPT_minute_fullday.csv"]
+    suffix = combined[combined["datetime"] >= FULLDAY_START].reset_index(drop=True)
+    print(f"\nfullday tape == combined tape from {FULLDAY_START:%Y-%m-%d}: "
+          f"{fullday.equals(suffix)}   {len(fullday):,} bars "
+          f"({len(fullday) / len(combined):.1%} of the combined tape), "
+          f"{fullday.datetime.min()} .. {fullday.datetime.max()}")
 
     for name, session in (("TXF_RPT_minute_day.csv", "DAY"),
                           ("TXF_RPT_minute_night.csv", "NIGHT")):

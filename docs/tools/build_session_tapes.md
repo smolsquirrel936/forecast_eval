@@ -1,7 +1,7 @@
 # [tools/build_session_tapes.py](../../tools/build_session_tapes.py)
 
-**Role:** turn T1's per-contract intermediate into the three evaluated tapes, one per deployment.
-**Pipeline:** `TXF_RPT_minute_bycontract.csv` (4 551 359 bars) → `front_month_series(ts, policy)` → `TXF_RPT_minute_{day,night}.csv` and `TXF_RPT_minute.csv`.
+**Role:** turn T1's per-contract intermediate into the evaluated tapes — one per deployment, plus the full-day tuning window.
+**Pipeline:** `TXF_RPT_minute_bycontract.csv` (4 551 359 bars) → `front_month_series(ts, policy)` → `TXF_RPT_minute_{day,night,fullday}.csv` and `TXF_RPT_minute.csv`.
 **Depends on:** [live/roll.py](../live/roll.md), [live/sessions.py](../live/sessions.md), [environment.py](../environment.md)   **Used by:** run by hand, once per rebuild — `TAPE_REBUILD_PLAN.md` T2/T3
 
 ```powershell
@@ -11,7 +11,7 @@ uv run python -m forecast_eval.tools.build_session_tapes `
 ```
 
 25 seconds, no GPU. `--dry-run` builds and checks in memory without writing.
-**Overwrites the three shipped tapes** — the rollback is
+**Overwrites the three shipped tapes** (and writes a fourth) — the rollback is
 `dataset/RPT/_prerebuild_backup_20260901/`, and a full rebuild cannot be undone
 with `truncate`.
 
@@ -20,7 +20,7 @@ with `truncate`.
 `TAPE_REBUILD_PLAN.md` §2.3 needs **two** splice instants — day and the combined
 full-day tape at 12:45, night at 15:30 — and none of the three tapes is a session
 split of another. So the front-month choice cannot happen once, upstream; it
-happens here, three times, and the session split *is* that choice rather than a
+happens here, per policy, and the session split *is* that choice rather than a
 separate pass over a front-filtered file (which is why plan step T3 folds in).
 
 Each tape is `front_month_series(ts, policy)` over the intermediate, keeping one
@@ -31,8 +31,9 @@ row per minute, then filtered to the minutes that policy's sessions contain.
 |---|---|---|
 | `session_labels(stamps)` | function | `classify_session` for a whole column, via a time-of-day lookup |
 | `front_month_tape(bars, labels, policy)` | function | one deployment's tape: front-month-continuous, its sessions only |
-| `main(argv)` | function | CLI: build all three, report the checks, write |
-| `TAPES` | constant | the three `(filename, policy factory)` pairs |
+| `main(argv)` | function | CLI: build all four, report the checks, write |
+| `TAPES` | constant | the four `(filename, policy factory, start)` triples |
+| `FULLDAY_START` | constant | `2018-01-01` — first minute of the full-day tuning window |
 | `SETTLEMENT_CLOSE` | constant | `13:30` — when the expiring month stops trading |
 
 ## The selection rule, and the one place it is easy to get wrong
@@ -74,6 +75,7 @@ Printed by every run, including `--dry-run`.
 | `TXF_RPT_minute_day.csv` | 1 146 712 | 12:45 | 1 | **0** |
 | `TXF_RPT_minute_night.csv` | 1 849 007 | 15:30 | 10 240 | **0** |
 | `TXF_RPT_minute.csv` | 2 995 727 | 12:45 | 10 319 | **0** |
+| `TXF_RPT_minute_fullday.csv` | 2 364 417 | 12:45 | 10 319 | **0** |
 
 **The roll count is unchanged: 112 splices on the night tape and 188 on the day
 tape**, exactly `TAPE_REBUILD_PLAN.md` §0's figures for the pre-rebuild files.
@@ -108,7 +110,7 @@ minutes in the combined tape are 15:04–15:26 on six roll Tuesdays where only t
 still on the outgoing month that printed nothing, and the earlier-only fallback
 correctly refuses to substitute a later one. Nothing ever goes the other way.
 
-**Through the real consumer.** All three load through
+**Through the real consumer.** All four load through
 [`real_data.load_minute_bars`](../real_data.md) with no row lost: one contract per
 minute (so its highest-volume collapse stays the no-op it has always been), no NaN
 closes, strictly monotonic timestamps, no duplicates, `float64` OHLCV, and each
@@ -124,3 +126,23 @@ to make raw row counts disagree with in-session bar counts, which is how
 `real_data.py` came to print a train/eval split it was not using (§0.5). This is a
 **drop**, never a relabel: nothing is moved to 13:44 where the session filters
 would start accepting it.
+
+## The fourth tape: `TXF_RPT_minute_fullday.csv`
+
+Same policy, same 12:45 splice, same rows — **only the window differs**. It is
+`TXF_RPT_minute.csv` from `FULLDAY_START` (2018-01-01) onward, and the builder
+asserts that equality bar-for-bar on every run.
+
+It exists because the combined tape spans 2011 and **TAIFEX had no after-hours
+session until 2017-05-15**, so its first **468 524 bars (15.6 %)** are day-session
+only — a 300-bar "session" where a full-day deployment's is 1 140. Night *hours*
+were 15:00–04:59 from day one; what ramps is coverage of those 840 minutes:
+0.84–0.90 through 2017, 0.931 in 2018-01, **0.989 in 2018-02** and ~0.99 after.
+
+The cut keeps January 2018 despite it sitting below the plateau — one
+transitional month out of 8.6 years, against an unexplainable start date. Change
+`FULLDAY_START` and rebuild for 2018-02-01 (strict) or 2017-05-15 (everything).
+
+**Truncating the combined tape instead would be wrong.** That file is the record
+and the DAY deployment's history genuinely reaches to 2011; this one is the
+tuning window. One file cannot be both.

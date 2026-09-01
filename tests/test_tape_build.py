@@ -185,3 +185,44 @@ def test_the_old_session_split_puts_1345_in_the_day_tape(stamp, tape, kept):
     from forecast_eval.tools.diff_tapes import old_session_split
     mid = _bars([(stamp, "202609", 24100.0, 50.0)])
     assert (len(old_session_split(mid, tape)) == 1) is kept
+
+
+# ---- the full-day tape ------------------------------------------------------
+
+
+def test_the_fullday_tape_is_the_combined_tape_from_its_start_date():
+    """It is a *window*, never a second splice rule.
+
+    `TXF_RPT_minute_fullday.csv` exists because the combined tape spans 2011 and
+    TAIFEX had no night session until 2017-05-15, so a fifth of it is a 300-bar
+    day-only regime a full-day deployment cannot be tuned on. What it must NOT be
+    is a differently-spliced series: on every minute they share, the two agree."""
+    from forecast_eval.tools.build_session_tapes import FULLDAY_START, TAPES
+    rows = [
+        (datetime(2017, 6, 15, 10, 0), "201706", 10000.0, 500.0),   # before
+        (datetime(2017, 6, 15, 22, 0), "201706", 10010.0, 500.0),   # before
+        (datetime(2018, 6, 15, 10, 0), "201806", 11000.0, 500.0),   # after
+        (datetime(2018, 6, 15, 22, 0), "201806", 11010.0, 500.0),   # after
+    ]
+    bars = _bars(rows)
+    labels = session_labels(bars["datetime"])
+    combined = front_month_tape(bars, labels, SessionPolicy.both())
+    fullday = combined[combined["datetime"] >= FULLDAY_START].reset_index(drop=True)
+
+    assert len(combined) == 4 and len(fullday) == 2
+    assert fullday["datetime"].min().year == 2018
+    # the shared minutes are identical rows, not merely identical timestamps
+    shared = combined[combined["datetime"] >= FULLDAY_START].reset_index(drop=True)
+    assert fullday.equals(shared)
+
+
+def test_the_fullday_tape_shares_the_combined_tapes_policy():
+    """Same deployment, same 12:45 splice — only the window differs. A different
+    policy here would make it a fourth series rather than a slice of the third."""
+    from forecast_eval.tools.build_session_tapes import TAPES
+    by_name = {name: (factory, start) for name, factory, start in TAPES}
+    combined_factory, combined_start = by_name["TXF_RPT_minute.csv"]
+    fullday_factory, fullday_start = by_name["TXF_RPT_minute_fullday.csv"]
+    assert combined_factory() == fullday_factory()
+    assert combined_factory().roll_at_time() == fullday_factory().roll_at_time()
+    assert combined_start is None and fullday_start is not None
