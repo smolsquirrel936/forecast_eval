@@ -22,10 +22,12 @@ from forecast_eval.live.backfill import (
 )
 from forecast_eval.live.contracts import contract_month, dated_months
 from forecast_eval.live.roll import (
+    ROLL_WINDOW,
     RollSchedule,
     RollWatch,
     front_month_at,
     last_trading_day,
+    roll_at,
     roll_at,
 )
 from forecast_eval.live.sessions import SessionPolicy
@@ -822,3 +824,56 @@ def test_the_cache_splice_rule_was_not_moved_by_this_change():
     assert front_month_at(datetime(2026, 9, 15, 15, 31)) == "202610"
     # ...and 12:45 does NOT move it, which is what "not policy-keyed" means
     assert front_month_at(datetime(2026, 9, 15, 12, 46)) == "202609"
+
+
+# ---- the roll instant is set by the clearance-day constraint ----------------
+#
+# DECIDED 2026-09-01. The expiring month stops trading at 13:30 on the clearance
+# day (the third Wednesday). A deployment's roll must complete while it is awake
+# AND that contract is still alive, so the instant is not a preference — it is
+# the last such moment, minus the retry budget.
+
+
+def test_any_policy_that_trades_day_rolls_inside_the_day_session():
+    """A `both()` deployment on NIGHT's 15:30 would be rolling at an instant its
+    day half cannot reach in time. 12:45 puts the whole ROLL_WINDOW inside the
+    day session."""
+    for p in (SessionPolicy.day(), SessionPolicy.both()):
+        assert p.roll_at_time() == time(12, 45), sorted(p.sessions)
+
+
+def test_night_alone_keeps_1530_because_it_cannot_reach_1245():
+    """Not an inconsistency. A night-only deployment is asleep 05:00-15:00, so
+    12:45 on any day is a moment it is not running."""
+    assert SessionPolicy.night().roll_at_time() == time(15, 30)
+
+
+def test_the_roll_window_of_a_day_trading_policy_ends_at_the_close():
+    """12:45 + ROLL_WINDOW = 13:45, exactly the day-session close, so the retry
+    budget fills the rest of the session and cannot overrun it."""
+    for p in (SessionPolicy.day(), SessionPolicy.both()):
+        start = datetime.combine(date(2026, 9, 15), p.roll_at_time())
+        assert (start + ROLL_WINDOW).time() == time(13, 45)
+
+
+def test_every_deployment_rolls_before_the_expiring_month_stops_trading():
+    """The constraint the instant exists to satisfy, asserted rather than
+    argued. The 202609 contract dies 2026-09-16 13:30."""
+    clear = datetime(2026, 9, 16, 13, 30)
+    for p in (SessionPolicy.day(), SessionPolicy.night(), SessionPolicy.both()):
+        end_of_window = roll_at("202609", p) + ROLL_WINDOW
+        assert end_of_window < clear, (
+            f"{sorted(p.sessions)} finishes rolling at {end_of_window}, "
+            f"after the contract dies at {clear}"
+        )
+
+
+def test_a_full_day_deployment_rolls_on_the_same_schedule_as_day():
+    """DECIDED 2026-09-01. Left on NIGHT's instant the full-day deployment would
+    be scheduled past the point where rolling is still possible for the half of
+    it that trades the day session -- the position would expire rather than be
+    rolled."""
+    assert (roll_at("202609", SessionPolicy.both())
+            == roll_at("202609", SessionPolicy.day()))
+    assert (roll_at("202609", SessionPolicy.both())
+            != roll_at("202609", SessionPolicy.night()))

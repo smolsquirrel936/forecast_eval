@@ -175,7 +175,25 @@ class SessionPolicy:
         #       liquidity claim beside it does not survive measurement — 15:30 is
         #       the 6th busiest half hour, not the busiest — but the first live
         #       roll is 2026-09-15 and this is not the change to make first.)
-        if self.sessions == frozenset({"DAY"}):
+        #
+        #       **Any policy that trades DAY rolls at 12:45**, not only a
+        #       day-only one. DECIDED 2026-09-01 for the full-day deployment
+        #       (`both()`), and the reason is a hard constraint rather than a
+        #       preference: the expiring month stops trading at **13:30 on the
+        #       clearance day**, and a deployment's roll has to complete while it
+        #       is awake *and* that contract is still alive. A `both()` policy on
+        #       15:30 inherits NIGHT's instant, which reads as "roll a day early"
+        #       but is the wrong shape for a deployment whose last waking moment
+        #       before the clear is the clearance-day morning — push it any later
+        #       and the position is not rolled by us, it expires. 12:45 puts the
+        #       whole `ROLL_WINDOW` inside the day session (12:45 + 1 h = 13:45,
+        #       exactly the close) and leaves 23 h 45 m of spare before the clear.
+        #
+        #       NIGHT cannot use 12:45 and this is why the rule is not universal:
+        #       a night-only deployment is asleep 05:00–15:00, so its last waking
+        #       moment before the clear is 05:00 on the clearance day, and by the
+        #       time it opens at 15:00 the expiring month has been dead 90 min.
+        if "DAY" in self.sessions:
             return time(12, 45)
         return time(15, 30)
 

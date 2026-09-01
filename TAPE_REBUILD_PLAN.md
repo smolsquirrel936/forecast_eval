@@ -12,9 +12,11 @@ longer gated on a decision.** D1: NIGHT moves to the new tape, one vintage, not
 two — overriding this plan's recommendation, with the live risk it accepts
 recorded at §6. D2: the combined `TXF_RPT_minute.csv` **survives**, reserved for
 a future third deployment trading DAY and NIGHT as one session; its splice
-instant is `SessionPolicy.both().roll_at_time()` = **15:30**, the same as the
-night tape's, so no new rule is needed. One sub-question under D1 is still open
-and is flagged there — it gates **T5**, not T0.
+instant is `SessionPolicy.both().roll_at_time()` = **12:45**, the same as the
+*day* tape's, so no new rule is needed — though none of the three tapes is a
+session-split of another (§2.3). D1's scope sub-question is settled the same day:
+**(a) re-measure, do not re-search**. `roll_at_time()` was amended so any policy
+trading DAY rolls at 12:45 (`DAY_SESSION_PLAN.md` C4).
 
 **Re-verified 2026-09-01 — still true, and both defects are still in the file.**
 The day tape was re-measured end-to-end against §0; the numbers confirm it, one
@@ -250,33 +252,52 @@ should stop being used for tuning**. Decision D2.
 
 **RESOLVED 2026-09-01 by D2 — three tapes, two splice points.** The combined
 file survives as the evaluated series for a future full-day deployment, so it is
-spliced on that deployment's own rule: `SessionPolicy.both().roll_at_time()` =
-**15:30**. That is the *same* instant as the night tape's, because the
-later-closing session sets the roll. So:
+spliced on that deployment's own rule: `SessionPolicy.both().roll_at_time()`.
+
+**AMENDED the same day — that is 12:45, not 15:30.** `roll_at_time()` tested
+`sessions == {"DAY"}` and so handed a `both()` policy NIGHT's 15:30; it now
+tests `"DAY" in sessions`. The reason is the clearance day and it is a hard
+constraint (`DAY_SESSION_PLAN.md` C4, "EXTENDED 2026-09-01"): the expiring month
+stops trading at **13:30** on its last trading day, a full-day deployment's last
+waking moment before that is the clearance-day morning, and a roll scheduled past
+it does not roll — **the position expires**. So:
 
 | tape | splice | serves |
 |---|---|---|
-| `TXF_RPT_minute.csv` | **15:30** | full-day deployment (future) |
-| `TXF_RPT_minute_night.csv` | **15:30** | NIGHT deployment |
+| `TXF_RPT_minute.csv` | **12:45** | full-day deployment (future) |
 | `TXF_RPT_minute_day.csv` | **12:45** | DAY deployment |
+| `TXF_RPT_minute_night.csv` | **15:30** | NIGHT deployment |
+
+**Day and combined share a splice; night is the odd one out.** (An earlier draft
+of this section had it the other way round, on the pre-amendment 15:30.)
 
 > **This contradicts §3's pipeline, and the contradiction has to be resolved in
 > T0/T1 rather than discovered in T3.** §3 draws one front-month rule at cell 7
 > producing one tick file, one combined minute file, and then a *session split*
-> into day and night. That structure can only carry **one** splice instant. With
-> day at 12:45 it cannot produce the day tape by splitting the combined one —
-> in the window between 12:45 and 15:30 on a roll day the two tapes must hold
-> **different delivery months**, which a split of a single series cannot express.
+> into day and night. That structure can carry only **one** splice instant, and
+> there are two.
 >
-> Night and combined still share a splice, so `TXF_RPT_minute_night.csv` remains
-> a session-split of `TXF_RPT_minute.csv`. **The day tape needs its own
-> derivation.** Two ways, not chosen here:
+> **No one of the three is a session-split of another**, which is the part that
+> breaks the diagram:
 >
-> - re-derive from `extracted_data/` a second time under the day rule — simple,
->   and pays §3's "expensive path" twice;
+> - the **day** tape is not a split of the combined one — a split takes a subset
+>   of rows, and outside 12:45→15:30 these two agree, but the combined tape must
+>   also carry night bars the day tape has no rows for at all;
+> - the **night** tape is not a split of the combined one either, because they
+>   splice at different instants. On roll Tuesday the night session opens 15:00
+>   while the combined tape has already been on the incoming month since 12:45 —
+>   so from **15:00 to 15:30** the two hold **different delivery months**. That
+>   is 30 minutes a roll, twelve times a year, and it is correct: they serve
+>   deployments that genuinely hold different contracts at that moment.
+>
+> So the rebuild needs the front-month selection applied **per policy**, not once
+> at cell 7. Two ways, not chosen here:
+>
+> - re-derive from `extracted_data/` once per splice instant — simple, and pays
+>   §3's "expensive path" twice (12:45 and 15:30);
 > - carry `contract` through to the minute stage and apply the per-policy
->   front-month selection at the split — one derivation, but the split step stops
->   being a filter and becomes part of the splice rule.
+>   selection at the split — one derivation, but the split step stops being a
+>   filter and becomes part of the splice rule.
 >
 > §3's diagram and T1–T3 should be rewritten to whichever is chosen. Left as-is
 > above so the choice is visible rather than silently assumed.
@@ -366,9 +387,8 @@ T3  re-split day/night                                  -> verify: 0 bars on a d
 T4  diff old vs new tape                                -> verify: a measured table -- bars changed,
                                                            bars added, by roll
 T5  re-run the pinned config on the NEW night tape      -> verify: the number that replaces 16.3122
-    [D1 taken: NIGHT moves to the new tape. The open           (and W4b's, which rests on the same run)
-    sub-question -- re-measure only, or re-run the full
-    edit:/keep: search -- gates THIS step. Ask first.]
+    [D1 = (a): re-measure only. The edit:/keep: chain          (and W4b's, which rests on the same run)
+    is NOT re-run; parameters stay, tape changes.]
 T6  re-pin NIGHT to the new row (D1)                    -> verify: results.tsv row + dataset vintage;
     [decided; the live-change risk is recorded at 6]           and whether the V5 soak clock restarts
 T7  re-run W4b, W5a and W5b on the new tape             -> verify: the DAY rows lose PROVISIONAL.
@@ -414,17 +434,18 @@ the pre-2026-08-24 vintage and are not a substitute.
     a new vintage. One vintage is the *forward* policy, not a rewrite of the
     ledger.
 
-  **Still open, and it changes the work by orders of magnitude — not assumed
-  here.** "Re-tuned" can mean either of two things, and the reasoning given
-  (time cost) points at the cheaper one without settling it:
+  **Scope settled 2026-09-01: (a) — re-measure, do not re-search.** "Re-tuned"
+  could have meant either, and they differ by orders of magnitude:
 
-  | | what it costs |
-  |---|---|
-  | **(a) re-measure and re-pin** — run the *existing* pinned parameters on the rebuilt tape, record the row, re-pin to it | one ~5-minute run |
-  | **(b) re-tune** — re-run the whole `edit:`/`keep:` search on the rebuilt tape | GPU-days |
+  | | what it costs | chosen |
+  |---|---|---|
+  | **(a) re-measure and re-pin** — run the *existing* pinned parameters on the rebuilt tape, record the row, re-pin to it | one ~5-minute run | **yes** |
+  | (b) re-tune — re-run the whole `edit:`/`keep:` search on the rebuilt tape | GPU-days | no |
 
-  T0–T4 must land before either, so this does not block the rebuild. **Ask before
-  starting T5, not before T0.**
+  So T5 is one run of the pinned configuration, T6 re-pins to its row, and the
+  `edit:`/`keep:` chain is **not** re-run. The parameters stay as they are; only
+  the tape underneath them changes. Consistent with the reason D1 was decided the
+  way it was — testing time is the binding constraint.
 
 - **D2 — does `TXF_RPT_minute.csv` (combined) survive?** With policy-dependent
   splice points it has no single correct rule. Either it is retired, or it is
@@ -445,12 +466,20 @@ the pre-2026-08-24 vintage and are not a substitute.
   |---|---|---|---|---|---|
   | night | NIGHT | 840 | 15:30 | `night` | 30 |
   | day | DAY | 300 | 12:45 | `day` | 84 |
-  | **both** | DAY+NIGHT | **1 140** | **15:30** | `day_night` | **22** |
+  | **both** | DAY+NIGHT | **1 140** | **12:45** | `day_night` | **22** |
 
-  So the combined tape is rebuilt at **15:30**, which is **the same instant as
-  the night tape** — the later-closing session sets the roll. §2.3's "two tapes,
-  two splice points" becomes *three tapes, two splice points*: night and combined
-  at 15:30, day at 12:45. No new splice rule is needed.
+  So the combined tape is rebuilt at **12:45**, the **same instant as the day
+  tape**. §2.3's "two tapes, two splice points" becomes *three tapes, two splice
+  points*: day and combined at 12:45, night at 15:30. No new splice rule is
+  needed — but see §2.3, none of the three is a session-split of another.
+
+  **`roll_at_time()` was amended for this on 2026-09-01**: it tested
+  `sessions == {"DAY"}`, which handed a `both()` policy NIGHT's 15:30, and now
+  tests `"DAY" in sessions`. A full-day deployment left on 15:30 would be
+  scheduled past the last moment it can still reach the expiring contract, which
+  stops trading at 13:30 on the clearance day — the position would expire rather
+  than be rolled. Full reasoning and the twelve-roll timetable are in
+  `DAY_SESSION_PLAN.md` C4, "EXTENDED 2026-09-01"; 5 new tests.
 
   **What a third deployment would still need — none of it done, none of it in
   this plan's scope.** Listed so the decision's cost is visible now rather than

@@ -814,6 +814,69 @@ config so two deployments cannot share the wrong one — that part is settled an
 unaffected.
 
 #### DECIDED 2026-08-25 — **DAY `ROLL_AT` = 12:45; NIGHT stays at 15:30**
+#### EXTENDED 2026-09-01 — **any policy that trades DAY rolls at 12:45**
+
+`roll_at_time()` tested `sessions == {"DAY"}`; it now tests `"DAY" in sessions`,
+so a **full-day** deployment (`both()`) rolls at 12:45 with the day one rather
+than inheriting NIGHT's 15:30. **This is a hard constraint, not a preference,
+and the reason is the clearance day.**
+
+The expiring month **stops trading at 13:30 on its last trading day** — that is
+§0.2 of `TAPE_REBUILD_PLAN.md`, measured at tick level (`202608` last print
+13:29:58 while `202609` ran to 13:44:59). A deployment's roll has to complete
+while it is **awake** *and* that contract is **still alive**. Those two together
+fix the instant:
+
+| deployment | sessions traded | last awake before the clear | rolls at | `ROLL_WINDOW` | spare before the clear |
+|---|---|---|---|---|---|
+| **DAY** | 08:45–13:45 | clearance day **13:30** | **12:45** | 12:45–13:45 | 23 h 45 m |
+| **NIGHT** | 15:00–05:00 (+1) | clearance day **05:00** | **15:30** | 15:30–16:30 | 12 h 30 m |
+| **FULL-DAY** | both | clearance day **13:30** | **12:45** | 12:45–13:45 | 23 h 45 m |
+
+**Why NIGHT cannot simply share 12:45, so the rule is not universal:** a
+night-only deployment is asleep 05:00–15:00. Its last waking moment before the
+clear is **05:00** on the clearance day, and by the time it opens at 15:00 the
+expiring month has been dead for 90 minutes. 12:45 is an instant it is not
+running.
+
+**Why FULL-DAY could not stay on 15:30.** It reads as "rolls a day early", and
+arithmetically it does — but it is the wrong shape for a deployment whose last
+reachable moment is the clearance-day morning. Pushed any later there is nothing
+left to roll *into*: the position is not rolled by us, **it expires**. 12:45 puts
+the whole retry budget inside the day session (12:45 + `ROLL_WINDOW` = 13:45,
+exactly the close) and leaves a full day of spare.
+
+**The schedule, next twelve rolls.** `last_trading_day` is the third Wednesday,
+computed not tabulated, so the roll date is **always the Tuesday before**:
+
+| delivery | clearance day (LTD) | roll date | DAY | NIGHT | FULL-DAY |
+|---|---|---|---|---|---|
+| **202609** | 2026-09-16 (Wed) | **2026-09-15 (Tue)** | **12:45** | **15:30** | **12:45** |
+| 202610 | 2026-10-21 | 2026-10-20 (Tue) | 12:45 | 15:30 | 12:45 |
+| 202611 | 2026-11-18 | 2026-11-17 (Tue) | 12:45 | 15:30 | 12:45 |
+| 202612 | 2026-12-16 | 2026-12-15 (Tue) | 12:45 | 15:30 | 12:45 |
+| 202701 | 2027-01-20 | 2027-01-19 (Tue) | 12:45 | 15:30 | 12:45 |
+| 202702 | 2027-02-17 | 2027-02-16 (Tue) | 12:45 | 15:30 | 12:45 |
+| 202703 | 2027-03-17 | 2027-03-16 (Tue) | 12:45 | 15:30 | 12:45 |
+| 202704 | 2027-04-21 | 2027-04-20 (Tue) | 12:45 | 15:30 | 12:45 |
+| 202705 | 2027-05-19 | 2027-05-18 (Tue) | 12:45 | 15:30 | 12:45 |
+| 202706 | 2027-06-16 | 2027-06-15 (Tue) | 12:45 | 15:30 | 12:45 |
+| 202707 | 2027-07-21 | 2027-07-20 (Tue) | 12:45 | 15:30 | 12:45 |
+| 202708 | 2027-08-18 | 2027-08-17 (Tue) | 12:45 | 15:30 | 12:45 |
+
+The first row is live: **202609 rolls Tuesday 2026-09-15.** Holidays are
+deliberately not modelled — `roll_at`'s own reasoning is that both failure modes
+are survivable (roll early is harmless; roll late is caught by `RollWatch`),
+which beats a holiday table maintained for ever.
+
+**5 new tests**, including the constraint itself rather than the number: every
+deployment's roll window must *end* before the expiring month stops trading.
+
+**Consequence carried into `TAPE_REBUILD_PLAN.md` §2.3**, since §2.1 splices the
+tape at the instant the deployment rolls: the **combined** tape now splices at
+**12:45 with the day tape**, not at 15:30 with the night one.
+
+---
 
 **NIGHT: unchanged.** The liquidity claim in `roll.py`'s comment does not survive
 the measurement above, but the runway argument does, and the first live roll is
