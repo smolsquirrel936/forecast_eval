@@ -89,8 +89,18 @@ loop — as impossible while the two series structurally differed at every roll.
 They no longer do. That check is now possible and has still not been run; it is
 the most direct remaining test of what this whole plan was for.
 
-**Not committed as of this writing:** the T7 tooling (`tools/band_sweep.py` and
-its docs page), the full-day tape work, and the documentation edits above.
+**All committed** on branch `night`, 2026-09-01: `3c3ae38` (the T7 band sweep),
+`190fed6` (the full-day tape), `0a49592` (the documentation sweep) — on top of
+`4282d33` (T2–T5) and `e0dda6c` (T6). Nothing pushed. The four items above are
+what remains **unstarted**, not uncommitted.
+
+> **`DAY_SESSION_PLAN.md` does not know T7 happened.** Its §2.3 is still headed
+> **PROVISIONAL**, its W5a/W5b step lines still read `[DONE, PROVISIONAL]`, and
+> its §5 table still says both "re-measure after T0–T4". T7 *is* that
+> re-measurement and it is done — 0.2671 → 0.4129 and 4.6805 → 1.6937, §5.2 — but
+> the numbers were left to the user to apply, so that plan reads as though the
+> rebuild never landed. It is the single largest piece of stale documentation
+> left in the repo, and it is item 1 above.
 
 ---
 
