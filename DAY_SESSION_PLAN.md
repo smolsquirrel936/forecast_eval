@@ -756,6 +756,202 @@ have measured the defect rather than the deployment.
 
 ---
 
+### 2.5 W8 ran — and the counter that verified it cannot show a margin · found 2026-09-02
+
+W8 passed on the first attempt (the run itself is in §5's W8 row). This section is
+the one thing it turned up that is not a tick in a checklist, and it is a **NIGHT**
+finding reached from DAY work — the same shape as C3.
+
+#### `emitter_samples` saturates at 4, so the banner cannot report priming health
+
+The start-up printed `warm: context=3008 emitter_samples=4`. Read against
+`_check_primed`'s floor of 3 that looks like one sample of margin. **It is not a
+margin at all.** `_short_prices` is `deque(maxlen=short_window + 1)` with
+`short_window = 3` (`strategy/threshold.py:79`, `live/config.py:61`), and
+`_emitter_samples()` returns its length — so **4 is the maximum the number can
+ever take**. A run primed with 4 non-HOLD signals and a run primed with 400 both
+print `emitter_samples=4`.
+
+So the field verifies *that* priming completed and can never say *by how much*.
+The distinction matters because the failure it guards is not gradual: below 3
+samples `_trend_confirms` fails **open** and the run refuses to start (correctly),
+and there is no reading of the banner that anticipates it. Anything wanting a
+margin has to count appends, not deque length.
+
+#### What the margin actually is — measured from the pinned runs' own `signals.csv`
+
+No GPU and no market: the same arithmetic-over-existing-artefacts route C8 used.
+`_trend_confirms` appends once per non-HOLD emission, so the priming margin is
+"how many non-HOLD signals fall inside the last K stride boundaries", and the risk
+is a long HOLD run. Measured over each deployment's **whole** eval window, both on
+the `@2026-09-01` tape:
+
+| | DAY (`PINNED_DAY`, T7) | NIGHT (`PINNED`, T5) |
+|---|---|---|
+| boundaries | 15 687 | 43 674 |
+| non-HOLD | 409 — **2.61 %** | 1 794 — **4.11 %** |
+| longest HOLD run | **246** | **385** |
+| worst 500-boundary window | **3** — exactly the floor | **1** — *below* it |
+| worst 900-boundary window | 10 | 7 |
+| smallest K clearing 3 in **every** window | **475** | **750** |
+
+**NIGHT's 385 reproduces C6's recorded figure exactly**, independently and on a
+different tape vintage. That is what licenses the rest of the table.
+
+#### The finding: `emitter_prime_boundaries = 500` is under-sized for NIGHT
+
+K=500 was chosen in C6 to clear night's 385-boundary HOLD run with margin. The
+longest-run statistic is the wrong one for the job: samples are *counted*, not
+required to be consecutive, so what decides a start-up is the **fewest non-HOLD
+signals in any K-boundary window** — and on night's own record that is **1**, not
+3. There are historical stretches where a NIGHT start-up would have refused.
+
+- **This is latent, not active.** Every NIGHT start-up so far has drawn an ordinary
+  window (median 16 non-HOLD per 500), and the soak has never hit it. Nothing about
+  the deployment is currently wrong.
+- **DAY clears by zero.** Worst window 3 against a floor of 3. It is the quieter
+  emitter (2.61 % against 4.11 %, the price of `band ±0.001 + min_prob 0.65`) but
+  the *milder* clusterer, which is why its longest run is shorter than night's.
+- **The fix is free.** The prime is capped, not starved: W8's backfill returned
+  32 117 bars, which supports **971** stride-30 boundaries with full context behind
+  them, and `boundaries[-self.emitter_prime_boundaries:]` (`live/runtime.py:668`)
+  discards 471 of them. K=900 lifts the worst window to 10 (DAY) and 7 (NIGHT)
+  using bars already on disk — no extra fetch, and about ten more seconds of
+  warm-up on top of W8's measured 13.4 s.
+
+#### DECIDED 2026-09-02 — **K = 900, and the running NIGHT soak is not restarted for it**
+
+`emitter_prime_boundaries` now defaults to **900** (`live/runtime.py:99`). The
+soak keeps 500 until it restarts for its own reasons; DAY picks the new value up
+at W9. **What the change buys is availability, not correctness** — `_check_primed`
+already refuses rather than trading unfiltered, so the failure it removes is a
+*blocked start-up* at an awkward moment (a restart after a crash, or inside the
+roll window, during a quiet stretch), and the recovery was always cheap. That is
+why it did not justify disturbing a soak three weeks before the 2026-09-15 roll.
+
+**Two things measured while making the change, both worth keeping:**
+
+- **K=900 is free and fully effective for DAY, and currently *inert* for NIGHT.**
+  A seeded DAY cache is 30 000 bars — **899** boundaries, which is the number 900
+  was chosen against. NIGHT's cache is **live-accumulated**, and on 2026-09-02 held
+  **14 669 bars = 388 boundaries**. The slice takes all available when the frame is
+  shorter, so raising K is safe there but delivers nothing until night's cache is
+  seeded the way DAY's was in W3 (`live/seed_cache.py --session night` — one
+  offline command against `TXF_RPT_minute_night.csv`). **Not done: it writes into
+  the running soak's cache file, which is a live change and the user's call.**
+- **The cap is deliberately larger than the window `warmup_days_default` sizes
+  its request for (500), and the two must not be reconciled.** The fetch guarantees
+  500 boundaries; the cache opportunistically carries more; the cap is what lets the
+  replay spend them. Raising the *request* to 900 instead would push NIGHT's warm-up
+  window from 30 days to ~50 and DAY's from 84 to ~140, widening every fetch across
+  delisted months — C7's problem — to buy what is already on disk. A test pins the
+  inequality with that reasoning attached.
+
+**Also corrected while in there:** `_check_primed`'s error message told the reader
+to widen the backfill because "the longest observed HOLD run is 385 boundaries" —
+the statistic that does *not* govern it (the note below). It now names the fewest
+non-HOLD signals in the frame and points at the cache seeder. **3 new tests**, two
+of which fail against K=500.
+
+> **A second-order note — acted on the same day, see above.** The two candidate metrics disagree about
+> which deployment is fragile. By longest HOLD run, DAY (246) is safer than NIGHT
+> (385) — and by worst-window count, DAY (3) is *also* safer than NIGHT (1). The
+> agreement is a coincidence of these two tapes, not a property: a low-rate emitter
+> with even clustering and a high-rate one with heavy clustering can order either
+> way. `_check_primed`'s error message quoted the longest-run figure ("the longest
+> observed HOLD run is 385 boundaries"), which is the statistic that does not
+> govern it. K was touched the same day, so it was corrected then — the message
+> now names the fewest non-HOLD signals in the warm-up frame.
+
+---
+
+### 2.6 W9 is deferred to a three-way strategy split · decided 2026-09-02
+
+**The user's decision, recorded as given:** autoresearch will be applied to
+**three sessions — day, night and full-day** — and, per the autoresearch plan, it
+touches only the **Forecaster / SignalEmitter / Trader** parts of `forecast_eval`.
+Those become **three standalone sets that do not interfere with each other**, and
+which one is raised depends on a command parameter: run in the day session and the
+day set is what works. **W9 waits for that.**
+
+This is a larger separation than `--config night|day` already provides, and the
+difference is worth stating so the two are not confused. W6 made the *configuration*
+selectable — `PINNED` and `PINNED_DAY` carry their own band, probability gate,
+policy, roll instant, warm-up window and cache, and one flag moves all of them
+together. What it does **not** do is make the *components* swappable: both configs
+build the same `ThresholdEmitter` and the same `Trader` from different numbers.
+The split described above goes one level down.
+
+**Four things already in place that it can build on, so they are not rediscovered:**
+
+- **`CONFIGS` is already a registry**, and `--config` already selects a whole
+  deployment from it (C2/W6). A third entry is the natural shape for full-day.
+- **Full-day is already a first-class session elsewhere.** `SessionPolicy.both()`
+  exists, `roll_at_time()` was extended in 2026-09-01 so *any* policy that trades
+  DAY rolls at 12:45 (§4 C4's table has a FULL-DAY row), and the tape exists —
+  `TXF_RPT_minute_fullday.csv`, 2 364 417 bars from 2018-01-02, built precisely
+  because the combined tape's first 15.6 % is day-only (TAPE_REBUILD §2.5).
+  **There is no `PINNED_FULLDAY` and no tuned full-day row in `results.tsv`.**
+- **The autoresearch seam is the known gap.** `live/config.py` records that
+  `strategy/wiring.py` is that entry point and that *"its entrypoint no longer
+  exists"*; C1 worked around it by tuning through `real_data.py` CLI flags, which
+  is what the `edit:`/`keep:` pairs are. A three-way split that runs through
+  autoresearch needs that seam rebuilt, and `strategy/wiring.py` is also an
+  add/add collision with the day tree (§2) — which D5 made moot, but the file is
+  still the seam.
+- **SHIOAJI_PLAN's ground rule no longer blocks it.** *"Nothing under `run.py` /
+  `execution.py` / `trader.py` changes until Phase V5 passes"* — V5's checklist
+  passed 2026-08-31. Touching `Trader` is now allowed by that rule. §2 of this
+  plan notes those four files were still unmodified 27 commits in, so the split
+  will be the first thing to change them; that is a decision, not an accident.
+
+**What this plan owes the split, and what it does not.** It does not owe it a
+design — that belongs to the autoresearch plan. It owes it the DAY facts that a
+third strategy set must not lose: `PINNED_DAY`'s provenance and the worst-half
+selection rule (§2.3), the priming margin (§2.5), the roll instant and the reason
+it is 12:45 (§4 C4), the warm-up window derivation (C6/W4), and C8's finding that
+**89.4 % of DAY's gross accrues overnight** — which is a property of the *strategy*,
+not of the harness, and is the single most likely thing to be silently dropped when
+the components are rewritten.
+
+#### The prerequisite that was fixed rather than deferred — start-up state was shared
+
+Found while answering "can W9 run alongside the NIGHT soak". C5/W1 keyed the data a
+deployment owns — `bars_cache_<slug>.csv`, `fills_<slug>.csv` — but left its
+**start-up state** on one path for both:
+
+| file | holds | why sharing is a bug |
+|---|---|---|
+| `live_restart.json` | RestartGuard's per-day **backfill budget** (cap 10) and failure backoff | one budget for two deployments; whichever restarts first can refuse the other for the rest of the trading day |
+| `soak_epoch.json` | the soak identity restarts stitch through | an epoch minted by one deployment adopted by the other |
+| `live_account.json` | account fingerprint for drift detection | one deployment's fingerprint checked against the other's |
+
+**MEASURED 2026-09-02:** the shared counter read `backfills_today: 3` — two NIGHT
+diagnostics **plus W8's single DAY run**, already pooled. The cap is real and it has
+fired: two `startup_refused` fatals at 02:29 today, *"backfill cap reached: 10
+backfills on trading day 2026-09-01 … Something is restarting this process
+repeatedly."*
+
+**Fixed:** `cli._state_path(out_dir, policy, name)` keys all three by
+`policy.cache_slug()`, the same token the run directory, the bar cache and the fill
+ledger already carry. **The legacy unkeyed files are deliberately not adopted** —
+the identical reasoning `_bars_cache_path` gives for the pre-C5 `bars_cache.csv`:
+they hold NIGHT's state, and handing it to whichever deployment starts first is the
+corruption the keying prevents. **Rename them by hand if the state matters** —
+`outputs/live_restart.json` → `live_restart_night.json`, and the same for
+`soak_epoch.json` and `live_account.json`. `soak_epoch.json` is the one that
+actually matters: it was minted 2026-09-01 13:39 and is what a later `--resume`
+stitches through. **3 new tests**, all three failing against the shared path.
+
+> **Left alone deliberately: `fatal.jsonl` is still one file for both.** That is
+> the stated intent — *"what has ever gone badly wrong" should be one file, not a
+> search* (`cli.py`'s own comment). The gap it leaves is that its records carry
+> `severity/kind/message/when/gate` and **no deployment field**, so once two
+> deployments run, a `startup_refused` in that journal cannot be attributed to one.
+> Adding the field is a change to `alerts.py`, not to the path, and it was not made
+> here.
+---
+
 ## 3. What ports free — verified by reading
 
 These are properties of the **night** codebase, which is where `live/` exists —
@@ -1316,24 +1512,32 @@ night tree too.
 
 **The work itself — all of it in `night/forecast_eval`:**
 
-> **CURRENT STAGE, 2026-09-02: W0–W7 are done and so is every C item, C8
-> included. What is left is W8 and W9 — and both need a live market.**
+> **CURRENT STAGE, 2026-09-02 (later): W0–W8 are done and so is every C item, C8
+> included. W9 — the soak — is the only step left, and it is DEFERRED by the user
+> until the three-way (day / night / full-day) strategy split lands (§2.6). This
+> plan is therefore complete except for a step that is waiting on other work.**
 >
 > | | |
 > |---|---|
-> | Done | W0, W1, W2, W3, **W4**, W4b, **W5a**, **W5b**, **W6**, **W7** — all offline, no market |
+> | Done | W0, W1, W2, W3, **W4**, W4b, **W5a**, **W5b**, **W6**, **W7**, W7a — all offline, no market — and **W8**, the first step that needed one |
 > | ~~Done but PROVISIONAL~~ **resolved** | **W5a**, **W5b** — re-measured on the rebuilt tape by `TAPE_REBUILD_PLAN.md` T7. Conclusions survive, every number changed: probe 0.2671 → **0.4129**, pinned cell 4.6805 → **1.6937**, night baseline 16.3122 → **3.6006**. `results.tsv` rows **and `PINNED_DAY` now carry them** (§2.3) — one vintage, no longer two |
 > | Collisions closed | **C1**–**C7**, each marked in §4 with the step that closed it. C4a **dissolved** rather than being fixed — the tape adopted the code's rule (T2) — and its sequel is §2.4 |
 > | ~~Available now~~ **answered 2026-09-02** | **C8** — measured on DAY's own trades, no GPU. Keep `forced_close=False`, but not for the recorded reason: **89.4 % of the pinned cell's gross accrues overnight and over weekends**, only 10.6 % inside the sessions it trades, and closing daily would turn 67 round trips into ~1 318 (fees 4 % → ~79 % of gross). The unmanaged overnight exposure is not an inherited default — it **is** the strategy |
 > | Surfaced by C8, belongs to W9 | Running both deployments is **two contracts of same-direction exposure 66 % of DAY's holding time**. The shared-account question is a risk question before it is an operational one |
-> | Not started | W8, W9 — both need a market, and W8 needs Shioaji credentials the W6 check did not have |
-> | Fixed 2026-09-02 | §2.4 — the DAY warm-up spliced at 15:30 while the deployment rolled at 12:45, on 183 of 183 rolls that traded. **W8 was held for this** and is now unblocked |
+> | **Fixed 2026-09-02** | §2.6 — the RestartGuard's start-up state (`live_restart.json`, `soak_epoch.json`, `live_account.json`) was **shared** between deployments, so they pooled one 10-backfill daily budget; W8's DAY run was already charged to NIGHT's counter. Now keyed by policy like the cache and the ledger. Legacy files are **not** auto-adopted — rename by hand |
+> | **Done 2026-09-02** | **W8** — 5-minute `--broker dryrun --config day` inside a real DAY session, run by the user. Passed on the first attempt: the DAY banner, a 32 117-bar backfill spliced across six delivery months, `context=3008`, the 2026-09-15 12:45 roll, 5 bars / 1 374 ticks, 0 dropped, 0 alerts, and `[ORDERS: NONE]` — the shared account was never touched |
+> | **Deferred 2026-09-02** | **W9** only — held by the user until the three-way strategy split (§2.6), not by anything in this plan. It still needs a market and the shared-account question decided before it starts; note that stopping the NIGHT soak did **not** clear that, because the account still holds LONG 1 @ 44555 and `adopt_position` reads the venue |
+> | Fixed 2026-09-02 | §2.4 — the DAY warm-up spliced at 15:30 while the deployment rolled at 12:45, on 183 of 183 rolls that traded. **W8 was held for this**, and W8 then ran clean on the fixed path |
+> | Surfaced by W8, **decided 2026-09-02** | §2.5 — `emitter_samples` saturates at 4, so the banner never showed a priming margin, and the margin it hid was thinner for **NIGHT** than for DAY: the worst 500-boundary window on night's own record holds **1** non-HOLD signal against a floor of 3. **K raised 500 → 900**; the running soak is *not* restarted for it, because the failure removed is a blocked start-up, not unfiltered trading. Effective for DAY (seeded cache = 899 boundaries), **inert for NIGHT until its cache is seeded** — one offline command, not done, live change |
 >
 > **A DAY deployment now exists** — `--config day` selects `PINNED_DAY`, which
 > carries its own band, probability gate, roll instant, warm-up window and cache,
 > and W7 shows it reproduces `run_backtest` bar for bar offline. What it has never
-> done is trade: not live, not in simulation. That is W8, and it is the whole of
-> what "not deployed" means now.
+> done is trade: not live, not in simulation. **W8 changed half of that on
+> 2026-09-02** — the deployment has now started up, warmed, primed and followed a
+> real DAY feed end to end, and placed nothing. What is still true is the other
+> half: it has never had an order accepted by anything. That is W9, and it is the
+> whole of what "not deployed" means now.
 >
 > Two things are true of the pinned value and are not tasks on this list: it
 > **trails buy-and-hold by −24 419** over its eval window, and a better cell
@@ -1399,13 +1603,45 @@ W7a [DONE 2026-09-02] tape-spanning parity: the shipped     -> verified: 592 rol
     every roll. TAPE_REBUILD_PLAN 0.5/5.3, run by              TAPE_REBUILD_PLAN 0.5 and it FOUND 2.4's
     tools/roll_parity.py.                                      defect: DAY spliced at 15:30, 183/183 rolls.
                                                                Fixed the same day; NIGHT unmoved.
-W8  5-minute dryrun inside a real DAY session   [MARKET]   -> verify: start-up, warm-up, banner, first bar
-                                                              [DOES NOT touch the shared Shioaji account —
-                                                              dryrun never calls a broker order API]
-                                                              [UNBLOCKED 2026-09-02 - it was worth holding
-                                                              for 2.4: on the old warm-up this would have
-                                                              measured the defect, not the deployment]
-W9  soak                                        [MARKET]   -> verify: V5's terms, applied to DAY
+W8  [DONE 2026-09-02] 5-minute dryrun inside a real       -> verified: PASSED first attempt, 09:02-09:07
+    DAY session, run by the user            [MARKET]           TST. Banner LiveConfig[3c3ae38 calmar=1.6937
+                                                               ['DAY']] band=+-0.001 min_prob=0.65 - the DAY
+                                                               pin, not night's. backfill 32117 bars in 1.0s
+                                                               [2026-03-30 08:45 .. 2026-09-02 09:01],
+                                                               spanning 202604-202609; warm context=3008 in
+                                                               13.4s; roll 202609 until 2026-09-15 12:45
+                                                               (W2's DAY instant, 4-C4's first schedule row);
+                                                               5 bars / 1374 ticks / 1374 captured, 0 simtrade
+                                                               0 late 0 off-session; halted=False, 0 alerts,
+                                                               0 ledger or artifact failures; 9 artifacts ->
+                                                               outputs/live_day_20260902_090210.
+                                                              [DID NOT touch the shared Shioaji account —
+                                                               "[ORDERS: NONE] broker=dryrun", and the account
+                                                               line was digested (19***25 / a685deb6b5b8)]
+                                                              [PREREQUISITE, and it was NOT optional: the DAY
+                                                               bar cache had to be RE-SEEDED first. The one on
+                                                               disk was W3's, 2026-08-24, from the PRE-rebuild
+                                                               tape - 7.59 % of its closes moved in T2 and its
+                                                               splice was the 15:30 one 2.4 fixed. Re-seeded
+                                                               from TXF_RPT_minute_day.csv@2026-09-01:
+                                                               30000 DAY bars, 2026-03-30 .. 2026-08-21,
+                                                               months 202604-202609. The 2026-03-30 start in
+                                                               the backfill line above is how you can tell
+                                                               which vintage a run used - W3's began 03-27.]
+                                                              [off_session_dropped=0 is correct, not a miss:
+                                                               the run sat wholly inside 08:45-13:45 so the
+                                                               DAY filter had nothing to reject. W7 proved
+                                                               that side offline.]
+                                                              [FOUND, and it is a NIGHT finding: emitter_
+                                                               samples=4 is the deque's MAXIMUM (maxlen=
+                                                               short_window+1, short_window=3), not a margin.
+                                                               See 2.5 - and the real margin is worse for
+                                                               NIGHT than for DAY.]
+W9  soak  <- THE ONLY STEP LEFT                 [MARKET]   -> verify: V5's terms, applied to DAY
+                                                              [DEFERRED 2026-09-02, by the user, until the
+                                                               THREE-WAY STRATEGY SPLIT lands - see the note
+                                                               below this block. Not blocked on anything in
+                                                               this plan.]
                                                               [DOES touch the shared account — same
                                                               contract/account as the NIGHT soak. Unresolved:
                                                               separate simulation credentials for DAY, or
@@ -1413,6 +1649,23 @@ W9  soak                                        [MARKET]   -> verify: V5's terms
                                                               --broker shioaji at once. Decide before W9, not
                                                               during it — see SHIOAJI_PLAN.md's own account-
                                                               conflation history (the 6-lot startup_refused).]
+                                                              [MEASURED 2026-09-02: the NIGHT soak being
+                                                               STOPPED does not clear that conflict. The
+                                                               account holds LONG 1 @ 44555 open since
+                                                               08-25 (SHIOAJI_PLAN's stop block), and
+                                                               `adopt_position` reads what the VENUE holds —
+                                                               so a DAY soak on --broker shioaji adopts
+                                                               NIGHT's lot as its own against max_position=1.
+                                                               The position is the conflict, not the process.]
+                                                              [V4 IS DEFERRED (SHIOAJI_PLAN, 2026-09-02), so
+                                                               the reason W9 needed --broker shioaji is much
+                                                               weaker: V5's own criterion — 5 days unattended,
+                                                               restarts recover position and context, no stale
+                                                               orders — is exercisable on --broker dryrun,
+                                                               which touches no account at all.]
+                                                              [FIXED 2026-09-02, a prerequisite either way:
+                                                               the RestartGuard state was SHARED between
+                                                               deployments. See below.]
 ```
 
 W0–W5 need no market. **W5 was the long pole**; everything downstream waited on
@@ -1508,4 +1761,11 @@ and **W4b is a prerequisite for trusting W5b's acceptance test at all** (§2.2).
 The day-session **backtest result** itself (that is W5's output); anything about
 real money (V4's fill gap is a hard gate for either session); and the porting
 *guide* that `docs/DOCS_PLAN.md` records as debt — this plan's eventual
-deliverable, which cannot be written as a procedure until W8 has been run once.
+deliverable, which could not be written as a procedure until W8 had been run once.
+
+> **W8 has now been run (2026-09-02), so the guide is unblocked** — and the run
+> supplied the step the procedure would otherwise have omitted: **re-seed the DAY
+> bar cache from the current tape vintage before the first start-up.** W3's seeder
+> is a one-shot tool whose output silently ages with the tape underneath it, and
+> nothing in the start-up path notices. The backfill line's first timestamp is the
+> tell. See §5's W8 row.
