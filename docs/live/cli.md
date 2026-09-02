@@ -31,7 +31,7 @@ live half and V3's shadow parity are both read back from.
 | `--duration-minutes` | none | stop after this long; otherwise runs until Ctrl-C |
 | `--warmup-days` | `30` | calendar days requested for context + emitter priming (~21 night sessions) |
 | `--out` | `outputs/live_<ts>` | **relative** — resolves against the CWD you launch from |
-| `--state-file` | `<out>/../live_restart.json` | [RestartGuard](startup.md) state |
+| `--state-file` | `<out>/../live_restart_<policy>.json` | [RestartGuard](startup.md) state. Keyed by policy; `soak_epoch` and `live_account` follow its directory |
 | `--no-capture` | off | skips raw tick capture; V1's live half needs it |
 | `--max-daily-loss-points` | none | [rails](state.md) `FLATTEN` threshold |
 | `--kill-file` | none | presence flattens and exits at the next bar |
@@ -209,3 +209,27 @@ as `day_night` rather than "fullday" — that is a tape name, and a deployment w
 two identities is how two names for one thing start.
 
 `--out` still wins: a probe or a one-off run names its own directory.
+
+### The start-up state carries the slug too — 2026-09-02
+
+`_state_path(out_dir, policy, name)` keys the three files a deployment's start-up
+owns: `live_restart_<slug>.json` ([RestartGuard](startup.md)),
+`soak_epoch_<slug>.json` ([soak epoch](soak_epoch.md)) and
+`live_account_<slug>.json` (the account fingerprint).
+
+They were one path for every deployment until now, which C5 did not cover — it
+keyed the *data* a deployment owns, not its *state*. The cost is concrete: the
+RestartGuard caps backfills at **10 per trading day** to protect the venue quota,
+and one file means **one budget shared by both**, so whichever deployment restarts
+first can refuse the other's start-up for the rest of the day. Measured 2026-09-02,
+the shared counter stood at 3 with a single DAY run pooled into two NIGHT ones.
+
+**The legacy unkeyed files are not adopted automatically**, exactly as the pre-C5
+`bars_cache.csv` was not: they hold NIGHT's state, and giving it to whichever
+deployment starts first is the corruption the keying prevents. Rename by hand if
+the state matters — `soak_epoch.json` is the one that does, since a later
+`--resume` stitches through it.
+
+`fatal.jsonl` stays **one file for both**, deliberately: "what has ever gone badly
+wrong" should not be a search. Its records carry no deployment field, though, so
+once two deployments run a `startup_refused` there cannot be attributed to one.

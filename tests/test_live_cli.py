@@ -387,6 +387,45 @@ def test_the_run_directory_shares_the_slug_with_the_cache_and_the_ledger():
     assert ledger_path("outputs", cfg.policy).name == "fills_day.csv"
 
 
+def test_start_up_state_is_keyed_by_policy_not_shared():
+    """DAY_SESSION_PLAN §2.5/W9. C5 keyed the data a deployment owns and left its
+    START-UP STATE on one path. The RestartGuard caps backfills per trading day
+    (10, protecting the venue quota), so one shared file means one shared budget:
+    MEASURED 2026-09-02, a single DAY run was charged to the same counter as two
+    NIGHT ones, and whichever deployment restarts first can refuse the other for
+    the rest of the day. `soak_epoch` and `live_account` share the same fault."""
+    from pathlib import Path as _P
+
+    night, day = config_named("night"), config_named("day")
+    for name in ("live_restart", "soak_epoch", "live_account"):
+        n = cli._state_path(_P("outputs"), night.policy, name)
+        d = cli._state_path(_P("outputs"), day.policy, name)
+        assert n != d, f"{name} is shared between deployments"
+        assert n.name == f"{name}_night.json" and d.name == f"{name}_day.json"
+
+
+def test_start_up_state_shares_the_slug_with_the_run_directory():
+    """Same token across every file a deployment owns, state included."""
+    from pathlib import Path as _P
+
+    cfg = config_named("day")
+    assert "day" in cli._run_dir(cfg).name
+    assert "day" in cli._state_path(_P("outputs"), cfg.policy, "live_restart").name
+
+
+def test_the_legacy_unkeyed_state_files_are_not_adopted():
+    """The pre-C5 `bars_cache.csv` was deliberately never auto-adopted, because
+    handing NIGHT's file to whichever deployment starts first is the corruption
+    the keying prevents. The same holds for the state files: no policy resolves
+    to the bare legacy name."""
+    from pathlib import Path as _P
+
+    legacy = {"live_restart.json", "soak_epoch.json", "live_account.json"}
+    for cfg in CONFIGS.values():
+        for name in ("live_restart", "soak_epoch", "live_account"):
+            assert cli._state_path(_P("outputs"), cfg.policy, name).name not in legacy
+
+
 def test_an_explicit_out_still_wins_over_the_derived_name():
     """`--out` is how a probe or a one-off run names its own directory; deriving
     a default must not take that away."""

@@ -332,7 +332,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--out", type=Path, default=None,
                     help="Output dir; default outputs/live_<timestamp>")
     ap.add_argument("--state-file", type=Path, default=None,
-                    help="RestartGuard state; default <out>/../live_restart.json")
+                    help="RestartGuard state; default "
+                         "<out>/../live_restart_<policy>.json. Keyed by policy "
+                         "so two deployments cannot share one backfill budget; "
+                         "soak_epoch and live_account follow its directory.")
     ap.add_argument("--no-capture", action="store_true",
                     help="Skip raw tick capture (V1's live half needs it)")
     ap.add_argument("--max-daily-loss-points", type=float, default=None)
@@ -403,6 +406,28 @@ def _bars_cache_path(out_dir: Path, policy: Any) -> Path:
     return out_dir / f"bars_cache_{policy.cache_slug()}.csv"
 
 
+def _state_path(out_dir: Path, policy: Any, name: str) -> Path:
+    # Tech: the per-deployment start-up state files, keyed by the same slug the
+    #       bar cache and the fill ledger already carry.
+    # Why:  DAY_SESSION_PLAN §2.5/W9. C5 keyed the *data* a deployment owns but
+    #       left its *state* on one path: `live_restart.json` (the RestartGuard's
+    #       backfill budget and failure backoff), `soak_epoch.json` (the soak
+    #       identity restarts stitch through) and `live_account.json` (the
+    #       account fingerprint). One file each meant two deployments shared one
+    #       10-backfill daily budget — MEASURED 2026-09-02, when a single DAY
+    #       start-up was charged to the same counter as two NIGHT ones — so the
+    #       deployment that restarts first can refuse the other's start-up for
+    #       the rest of the trading day, and a soak epoch minted by one would be
+    #       adopted by the other.
+    #
+    #       The legacy unkeyed files are NOT adopted automatically, for the same
+    #       reason `_bars_cache_path` refuses to adopt the pre-C5 cache: they
+    #       hold NIGHT's state, and handing it to whichever deployment starts
+    #       first is the corruption this keying exists to prevent. Rename them by
+    #       hand if the state matters.
+    return out_dir / f"{name}_{policy.cache_slug()}.json"
+
+
 def _warmup_contracts(api: Any, front: Any) -> list:
     """The listed months up to and including `front`, oldest first."""
     # Tech: enumerate the dated TXF months, keep those not later than the front
@@ -432,7 +457,8 @@ def main(argv=None) -> int:
 
     out = args.out or _run_dir(cfg)
     out.mkdir(parents=True, exist_ok=True)
-    state_file = args.state_file or out.parent / "live_restart.json"
+    state_file = args.state_file or _state_path(out.parent, cfg.policy,
+                                                "live_restart")
 
     # Tech: the alerter is built first, before anything that can fail, with the
     #       fatal journal beside the restart state and no recorder yet.
@@ -502,7 +528,8 @@ def main(argv=None) -> int:
     #       drift apart again.
     epoch = None
     if _resolves_soak_epoch(args):
-        epoch = soak_epoch.resolve(state_file.parent / "soak_epoch.json",
+        epoch = soak_epoch.resolve(_state_path(state_file.parent,
+                                               cfg.policy, "soak_epoch"),
                                    fresh_start=args.fresh_start,
                                    now=datetime.now())
 
@@ -605,7 +632,8 @@ def main(argv=None) -> int:
               f"digest={fingerprint['account_id_digest']}")
         recorder.record("account", **fingerprint)
         drift = check_account_fingerprint(
-            fingerprint, state_file.parent / "live_account.json")
+            fingerprint, _state_path(state_file.parent, cfg.policy,
+                                     "live_account"))
         if drift:
             # Tech: a warning, not a fatal — it does not stop the run.
             # Why:  an account change can be legitimate (a new sub-account), and
