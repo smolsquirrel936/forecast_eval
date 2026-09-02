@@ -123,6 +123,7 @@ def run_backtest(
     forecaster: Optional[Forecaster] = None,
     emitter: Optional[SignalEmitter] = None,
     exit_rule: Optional[ExitRule] = None,
+    make_trader: Optional[Any] = None,  # callable(Execution) -> Trader
     forced_close_on_session_end: bool = False,
     # Used only when no forecaster is supplied (Phase 1 dummy-signal path).
     forecast_stride_bars: int = 12,
@@ -141,13 +142,28 @@ def run_backtest(
     env = Environment(ticks)
     execution = Execution(fee_rate=fee_rate)
     portfolio = Portfolio(contract_multiplier=contract_multiplier)
-    trader = Trader(
-        execution=execution,
-        tick_size=tick_size,
-        aggression_ticks=aggression_ticks,
-        max_position=max_position,
-        max_aggression_ticks=max_aggression_ticks,
-    )
+    # Tech: build the Trader from this run's scalar kwargs, unless a `make_trader`
+    #       factory was supplied — in which case it is called with the Execution
+    #       this run owns and the four kwargs above are not consulted.
+    # Why:  STRATEGY_SPLIT_PLAN §2.1. The Trader was the one collaborator the
+    #       harness would not let a caller swap, which is what blocked a
+    #       per-session Trader. A *factory* rather than an instance because
+    #       `Execution` is built here (fee_rate is a run parameter, not a strategy
+    #       one), so a Trader cannot be handed its execution before the run
+    #       exists; it also matches `fee_sensitivity_sweep`'s make_* convention,
+    #       which exists because these objects are stateful and reusing one across
+    #       runs silently produces wrong numbers. With make_trader=None this is
+    #       byte-for-byte the previous behaviour.
+    if make_trader is None:
+        trader = Trader(
+            execution=execution,
+            tick_size=tick_size,
+            aggression_ticks=aggression_ticks,
+            max_position=max_position,
+            max_aggression_ticks=max_aggression_ticks,
+        )
+    else:
+        trader = make_trader(execution)
     # Tech: default to the alternating dummy emitter when none is supplied.
     # Why:  the Phase 1 path validates execution/fees without a model; making the
     #       dummy the default keeps `run_backtest(ticks)` runnable out of the box.

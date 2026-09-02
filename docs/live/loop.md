@@ -16,7 +16,8 @@ transcribed **unchanged**. That equivalence is the V0 gate.
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
-| `LiveLoop(forecaster, emitter, broker, trader, portfolio, *, exit_rule, forced_close_on_session_end, history_window, recorder, rails)` | class | collaborators are injected, not constructed |
+| `LiveLoop(forecaster, emitter, broker, trader, portfolio, *, exit_rule, forced_close_on_session_end, history_window, recorder, rails, alerter, expected_position)` | class | collaborators are injected, not constructed |
+| `expected_position` | ctor arg | optional `callable() -> Optional[int]`: what WE believe the ACCOUNT holds. `None`, or a call returning `None`, keeps the deployment's own position as the reconcile mirror (§16) |
 | `on_bar(market)` | method | the whole per-tick body for one bar |
 | `result()` | method | packs into the same `BacktestResult` the backtest returns |
 | `fills` / `orders` / `forecasts` / `signals` | attribute | the audit trail as it accumulates |
@@ -59,6 +60,29 @@ transcribed **unchanged**. That equivalence is the V0 gate.
   stride boundary and holding-period count.
 - It takes **no `SessionPolicy`** — it consumes whatever bars it is handed.
   Filtering belongs upstream in [bars.py](bars.md) and [backfill.py](backfill.md).
+
+## Reconciliation now compares the ACCOUNT, not one deployment (§16)
+**MEASURED 2026-09-02** (STRATEGY_SPLIT_PLAN §14): a deployment's order callback
+hears **only its own** fills, while `list_positions` returns the **combined**
+book for the account. Comparing one deployment's mirror against the whole
+account's size is not a desync check — it is a category error, and it halts every
+deployment the first time two of them hold at once, with nothing actually wrong.
+
+So the reconciliation mirror is now **what we recorded for the whole account**:
+`ledger.account_net_position(dir)` sums the signed quantity of every row of every
+`fills_*.csv` in the run's parent directory, across deployments and across soak
+epochs. Both sides of the comparison then mean "the account", and a disagreement
+means what the rail was written to catch: a fill missed or counted twice.
+
+**It degrades, it does not guess.** No ledger directory, no ledger files, or one
+that cannot be parsed all return `None`, and the loop falls back to this
+deployment's own position — the previous behaviour exactly. A partial sum would
+be a confident wrong number, which is the failure mode this removes.
+
+**It does not make concurrent deployments safe.** It stops the spurious halt; it
+does not stop two deployments' orders netting into one book. See
+STRATEGY_SPLIT_PLAN §15 — one instance at a time — which stands until the venue
+gives each deployment its own book.
 
 ## Related
 [run.py](../run.md) · [live/bars.py](bars.md) · [live/state.py](state.md) · [live/recorder.py](recorder.md) · [tests/test_live_parity.py](../tests.md) · SPEC §4.1

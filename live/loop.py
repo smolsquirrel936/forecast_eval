@@ -52,6 +52,7 @@ class LiveLoop:
         recorder: Optional[Recorder] = None,
         rails: Optional[SafetyRails] = None,
         alerter: Any = None,
+        expected_position: Any = None,   # callable() -> Optional[int]
     ):
         # Tech: hold the injected collaborators and read the forecast schedule
         #       (warm-up + stride) off the forecaster.
@@ -78,6 +79,17 @@ class LiveLoop:
         self.recorder = recorder
         self.rails = rails
         self.alerter = alerter
+        # Tech: an optional callable returning what WE believe the whole account
+        #       holds; `None` keeps `self.trader.position` as the reconciliation
+        #       operand, exactly as before.
+        # Why:  STRATEGY_SPLIT_PLAN §16, and it is the fourth optional passenger
+        #       for the same reason the other three are optional — the V0 parity
+        #       harness builds this loop with none of them, so "identical to
+        #       `run_backtest`" is still asserted on a loop that carries no
+        #       observer. A single-deployment run has nothing to sum and is
+        #       unaffected either way; this only matters once two deployments
+        #       share a venue book (§14).
+        self.expected_position = expected_position
         self._stride = forecaster.forecast_stride_bars
         self._warmup = forecaster.warmup_bars
 
@@ -278,8 +290,27 @@ class LiveLoop:
         #       never produce another order (§2.9). Steps 2–4 are skipped wholesale
         #       when halted: a halted loop makes no new decisions, it only unwinds.
         if self.rails is not None:
+            # Tech: the mirror is what WE believe the ACCOUNT holds — the sum of
+            #       every deployment's fill ledger when `expected_position` is
+            #       supplied, this deployment's own position otherwise. A
+            #       supplier that returns None (no ledger, or one unreadable)
+            #       falls back to the same own-position value.
+            # Why:  §16. MEASURED (§14): a deployment hears only its own fills,
+            #       but `broker_position()` returns the COMBINED book. Comparing
+            #       one deployment's mirror against the whole account's size is
+            #       not a desync check, it is a category error — it halts both
+            #       deployments the first time they hold at once, with nothing
+            #       actually wrong. Summing our own ledgers makes both sides of
+            #       the comparison mean "the account", and a disagreement mean
+            #       what it was always supposed to: a fill we missed or counted
+            #       twice.
+            mirror = self.trader.position
+            if self.expected_position is not None:
+                declared = self.expected_position()
+                if declared is not None:
+                    mirror = declared
             self.rails.on_reconcile(
-                mirror=self.trader.position,
+                mirror=mirror,
                 venue=self.broker.broker_position(),
             )
             self.rails.on_bar(market, net_pnl=self.portfolio.net_pnl())

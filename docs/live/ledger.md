@@ -89,6 +89,7 @@ deliberately not a ledger row at all.
 | `ledger_path(out_parent, policy)` | function | `fills_<slug>.csv`, keyed like the bar cache |
 | `net_position(fills)` | function | the signed lots a fill sequence leaves |
 | `open_position(fills)` | function | the lot a fill sequence leaves open, and its entry price |
+| `account_net_position(out_parent)` | function | signed lots **every** deployment's ledger says the ACCOUNT holds; `None` when absent or unreadable (§16) |
 | `LEDGER_COLUMNS` | constant | a `FillEvent`'s columns, plus `soak_id` |
 
 ## Why the schema check comes before the emptiness check
@@ -115,3 +116,26 @@ goes long holds **only** the long, and averaging across all three would price th
 residual from a trade that is already closed and booked. At `max_position=1` the
 residual is always one lot and the weighting is a no-op; it is written generally
 so it does not quietly become wrong if that limit moves.
+
+## Reconciliation now compares the ACCOUNT, not one deployment (§16)
+**MEASURED 2026-09-02** (STRATEGY_SPLIT_PLAN §14): a deployment's order callback
+hears **only its own** fills, while `list_positions` returns the **combined**
+book for the account. Comparing one deployment's mirror against the whole
+account's size is not a desync check — it is a category error, and it halts every
+deployment the first time two of them hold at once, with nothing actually wrong.
+
+So the reconciliation mirror is now **what we recorded for the whole account**:
+`ledger.account_net_position(dir)` sums the signed quantity of every row of every
+`fills_*.csv` in the run's parent directory, across deployments and across soak
+epochs. Both sides of the comparison then mean "the account", and a disagreement
+means what the rail was written to catch: a fill missed or counted twice.
+
+**It degrades, it does not guess.** No ledger directory, no ledger files, or one
+that cannot be parsed all return `None`, and the loop falls back to this
+deployment's own position — the previous behaviour exactly. A partial sum would
+be a confident wrong number, which is the failure mode this removes.
+
+**It does not make concurrent deployments safe.** It stops the spurious halt; it
+does not stop two deployments' orders netting into one book. See
+STRATEGY_SPLIT_PLAN §15 — one instance at a time — which stands until the venue
+gives each deployment its own book.

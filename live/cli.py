@@ -4,6 +4,33 @@
     uv run python -m forecast_eval.live.cli --broker shioaji \
         --i-understand-this-places-orders
 
+=============================================================================
+ONE INSTANCE AT A TIME. NEVER TWO, WHATEVER THE SESSION.
+=============================================================================
+With real money there must be exactly **one** running instance of this entry
+point at any moment — regardless of which deployment it is, and regardless of
+whether their sessions overlap on paper.
+
+MEASURED 2026-09-02 (STRATEGY_SPLIT_PLAN §14), on a live night session with
+separate API keys per deployment:
+
+  * a deployment's order callback hears **only its own** fills; and
+  * `list_positions` returns the **combined** book to every deployment.
+
+Separate API keys are an authentication boundary, not a position boundary. So
+two instances net against each other — a BUY from one and a SELL from the other
+really do flatten the position — and each one's mirror disagrees with the venue,
+which halts BOTH on `mirror != venue` (§7.1).
+
+"Their sessions do not overlap" is not a safe reason to run two. DAY's median
+hold is 20 calendar days and NIGHT's is 4.5, so a position opened in one session
+is still open during the other; the sessions are disjoint, the POSITIONS are not.
+
+This lifts only when the venue gives each deployment its own book — real
+sub-accounts (the `subaccount` field is empty on every order and deal today), or
+the shared position broker of §7.1(b).
+=============================================================================
+
 **`--broker shioaji` sends real (simulation-account) orders**, and is gated
 behind an explicit acknowledgement flag rather than by not existing. It was
 deliberately absent until a session had actually been observed — V2 passed 24
@@ -50,6 +77,7 @@ from forecast_eval.live.artifacts import (ArtifactWriter,        # noqa: E402
                                           live_params)
 from forecast_eval.live.capture import TickCapture                # noqa: E402
 from forecast_eval.live.config import CONFIGS, PINNED, config_named  # noqa: E402
+from forecast_eval.live import credentials                       # noqa: E402
 from forecast_eval.live.ledger import (FillLedger, ledger_path,     # noqa: E402
                                        net_position, open_position)
 from forecast_eval.live.contracts import (                        # noqa: E402
@@ -450,6 +478,36 @@ def _warmup_contracts(api: Any, front: Any) -> list:
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     cfg = config_named(args.config)
+
+    # Tech: refuse an unprovenanced deployment before anything else — before the
+    #       alerter, the credentials check and the restart guard.
+    # Why:  STRATEGY_SPLIT_PLAN §5/D5. `fullday` exists as a value so it can be
+    #       backtested and parity-checked, and its band is DAY's by inheritance,
+    #       never measured on the full-day tape. Everything downstream of here
+    #       treats a config as a justified decision — the banner prints its
+    #       provenance, the recorder stamps it into `meta`, the drift guards
+    #       assert it against `results.tsv` — and none of that is true of this
+    #       one. Refusing at the top is cheaper than making every one of those
+    #       handle a null provenance, and it fails on the *property* rather than
+    #       on the name, so a fourth untuned deployment is covered for free.
+    if not cfg.is_tuned:
+        print(f"ERROR: --config {args.config} is UNTUNED and must not trade.\n"
+              f"  {cfg.source_note}\n"
+              f"  Backtest it instead: python -m forecast_eval.real_data "
+              f"--strategy {cfg.strategy_package} --data <fullday tape>\n"
+              f"  To lift this: produce a results.tsv row for the "
+              f"{'/'.join(sorted(cfg.policy.sessions))} session, then set "
+              f"source_commit and source_calmar in live/config.py.",
+              file=sys.stderr)
+        # Tech: exit 5 — "refused before the first bar" — not 2, which means
+        #       credentials are missing, and not via the alerter.
+        # Why:  this is argument-only validation with no environmental cause, the
+        #       same class as `_preflight_orders`, which is why it shares 5. It
+        #       runs before `out.mkdir` and before the alerter is built precisely
+        #       so a refused config leaves nothing behind: no run directory, no
+        #       fatal-journal entry. A mistyped `--config` is an operator slip,
+        #       not a soak incident.
+        return 5
     # Tech: resolve the warm-up default now that the config is known.
     # Why:  see --warmup-days above; None means "whatever this deployment needs".
     if args.warmup_days is None:
@@ -470,12 +528,28 @@ def main(argv=None) -> int:
     #       `recorder` is attached below once there is one.
     alerter = Alerter(fatal_journal=state_file.parent / "fatal.jsonl")
 
-    api_key = os.environ.get("SHIOAJI_API_KEY")
-    secret_key = os.environ.get("SHIOAJI_SECRET_KEY")
-    if not api_key or not secret_key:
-        alerter.fatal("no_credentials",
-                      "SHIOAJI_API_KEY / SHIOAJI_SECRET_KEY are not set")
+    # Tech: the credential is looked up BY DEPLOYMENT — `config/secrets.toml`
+    #       first, then the legacy `SHIOAJI_API_KEY`/`SHIOAJI_SECRET_KEY` pair.
+    # Why:  STRATEGY_SPLIT_PLAN S8. The three deployments must not share a
+    #       futures account: one account is one NETTED position, so DAY long 1
+    #       against NIGHT short 1 is flat at the venue while both mirrors say
+    #       +/-1, and `on_reconcile` halts both on the first overlapping bar
+    #       (§7.1). Separate accounts make each position its own, and every rail
+    #       already scopes by account. The env fallback keeps every existing
+    #       single-credential run — including the NIGHT soak — working unchanged.
+    try:
+        cred = credentials.load(args.config)
+    except RuntimeError as exc:                         # tracked file, or a
+        alerter.fatal("bad_credentials", str(exc))      # placeholder left in
         return 2
+    if cred is None:
+        alerter.fatal(
+            "no_credentials",
+            f"no credential for deployment {args.config!r}: add a [{args.config}] "
+            f"section to {credentials.SECRETS_FILE} (see secrets.example.toml), "
+            f"or set SHIOAJI_API_KEY / SHIOAJI_SECRET_KEY")
+        return 2
+    api_key, secret_key = cred.api_key, cred.secret_key
 
     # Tech: the restart gate runs before login, before any query.
     # Why:  §2.8b — every start performs a backfill, so an unsupervised crash loop
@@ -671,8 +745,16 @@ def main(argv=None) -> int:
         else:
             broker = SimBroker(execution)
 
+        # Tech: `ledger_dir` is the directory the per-deployment `fills_*.csv`
+        #       ledgers share — the same `out.parent` `ledger_path` writes into.
+        # Why:  STRATEGY_SPLIT_PLAN §16. It makes the loop reconcile the venue
+        #       against the SUM of what every deployment recorded, rather than
+        #       against this deployment's own position. On one account those two
+        #       differ the moment a second deployment holds anything, and the
+        #       rail halts both for a disagreement that is not a desync (§14).
         rt = LiveRuntime(cfg, broker=broker, recorder=recorder, rails=rails,
-                         simulation=True, tick_capture=capture, alerter=alerter)
+                         simulation=True, tick_capture=capture, alerter=alerter,
+                         ledger_dir=out.parent)
         print(rt.rails.banner())
         print(_broker_banner(args, contract_note))
         print(cfg.describe())

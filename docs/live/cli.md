@@ -9,6 +9,25 @@ $env:SHIOAJI_API_KEY="..."; $env:SHIOAJI_SECRET_KEY="..."
 uv run python -m forecast_eval.live.cli --duration-minutes 60
 ```
 
+> ## ⚠ ONE INSTANCE AT A TIME — WHATEVER THE SESSION
+> With real money there must be exactly **one** running instance of this entry
+> point at any moment: one deployment, not two, and not "day and night because
+> their sessions do not overlap".
+>
+> **MEASURED 2026-09-02** (STRATEGY_SPLIT_PLAN §14), live, with separate API keys
+> per deployment: a deployment's callback hears **only its own** fills, but
+> `list_positions` returns the **combined** book to everyone. Separate API keys
+> are an authentication boundary, not a position boundary — so two instances net
+> against each other, and each one's mirror disagrees with the venue, halting
+> **both** on `mirror != venue`.
+>
+> "The sessions do not overlap" is not a safe reason. DAY's median hold is **20
+> calendar days**, NIGHT's is 4.5 — a position opened in one session is still
+> open through the other. The sessions are disjoint; the positions are not.
+>
+> Lifts only when the venue gives each deployment its own book: real
+> sub-accounts, or the shared position broker (§7.1(b)). Not more API keys.
+
 ## Responsibility
 The thin network shell around [LiveRuntime](runtime.md). Everything decidable
 lives there and is testable offline; this module owns only what needs
@@ -27,6 +46,7 @@ live half and V3's shadow parity are both read back from.
 | `--fresh-start` | off | Start a new [soak epoch](soak_epoch.md). **Required with `--broker shioaji`** (with `--resume`, exactly one). Refuses at start-up unless the account is already flat — never flattens itself |
 | `--resume` | off | Continue the current [soak epoch](soak_epoch.md). **Required with `--broker shioaji`** (with `--fresh-start`, exactly one). Bootstraps the first epoch if none exists yet |
 | `--flatten-aggression-ticks` | `5` | how far through the touch a FLATTEN close is priced before going IOC (`shioaji` only) |
+| `--config {night,day,fullday}` | `night` | selects the WHOLE deployment — policy, band, probability gate and provenance together (C2). **`fullday` is UNTUNED and is refused** (exit 5); backtest it with `real_data.py --strategy fullday` |
 | `--contract` | `TXFR1` | resolved by attribute, falling back to key lookup |
 | `--duration-minutes` | none | stop after this long; otherwise runs until Ctrl-C |
 | `--warmup-days` | `30` | calendar days requested for context + emitter priming (~21 night sessions) |
@@ -46,7 +66,7 @@ live half and V3's shadow parity are both read back from.
 | `2` | credentials not in the environment |
 | `3` | [RestartGuard](startup.md) refused to start (backoff, backfill cap, or quota headroom) |
 | `4` | **flatten incomplete** — a position was still open after a `FLATTEN` halt |
-| `5` | refused before the first bar — no acknowledgement flag, neither/both of `--fresh-start`/`--resume`, `--fresh-start` against a non-flat account, or a held position that cannot be adopted (above `max_position`, or an `ExitRule` is configured) |
+| `5` | refused before the first bar — no acknowledgement flag, neither/both of `--fresh-start`/`--resume`, `--fresh-start` against a non-flat account, or a held position that cannot be adopted (above `max_position`, or an `ExitRule` is configured), or **`--config` names an untuned deployment** (`is_tuned` False — no `source_commit`/`source_calmar`; checked first of all, before the run directory or the alerter exists, so nothing is left behind) |
 
 ## Start-up order (each step gates the next)
 1. **`RestartGuard.begin`** — *before* login, before any query. Every start

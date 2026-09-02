@@ -2,7 +2,7 @@
 
 **Role:** Assembles a live session from one config and holds it together — everything *decidable*, nothing network-facing.
 **Pipeline:** [cli.py](cli.md) → **LiveRuntime** → [bars.py](bars.md) / [loop.py](loop.md) / [state.py](state.md).
-**Depends on:** [live/backfill.py](backfill.md), [live/bars.py](bars.md), [live/loop.py](loop.md), [live/state.py](state.md), [live/config.py](config.md), [trader.py](../trader.md), [portfolio.py](../portfolio.md)   **Used by:** [live/cli.py](cli.md), [tests/test_live_runtime.py](../tests.md)
+**Depends on:** [live/backfill.py](backfill.md), [live/bars.py](bars.md), [live/loop.py](loop.md), [live/state.py](state.md), [live/config.py](config.md), [strategy/&lt;session&gt;/trader.py](../strategy/night/trader.md), [portfolio.py](../portfolio.md)   **Used by:** [live/cli.py](cli.md), [tests/test_live_runtime.py](../tests.md)
 
 ## Responsibility
 The split with [cli.py](cli.md) is the point: credentials, sockets and callbacks
@@ -49,6 +49,13 @@ first live decision, and only the first is obvious.
 | Emitter **deques** | `_trend_confirms` fails **open** below 3 samples — an un-primed restart trades with a risk filter silently disabled | replay historical forecasts through `emit_signal`, discarding results (§2.8) |
 
 ## Resuming into an open position (§2.20)
+**The Trader comes from the config's strategy package** since
+STRATEGY_SPLIT_PLAN S4 — `config.build_trader(execution=self.broker)` rather than
+an inline `Trader(...)`. It reads the same declared fields the inline
+construction did, so both tuned deployments behave identically; what changes is
+that a per-session Trader is now reachable live, by the same route the backtest
+reaches it. See [live/config.py](config.md).
+
 Both mirrors — the Trader's and the Portfolio's — start at zero, which is only
 true of a process that starts flat. The strategy holds a **median 4.5 days**, so
 a restart during a soak normally lands mid-position, and a zero mirror there is
@@ -107,6 +114,31 @@ bar. Held once, at start-up — the per-bar path stays on `broker_position()`.
   close" is not "flat": orders are `LMT`+`ROD` and ROD is cancelled at session
   end, so a flatten fired near the close can silently fail. The CLI turns this
   into a non-zero exit rather than letting it read as a clean run.
+
+`LiveRuntime(..., ledger_dir=None)` is where the directory comes from: `cli.py` passes `out.parent`, the same directory `ledger_path` writes into. `None` disables the sum and keeps the previous operand, which is what every offline test and the V0 parity harness rely on.
+
+## Reconciliation now compares the ACCOUNT, not one deployment (§16)
+**MEASURED 2026-09-02** (STRATEGY_SPLIT_PLAN §14): a deployment's order callback
+hears **only its own** fills, while `list_positions` returns the **combined**
+book for the account. Comparing one deployment's mirror against the whole
+account's size is not a desync check — it is a category error, and it halts every
+deployment the first time two of them hold at once, with nothing actually wrong.
+
+So the reconciliation mirror is now **what we recorded for the whole account**:
+`ledger.account_net_position(dir)` sums the signed quantity of every row of every
+`fills_*.csv` in the run's parent directory, across deployments and across soak
+epochs. Both sides of the comparison then mean "the account", and a disagreement
+means what the rail was written to catch: a fill missed or counted twice.
+
+**It degrades, it does not guess.** No ledger directory, no ledger files, or one
+that cannot be parsed all return `None`, and the loop falls back to this
+deployment's own position — the previous behaviour exactly. A partial sum would
+be a confident wrong number, which is the failure mode this removes.
+
+**It does not make concurrent deployments safe.** It stops the spurious halt; it
+does not stop two deployments' orders netting into one book. See
+STRATEGY_SPLIT_PLAN §15 — one instance at a time — which stands until the venue
+gives each deployment its own book.
 
 ## Related
 [live/cli.py](cli.md) · [live/loop.py](loop.md) · [live/backfill.py](backfill.md) · [live/bars.py](bars.md) · [live/state.py](state.md) · [live/config.py](config.md) · [SHIOAJI_PLAN.md §2.8](../../SHIOAJI_PLAN.md)

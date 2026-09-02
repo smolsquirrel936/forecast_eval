@@ -108,13 +108,22 @@ def _run_backtest_over(frame, *, emitter, **trader_kw):
     )
 
 
+# Tech: the deployments that trade exactly one session.
+# Why:  STRATEGY_SPLIT_PLAN S4 registered `fullday`, whose `both()` policy filters
+#       nothing out of a mixed tape -- so the two tests below, which assert that
+#       the OTHER session was removed, are meaningless for it rather than merely
+#       failing. Full-day's own invariant is the opposite one and is asserted
+#       separately at the end of this file.
+SINGLE_SESSION = sorted(n for n, c in CONFIGS.items() if len(c.policy.sessions) == 1)
+
+
 @pytest.fixture(scope="module")
 def mixed_tape():
     """A tape carrying both sessions — the thing a live feed delivers."""
     return _ticks()
 
 
-@pytest.mark.parametrize("name", sorted(CONFIGS))
+@pytest.mark.parametrize("name", SINGLE_SESSION)
 def test_single_session_deployment_matches_its_backtest(name, mixed_tape):
     """W7's acceptance test, for every pinned deployment."""
     cfg = config_named(name)
@@ -147,7 +156,7 @@ def test_single_session_deployment_matches_its_backtest(name, mixed_tape):
     assert back.portfolio.fees_by_session[other] == 0.0
 
 
-@pytest.mark.parametrize("name", sorted(CONFIGS))
+@pytest.mark.parametrize("name", SINGLE_SESSION)
 def test_the_deployment_never_sees_the_other_session(name, mixed_tape):
     """C2's invariant, measured on the bars rather than argued from the config.
 
@@ -160,11 +169,41 @@ def test_the_deployment_never_sees_the_other_session(name, mixed_tape):
 
     stamps = {e.timestamp for e in events}
     # Every bar the *other* deployment would see must be absent from this one.
-    other = next(n for n in CONFIGS if n != name)
+    other = next(n for n in SINGLE_SESSION if n != name)
     _f2, _a2, other_events = _deployment_bars(mixed_tape,
                                               config_named(other).policy)
     assert stamps.isdisjoint({e.timestamp for e in other_events})
     assert all(cfg.policy.label(e.timestamp) == mine for e in events)
+
+
+def test_fullday_sees_both_sessions_and_is_the_union_of_the_other_two(mixed_tape):
+    """Full-day's invariant is the inverse of the two above, and it is worth
+    asserting rather than assuming.
+
+    The single-session tests check that the *other* session was filtered out;
+    full-day must filter nothing and must see exactly what DAY and NIGHT see
+    between them. This is also the measurement behind STRATEGY_SPLIT_PLAN §7.4:
+    full-day is not a third independent strategy, it is a superset session that
+    overlaps both others by construction, so three deployments on one account is
+    a risk question before it is an engineering one."""
+    frame, agg, events = _deployment_bars(mixed_tape,
+                                          config_named("fullday").policy)
+    assert {e.session for e in events} == {"DAY", "NIGHT"}
+
+    _df, day_agg, day_ev = _deployment_bars(mixed_tape,
+                                            config_named("day").policy)
+    _nf, night_agg, night_ev = _deployment_bars(mixed_tape,
+                                                config_named("night").policy)
+    # It still drops the genuinely off-hours bars -- `both()` is not "no filter"
+    # -- but strictly fewer than either single-session deployment, because it
+    # keeps what each of those throws away as "the other session".
+    assert 0 < agg.n_bars_dropped_off_session < min(
+        day_agg.n_bars_dropped_off_session,
+        night_agg.n_bars_dropped_off_session,
+    )
+    assert ({e.timestamp for e in events}
+            == {e.timestamp for e in day_ev} | {e.timestamp for e in night_ev})
+    assert len(events) == len(day_ev) + len(night_ev)
 
 
 def test_the_two_deployments_partition_the_tape(mixed_tape):

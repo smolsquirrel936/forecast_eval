@@ -492,11 +492,35 @@ def test_config_named_refuses_an_unknown_deployment():
         config_named("weekend")
 
 
-def test_every_registered_config_trades_exactly_one_session():
+def test_every_TUNED_config_trades_exactly_one_session():
     """A `both()` policy would make "the best row for this deployment"
-    undefined, and `results.tsv` is scoped by a single session name."""
+    undefined, and `results.tsv` is scoped by a single session name.
+
+    Scoped to *tuned* configs by STRATEGY_SPLIT_PLAN S4. `fullday` is a
+    `both()` policy and is deliberately registered while unprovenanced, so the
+    original blanket assertion is no longer true — but its reason still is, and
+    this is where it bites: the day full-day acquires a `source_commit`, this
+    fails, and whoever tuned it has to say which `results.tsv` session name the
+    pin is scoped by before it can trade. That question should not be answerable
+    by accident."""
     for name, cfg in CONFIGS.items():
+        if not cfg.is_tuned:
+            continue
         assert len(cfg.policy.sessions) == 1, f"{name} trades {cfg.policy.sessions}"
+
+
+def test_an_untuned_config_is_refused_before_anything_else_runs(capsys):
+    """STRATEGY_SPLIT_PLAN §5/D5 — `fullday`'s band is DAY's by inheritance and
+    was never measured on the full-day tape, so it must not reach a broker.
+
+    The refusal is checked on `is_tuned`, not on the name, and it happens before
+    the credentials check — so this passes with no environment at all, which is
+    the point: nothing downstream should have to cope with a null provenance."""
+    assert cli.main(["--config", "fullday"]) == 5   # "refused before the first bar"
+    err = capsys.readouterr().err
+    assert "UNTUNED" in err
+    assert "results.tsv" in err, "the refusal should name what is missing"
+    assert "--strategy fullday" in err, "the refusal should name the way to run it"
 
 
 def test_the_banner_carries_the_selected_deployments_provenance():

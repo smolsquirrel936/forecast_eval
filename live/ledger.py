@@ -221,3 +221,54 @@ class FillLedger:
         return {"fills_replayed": self.replayed,
                 "fills_appended": self.appends,
                 "ledger_failures": self.failures}
+
+
+def account_net_position(out_parent: Any) -> Optional[int]:
+    """Signed lots EVERY deployment's ledger says this account holds.
+
+    `None` when no ledger file exists at all, so a caller can fall back rather
+    than read an absence as flat.
+    """
+    # Tech: sum the signed quantity of every row of every `fills_*.csv` beside
+    #       `out_parent`, across all deployments and all soak epochs.
+    # Why:  STRATEGY_SPLIT_PLAN §16. MEASURED 2026-09-02 (§14): a deployment's
+    #       callback hears only ITS OWN fills, but `list_positions` returns the
+    #       COMBINED book. `on_reconcile` compares those two, so two deployments
+    #       holding at once halt each other on `mirror != venue` — not because
+    #       anything is wrong, but because the operands describe different
+    #       things. This is the other operand: what WE believe the account holds
+    #       in total. Compared against the venue it is like-for-like again, and a
+    #       disagreement means a genuinely missed or double-counted fill, which
+    #       is what the rail was written to catch.
+    #
+    #       ALL soak epochs are counted, not just the live one. `replay()` scopes
+    #       to `soak_id` because it is rebuilding one run's *history*; this is
+    #       asking what the ACCOUNT holds, and a fill from a retired epoch moved
+    #       the position just as much. Retired epochs net to zero in practice —
+    #       `--fresh-start` refuses unless the account is already flat — so
+    #       including them is both correct and, normally, free.
+    #
+    #       A fill placed outside this system (by hand, or by another tool) is in
+    #       no ledger and will show up as a mismatch. That is intended: it is
+    #       exactly the state the rail should refuse to trade through.
+    parent = Path(out_parent)
+    if not parent.is_dir():
+        return None
+    total, found = 0, False
+    for path in sorted(parent.glob("fills_*.csv")):
+        try:
+            df = pd.read_csv(path)
+        except Exception:                                  # noqa: BLE001
+            # Why:  an unreadable ledger must not be silently counted as zero —
+            #       that would under-report the position and manufacture the very
+            #       mismatch this function exists to remove. Returning None makes
+            #       the caller skip reconciliation for this bar instead, which is
+            #       the same degradation `broker_position()` already uses when the
+            #       venue cannot answer.
+            return None
+        if not {"side", "quantity"} <= set(df.columns):
+            return None
+        found = True
+        for row in df.itertuples():
+            total += (1 if str(row.side) == "BUY" else -1) * int(row.quantity)
+    return total if found else None

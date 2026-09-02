@@ -88,6 +88,38 @@ file and splits it: the first `--lookback-frac` is silent warmup, the rest is th
 backtest window. Defaults: context_length=3008, horizon=30, stride=30, matching
 the toto2 notebook configuration.
 
+### `--strategy day|night|fullday` — run a whole pinned deployment
+
+Since the three-way split (STRATEGY_SPLIT_PLAN), one flag selects a session's
+entire strategy set — its Forecaster, SignalEmitter and Trader, from
+`strategy/<session>/` — and supplies the twelve knobs that deployment was tuned
+with.
+
+```bash
+# NIGHT's pinned configuration: Calmar 3.6006, 235 trades
+uv run python -m forecast_eval.real_data --strategy night --precompute \
+    --data "\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_night.csv" \
+    --warmup-bars 538790
+
+# DAY's: Calmar 1.6937, 67 trades
+uv run python -m forecast_eval.real_data --strategy day --precompute \
+    --data "\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_day.csv" \
+    --warmup-bars 676123
+```
+
+| session | tape | baseline |
+|---|---|---|
+| `night` | `TXF_RPT_minute_night.csv` | Calmar 3.6006, 235 trades |
+| `day` | `TXF_RPT_minute_day.csv` | Calmar 1.6937, 67 trades |
+| `fullday` | `TXF_RPT_minute_fullday.csv` — **not** the combined tape | **untuned**, no baseline |
+
+- **An explicit flag still beats `--strategy`.** The banner prints which knob came
+  from where, so `--strategy night --buy-threshold 0.0005` runs 0.0005 and says so.
+- **Omitting `--strategy` changes nothing.** The CLI's own historical defaults
+  apply, so every command string recorded in `results.tsv` reproduces exactly.
+- The run records `strategy` and `forecaster_sha` into `params.json`; the sha is
+  what makes two `results.tsv` rows comparable on the same forecast stream.
+
 ```bash
 # defaults (313m checkpoint, full dataset, 30% warmup)
 uv run python -m forecast_eval.real_data

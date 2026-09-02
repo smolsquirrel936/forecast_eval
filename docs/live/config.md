@@ -28,11 +28,52 @@ not a source of truth for live and is deliberately left untouched.
 | Symbol | Kind | One-liner |
 |---|---|---|
 | `LiveConfig(...)` | frozen dataclass | every knob a live run needs, plus provenance |
-| `PINNED` | constant | the configuration to trade |
-| `build_emitter()` | method | a **fresh** `ThresholdEmitter` per call |
-| `build_forecaster(*, warmup_bars)` | method | `Toto2Forecaster`; imports torch lazily |
+| `PINNED` / `PINNED_DAY` / `PINNED_FULLDAY` | constants | the three deployments |
+| `CONFIGS` / `config_named(name)` | dict / function | the registry `--config` selects from |
+| `is_tuned` | property | False when `source_commit`/`source_calmar` are None — what `cli.py` refuses on |
+| `strategy_package` | property | `"day"`/`"night"`/`"fullday"`, **derived from the policy** |
+| `build_emitter()` | method | a **fresh** emitter per call, from this deployment's own package |
+| `build_forecaster(*, warmup_bars)` | method | via the package's `make_forecaster`; imports torch lazily |
+| `build_trader(*, execution)` | method | a **fresh** Trader per call, from this deployment's own package |
 | `describe()` | method | one-line banner, provenance first |
 | `warmup_days_default(*, emitter_prime_boundaries=500)` | method | calendar-day `--warmup-days` default, derived from `policy.bars_per_session()` — NIGHT 30, DAY 84 — DAY_SESSION_PLAN C6 |
+
+## The three-way split (STRATEGY_SPLIT_PLAN S4)
+
+The three factories no longer build the shared classes — each returns the class
+its own [strategy package](../strategy/wiring.md) owns, selected by
+`strategy_package`. So retuning DAY's emitter changes what a DAY live run trades
+and touches nothing else.
+
+`strategy_package` is a **property derived from `policy.sessions`**, not a stored
+field. A stored one could disagree with the policy, and a deployment running one
+session's policy against another session's tuned components is the C2 defect
+`--config` exists to prevent, re-entering one level down.
+
+`build_trader` is new. The Trader used to be constructed inline in
+[runtime.py](runtime.md), which made it the one component a live deployment could
+not swap — so a per-session Trader could exist in the backtest and not live, and
+the two paths would then disagree about what the deployment *is*. `execution` is
+a parameter rather than a field for the same reason `warmup_bars` is: it belongs
+to the run (it is the broker), not to the strategy.
+
+## `PINNED_FULLDAY` is registered and UNTUNED
+
+It carries `source_commit=None` and `source_calmar=None`, which is the declared
+meaning of unprovenanced, and `is_tuned` is False. Its band (±0.001, `min_prob`
+0.65) is **DAY's, inherited because full-day shares DAY's 12:45 roll instant —
+never measured on the full-day tape**. There is no `results.tsv` row for it and
+it has never traded.
+
+[live/cli.py](cli.md) refuses `--config fullday` before the credentials check.
+The refusal keys on `is_tuned`, not on the name, so a fourth untuned deployment
+is covered for free. Backtesting it is the supported path:
+`real_data.py --strategy fullday`.
+
+W5a is why the inheritance is not evidence: NIGHT's band on the day tape scores
+Calmar 0.4129 against 3.6006. There is no reason to expect DAY's band to transfer
+to full-day any better. The work that replaces the stub is `tools/band_sweep.py`
+on `TXF_RPT_minute_fullday.csv`.
 
 ## What is pinned, and to what
 `results.tsv` row **`4282d33`** — Calmar **3.6006**, 235 trades, net **+24 135.60**

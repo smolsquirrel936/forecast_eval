@@ -25,7 +25,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from ..strategy.threshold import ThresholdEmitter
 from .sessions import SessionPolicy
 
 
@@ -37,8 +36,16 @@ class LiveConfig:
     #       research log. Provenance fields are part of the config, not a comment,
     #       because a number without a source is exactly how the 313m default
     #       nearly became the live model.
-    source_commit: str
-    source_calmar: float
+    # Tech: provenance. `source_commit`/`source_calmar` are Optional, and both
+    #       being None is the declared meaning of "untuned".
+    # Why:  STRATEGY_SPLIT_PLAN §5/D5. FULL-DAY has to be expressible before it
+    #       has a `results.tsv` row -- it must be runnable in the backtest and
+    #       parity-checkable -- but a config that cannot say it is unprovenanced
+    #       would have to borrow DAY's commit and Calmar, which is a lie the
+    #       drift guards would then enforce as truth. None is the honest value,
+    #       and `is_tuned` below is what the CLI refuses on.
+    source_commit: Optional[str]
+    source_calmar: Optional[float]
     source_dataset: str
     source_note: str
 
@@ -72,12 +79,49 @@ class LiveConfig:
     contract_multiplier: float = 200.0
     forced_close_on_session_end: bool = False
 
-    def build_emitter(self) -> ThresholdEmitter:
-        # Tech: construct the emitter from the declared fields.
+    @property
+    def is_tuned(self) -> bool:
+        # Tech: whether this config carries provenance — a research commit and
+        #       the Calmar it was measured at.
+        # Why:  the one question the drift guards and the CLI both need to ask.
+        #       An untuned config is a legitimate thing to backtest and parity-
+        #       check and an illegitimate thing to send at a broker, and that
+        #       distinction has to be readable from the value itself rather than
+        #       from a name the caller has to remember to special-case.
+        return self.source_commit is not None and self.source_calmar is not None
+
+    @property
+    def strategy_package(self) -> str:
+        # Tech: the `strategy/` package this deployment's components come from,
+        #       derived from the policy rather than stored beside it.
+        # Why:  STRATEGY_SPLIT_PLAN §2.3. A stored field could disagree with the
+        #       policy, and a deployment running one session's policy against
+        #       another session's tuned components is exactly the C2 defect that
+        #       `--config` exists to make impossible — reintroduced one level
+        #       down. Deriving it means the two cannot desync at all.
+        sessions = frozenset(self.policy.sessions)
+        if sessions == frozenset({"NIGHT"}):
+            return "night"
+        if sessions == frozenset({"DAY"}):
+            return "day"
+        if sessions == frozenset({"DAY", "NIGHT"}):
+            return "fullday"
+        raise ValueError(f"no strategy package for sessions {sorted(sessions)}")
+
+    def build_emitter(self):
+        # Tech: construct this deployment's emitter — the class its own strategy
+        #       package owns, from the declared fields.
         # Why:  a factory rather than a separately-written construction site, so
         #       the declaration and the object can never disagree. The emitter is
         #       stateful (rolling deques), so this returns a FRESH instance every
         #       call — reusing one across runs silently produces wrong numbers.
+        #       Since the split it is the *package's* copy, so a search that
+        #       retunes DAY's emitter changes what a DAY live run trades and
+        #       nothing else.
+        from importlib import import_module
+        ThresholdEmitter = import_module(
+            f"..strategy.{self.strategy_package}.emitter", __package__
+        ).ThresholdEmitter
         return ThresholdEmitter(
             buy_threshold=self.buy_threshold,
             sell_threshold=self.sell_threshold,
@@ -98,16 +142,46 @@ class LiveConfig:
         #       elapse before the first live forecast is a decision for the entry
         #       point (V3), not something to pin from a research run. Imported
         #       here so this module stays importable without torch installed.
-        from ..forecaster.toto2 import Toto2Forecaster
-        return Toto2Forecaster(
+        #
+        #       Since the split it routes through the deployment's own package,
+        #       which is what makes a per-session forecaster reachable live
+        #       (STRATEGY_SPLIT_PLAN D3). The package defers the torch import for
+        #       the same reason this method does.
+        from importlib import import_module
+        make_forecaster = import_module(
+            f"..strategy.{self.strategy_package}.forecaster", __package__
+        ).make_forecaster
+        return make_forecaster(
             warmup_bars=warmup_bars,
-            forecast_stride_bars=self.forecast_stride_bars,
-            forecast_horizon_bars=self.forecast_horizon_bars,
+            stride_bars=self.forecast_stride_bars,
+            horizon_bars=self.forecast_horizon_bars,
             context_length=self.context_length,
             checkpoint=self.checkpoint,
             device=self.device,
             bar_freq=self.bar_freq,
             signal_step=self.signal_step,
+        )
+
+    def build_trader(self, *, execution: Any):
+        # Tech: construct this deployment's Trader — its own package's copy —
+        #       over the execution handle the caller owns.
+        # Why:  STRATEGY_SPLIT_PLAN §2.3. The Trader was built inline in
+        #       `runtime.py`, which made it the one component a live deployment
+        #       could not swap; live and backtest now reach the same per-session
+        #       class by the same route. `execution` is a parameter rather than a
+        #       field for the reason `warmup_bars` is: it belongs to the run (it
+        #       is the broker), not to the strategy. Fresh instance per call, for
+        #       the same statefulness reason as `build_emitter`.
+        from importlib import import_module
+        Trader = import_module(
+            f"..strategy.{self.strategy_package}.trader", __package__
+        ).Trader
+        return Trader(
+            execution=execution,
+            tick_size=self.tick_size,
+            aggression_ticks=self.aggression_ticks,
+            max_position=self.max_position,
+            max_aggression_ticks=self.max_aggression_ticks,
         )
 
     def warmup_days_default(self, *, emitter_prime_boundaries: int = 500) -> int:
@@ -138,8 +212,18 @@ class LiveConfig:
         # Why:  goes on the console banner and into the Recorder's `meta` header,
         #       so any artifact can be traced back to the research row that
         #       justified it without opening the code.
+        # Tech: an untuned config renders "UNTUNED" and "calmar=nan" rather than
+        #       "None".
+        # Why:  `tools/session_artifacts.py` parses this line back out of a
+        #       recorded session's `meta` header and calls `float()` on the
+        #       calmar group. "nan" survives that; "None" raises. An untuned
+        #       config cannot currently reach a recorded live run (the CLI
+        #       refuses it), but a parser that crashes on a value this very
+        #       module can produce is a landmine, not a safeguard.
+        commit = self.source_commit if self.is_tuned else "UNTUNED"
+        calmar = self.source_calmar if self.is_tuned else "nan"
         return (
-            f"LiveConfig[{self.source_commit} calmar={self.source_calmar} "
+            f"LiveConfig[{commit} calmar={calmar} "
             f"{sorted(self.policy.sessions)}] "
             f"ckpt={self.checkpoint} ctx={self.context_length} "
             f"stride={self.forecast_stride_bars} horizon={self.forecast_horizon_bars} "
@@ -287,9 +371,66 @@ PINNED_DAY = LiveConfig(
 #       place, which runs a night strategy on a day tape and reports nothing
 #       unusual while doing it. Selecting the whole config keeps the policy
 #       travelling inside the value it belongs to, so the two cannot disagree.
+# Tech: the FULL-DAY deployment. It carries no `source_commit` and no
+#       `source_calmar`, which is what `is_tuned` reads as "unprovenanced", and
+#       its band and probability gate are DAY's — inherited, not measured.
+# Why:  STRATEGY_SPLIT_PLAN §5 / D5. Full-day needs to exist as a value before it
+#       has a tuned row: the backtest runs it today (`--strategy fullday`), the
+#       parity machinery can check it, and `strategy/fullday/` has somewhere to
+#       point. What it must NOT do is trade, and the honest way to arrange that
+#       is a config that says it is untuned and an entry point that refuses it
+#       (`live/cli.py`), rather than plausible-looking numbers borrowed from
+#       another session.
+#
+#       WHY DAY'S NUMBERS AND NOT NIGHT'S: full-day trades DAY, so it rolls at
+#       12:45 like DAY (`roll_at_time`, extended 2026-09-01; DAY_SESSION_PLAN §4
+#       C4 has a FULL-DAY row). Inheriting the band from the deployment it shares
+#       a roll instant with is the least arbitrary choice available — but it is
+#       still arbitrary, and it is not evidence. W5a measured what transferring a
+#       band across sessions is worth: NIGHT's band on the day tape scores 0.4129
+#       against 3.6006. There is no reason to expect DAY's band to transfer to
+#       full-day any better.
+#
+#       THE TAPE TO TUNE ON is `TXF_RPT_minute_fullday.csv` (2 364 417 bars,
+#       2018-01-02 -> 2026-08-21), NOT the combined `TXF_RPT_minute.csv`, whose
+#       first 15.6 % is day-only because TAIFEX had no night session before
+#       2017-05-15 (TAPE_REBUILD_PLAN §2.5). Running `tools/band_sweep.py` there
+#       is the work that replaces this stub.
+#
+#       ALSO UNANSWERED, and bigger than the band: full-day is not a third
+#       independent strategy, it is a SUPERSET session that overlaps both others
+#       by construction. Running it beside DAY and NIGHT on one account is
+#       STRATEGY_SPLIT_PLAN §7.1 — the reconciliation rail halts every deployment
+#       the moment two of them hold at once — and §7.4, which is a risk decision
+#       nobody has made.
+PINNED_FULLDAY = LiveConfig(
+    source_commit=None,
+    source_calmar=None,
+    source_dataset=r"\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_fullday.csv",
+    source_note=(
+        "UNTUNED (STRATEGY_SPLIT_PLAN D5, 2026-09-02). No results.tsv row "
+        "exists for the FULL-DAY session and this configuration has never "
+        "traded, in simulation or otherwise. Band 0.001 / min_prob 0.65 are "
+        "DAY's, inherited because full-day shares DAY's 12:45 roll instant -- "
+        "they were never measured on the full-day tape. live/cli.py refuses "
+        "--config fullday until a tuned row exists; the backtest runs it via "
+        "`real_data.py --strategy fullday`."
+    ),
+    policy=SessionPolicy.both(),
+    checkpoint="Datadog/Toto-2.0-1B",
+    context_length=3008,
+    forecast_horizon_bars=30,
+    forecast_stride_bars=30,
+    buy_threshold=0.001,
+    sell_threshold=-0.001,
+    min_prob=0.65,
+)
+
+
 CONFIGS = {
     "night": PINNED,
     "day": PINNED_DAY,
+    "fullday": PINNED_FULLDAY,
 }
 
 

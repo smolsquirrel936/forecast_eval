@@ -15,6 +15,8 @@ import pytest
 from forecast_eval.live.config import (CONFIGS, PINNED, PINNED_DAY, LiveConfig,
                                         config_named)
 from forecast_eval.live.sessions import SessionPolicy
+from forecast_eval.strategy.night.emitter import (ThresholdEmitter
+                                                  as NightEmitter)
 from forecast_eval.strategy.threshold import ThresholdEmitter
 
 RESULTS = Path(__file__).resolve().parent.parent / "results.tsv"
@@ -184,7 +186,11 @@ def test_cadence_and_context_match_the_tuned_run():
 
 def test_build_emitter_reproduces_every_declared_field():
     em = PINNED.build_emitter()
-    assert isinstance(em, ThresholdEmitter)
+    # The emitter is NIGHT's own copy since the split, not the shared class --
+    # that is what makes retuning DAY's emitter unable to move a NIGHT live run
+    # (STRATEGY_SPLIT_PLAN S1/S4).
+    assert type(em) is NightEmitter
+    assert type(em) is not ThresholdEmitter
     assert em.buy_threshold == PINNED.buy_threshold
     assert em.sell_threshold == PINNED.sell_threshold
     assert em.min_prob == PINNED.min_prob
@@ -388,6 +394,9 @@ def test_every_deployment_is_pinned_to_the_best_keep_row_for_its_session(name):
     when a pin drifts from the row it claims. The session scoping is what lets
     two pins coexist: a DAY row cannot re-pin NIGHT."""
     cfg = config_named(name)
+    if not cfg.is_tuned:
+        pytest.skip(f"{name} declares itself untuned (no source_commit); "
+                    f"live/cli.py refuses it -- see the untuned tests below")
     session = _session_of(cfg)
     assert _rows_for(session), f"results.tsv has no {session} rows"
     row = _row_for(cfg)
@@ -412,6 +421,9 @@ def test_every_deployment_row_agrees_with_its_policy_and_dataset(name):
     """The pairing C2 exists to protect. A policy that disagrees with the row it
     was tuned on is the 2026-08-11 defect, and it starts exactly here."""
     cfg = config_named(name)
+    if not cfg.is_tuned:
+        pytest.skip(f"{name} declares itself untuned (no source_commit); "
+                    f"live/cli.py refuses it -- see the untuned tests below")
     row = _row_for(cfg)
     assert row["session"] == _session_of(cfg)
     row_file = row["dataset"].split("@")[0]

@@ -99,6 +99,7 @@ class LiveRuntime:
         emitter_prime_boundaries: int = 900,
         tick_capture: Any = None,
         alerter: Any = None,
+        ledger_dir: Any = None,
     ):
         # Tech: build the whole stack from `config`, deriving the session policy
         #       from it rather than accepting one separately.
@@ -162,13 +163,16 @@ class LiveRuntime:
         self.execution = Execution(fee_rate=config.fee_rate)
         self.broker: Broker = broker or DryRunBroker(self.execution,
                                                      recorder=recorder)
-        self.trader = Trader(
-            execution=self.broker,
-            tick_size=config.tick_size,
-            aggression_ticks=config.aggression_ticks,
-            max_position=config.max_position,
-            max_aggression_ticks=config.max_aggression_ticks,
-        )
+        # Tech: the Trader comes from the config's own strategy package rather
+        #       than being constructed here.
+        # Why:  STRATEGY_SPLIT_PLAN §2.3. Built inline, this was the one
+        #       component a live deployment could not swap, so a per-session
+        #       Trader could exist in the backtest and not live — and the two
+        #       paths would then disagree about what the deployment *is*, which
+        #       is what `tests/test_live_parity*.py` exist to prevent. The
+        #       factory reads the same declared fields the inline construction
+        #       did, so behaviour is unchanged for both tuned deployments.
+        self.trader = config.build_trader(execution=self.broker)
         self.portfolio = Portfolio(contract_multiplier=config.contract_multiplier)
         # Tech: signed size waiting to be re-established on a newly rolled
         #       contract; 0 when nothing is pending.
@@ -226,8 +230,31 @@ class LiveRuntime:
             recorder=recorder,
             rails=self.rails,
             alerter=alerter,
+            expected_position=self._expected_account_position,
         )
+        # Tech: where the per-deployment fill ledgers live; None disables the
+        #       cross-deployment sum and keeps the loop on this deployment's own
+        #       position.
+        # Why:  STRATEGY_SPLIT_PLAN 16. Passed in rather than derived, because
+        #       only the entry point knows the run directory -- `cli.py` builds
+        #       `ledger_path(out.parent, policy)` and this is the same parent.
+        #       Defaulting to None keeps every offline test and the V0 parity
+        #       harness on exactly the previous operand.
+        self.ledger_dir = ledger_dir
         self.warm = False
+
+    def _expected_account_position(self) -> Optional[int]:
+        # Tech: what every deployment's ledger says the ACCOUNT holds, or None
+        #       when there is no ledger directory or a ledger cannot be read.
+        # Why:  16. Returning None -- rather than 0 or this deployment's own
+        #       size -- is what lets the loop fall back cleanly: an absent or
+        #       unreadable ledger must degrade to "cannot compare", never to a
+        #       confident wrong number, which is the same rule
+        #       `broker_position()` follows when the venue will not answer.
+        if self.ledger_dir is None:
+            return None
+        from .ledger import account_net_position
+        return account_net_position(self.ledger_dir)
 
     # ---- resuming into an open position ------------------------------------
 

@@ -34,7 +34,70 @@ from forecast_eval.forecaster.toto2 import Toto2Forecaster
 from forecast_eval.logging_io import timestamped_run_dir, write_all
 from forecast_eval.metrics import buy_and_hold_pnl, compute_metrics
 from forecast_eval.run import run_backtest
+from forecast_eval.strategy import wiring as strategy_wiring
 from forecast_eval.strategy.threshold import ThresholdEmitter
+
+# Tech: the literal defaults these twelve flags carried before `--strategy`
+#       existed, keyed by argparse destination. The flags themselves now use
+#       `argparse.SUPPRESS`, and this table is applied when no `--strategy` is
+#       given.
+# Why:  STRATEGY_SPLIT_PLAN §2.2 -- every command string recorded in
+#       `results.tsv` must keep reproducing byte-identically, so the old default
+#       for every knob has to survive somewhere. Moving them here rather than
+#       deleting them makes "what a bare run does" one readable table instead of
+#       twelve scattered literals, and lets the resolver below tell a typed flag
+#       from an untyped one, which is what a literal default cannot express.
+CLI_STRATEGY_DEFAULTS = {
+    "checkpoint": "Datadog/Toto-2.0-313m",
+    "context_length": 3008,
+    "horizon_bars": 30,
+    "stride_bars": 30,
+    "buy_threshold": 0.0005,
+    "sell_threshold": -0.0005,
+    "min_prob": None,
+    "full_confidence_prob": 0.9,
+    "aggression_ticks": 0,
+    "max_aggression_ticks": None,
+    "max_position": 1,
+    "forced_close": False,
+}
+
+
+def _resolve_strategy_knobs(args) -> dict:
+    # Tech: fill in every knob in CLI_STRATEGY_DEFAULTS on `args` -- from the
+    #       named strategy package when `--strategy` was given, otherwise from
+    #       this CLI's own defaults -- with any explicitly typed flag winning.
+    #       Returns {knob: origin} for the banner.
+    # Why:  writing the resolved values back onto `args` is what keeps the rest of
+    #       this function, and `params=vars(args)` in the artifact bundle,
+    #       unchanged: every downstream `args.stride_bars` still reads the value
+    #       that actually ran, and `params.json` records the resolved set rather
+    #       than a half-empty namespace.
+    explicit = {k: v for k, v in vars(args).items() if k in CLI_STRATEGY_DEFAULTS}
+    if args.strategy is None:
+        base, source = dict(CLI_STRATEGY_DEFAULTS), "cli-default"
+    else:
+        base, source = strategy_wiring.params(args.strategy), args.strategy
+        # Tech: the package's knob set must be exactly this CLI's knob set.
+        # Why:  a package that adds a knob this CLI cannot pass would be tuned in
+        #       research and silently dropped at evaluation; one that drops a knob
+        #       would fall back to a stale literal. Either way the recorded row
+        #       and the run disagree, which is the failure `live/config.py` exists
+        #       to prevent -- so it fails here instead, at import-time cost zero.
+        if set(base) != set(CLI_STRATEGY_DEFAULTS):
+            raise ValueError(
+                f"strategy {args.strategy!r} declares knobs "
+                f"{sorted(base)}, but this CLI resolves "
+                f"{sorted(CLI_STRATEGY_DEFAULTS)}"
+            )
+    origins = {}
+    for knob, value in base.items():
+        if knob in explicit:
+            origins[knob] = "flag"
+        else:
+            origins[knob] = source
+            setattr(args, knob, value)
+    return origins
 
 
 def load_minute_bars(path: Path, n_bars: int | None) -> pd.DataFrame:
@@ -138,31 +201,56 @@ def main(argv=None) -> int:
                          "Reproducible across tapes of different length, which a "
                          "fraction is not -- prefer this for any run that will be "
                          "recorded in results.tsv")
-    ap.add_argument("--checkpoint", default="Datadog/Toto-2.0-313m",
+    # Tech: --strategy raises one of the three per-session packages
+    #       (STRATEGY_SPLIT_PLAN S3); every knob below it also declares then
+    #       defaults from that package instead of from this CLI.
+    # Why:  the tuned configuration lived only as a flag string in `results.tsv`,
+    #       so reproducing a run meant retyping six numbers correctly and a wrong
+    #       one was undetectable. Naming the deployment makes the whole set travel
+    #       together, exactly as `live/cli.py --config` does for a live run. It
+    #       defaults to None so every recorded flag-string command still runs, and
+    #       runs identically.
+    ap.add_argument("--strategy", choices=list(strategy_wiring.SESSIONS),
+                    default=None,
+                    help="Session strategy package to run; supplies defaults for "
+                         "the knobs below. Omit for this CLI's own defaults.")
+    # Tech: every knob a strategy package also declares uses SUPPRESS rather than
+    #       a literal default, and the resolved value is written back onto `args`
+    #       immediately after parsing (see _resolve_strategy_knobs).
+    # Why:  SUPPRESS is what makes "the user typed this flag" observable at all --
+    #       with a literal default, a flag passed at its default value is
+    #       indistinguishable from one never passed, and `--strategy night
+    #       --buy-threshold 0.0005` would silently run 0.00045. The values that
+    #       were these defaults now live in CLI_STRATEGY_DEFAULTS, and the
+    #       no---strategy path applies them unchanged.
+    ap.add_argument("--checkpoint", default=argparse.SUPPRESS,
                     help="HuggingFace toto2 checkpoint id")
-    ap.add_argument("--context-length", type=int, default=3008,
+    ap.add_argument("--context-length", type=int, default=argparse.SUPPRESS,
                     help="Toto2 per-forecast context window (model-capped)")
-    ap.add_argument("--horizon-bars", type=int, default=30)
-    ap.add_argument("--stride-bars", type=int, default=30)
-    ap.add_argument("--buy-threshold", type=float, default=0.0005)
-    ap.add_argument("--sell-threshold", type=float, default=-0.0005)
-    ap.add_argument("--aggression-ticks", type=int, default=0)
+    ap.add_argument("--horizon-bars", type=int, default=argparse.SUPPRESS)
+    ap.add_argument("--stride-bars", type=int, default=argparse.SUPPRESS)
+    ap.add_argument("--buy-threshold", type=float, default=argparse.SUPPRESS)
+    ap.add_argument("--sell-threshold", type=float, default=argparse.SUPPRESS)
+    ap.add_argument("--aggression-ticks", type=int, default=argparse.SUPPRESS)
     # Confidence-aware order placement (ORDER_PLACEMENT_IDEAS #1/#2/#7). All default
     # to OFF so a plain run reproduces the prior behavior exactly.
-    ap.add_argument("--min-prob", type=float, default=None,
+    ap.add_argument("--min-prob", type=float, default=argparse.SUPPRESS,
                     help="#2: gate trades on Toto2 directional probability in "
                          "[0.5,1); HOLD when below. Off by default.")
-    ap.add_argument("--full-confidence-prob", type=float, default=0.9,
+    ap.add_argument("--full-confidence-prob", type=float,
+                    default=argparse.SUPPRESS,
                     help="Directional probability at which conviction strength "
                          "saturates to 1.0 (drives #1/#7).")
-    ap.add_argument("--max-aggression-ticks", type=int, default=None,
+    ap.add_argument("--max-aggression-ticks", type=int,
+                    default=argparse.SUPPRESS,
                     help="#1: aggressive end of a confidence-scaled limit offset "
                          "(base = --aggression-ticks). Off (no scaling) by default.")
-    ap.add_argument("--max-position", type=int, default=1,
+    ap.add_argument("--max-position", type=int, default=argparse.SUPPRESS,
                     help="#7: max contracts for a full-conviction entry; size scales "
                          "with strength up to this. 1 disables sizing.")
     ap.add_argument("--fee-rate", type=float, default=0.00015)
     ap.add_argument("--forced-close", action="store_true",
+                    default=argparse.SUPPRESS,
                     help="Force close at every DAY<->NIGHT session boundary")
     ap.add_argument("--precompute", action="store_true",
                     help="Batch all forecasts on the GPU before replaying execution "
@@ -173,6 +261,27 @@ def main(argv=None) -> int:
     ap.add_argument("--output-dir", type=Path, default=None,
                     help="Defaults to <myPaper>/outputs/real_data_<timestamp>/")
     args = ap.parse_args(argv)
+
+    # Tech: resolve the strategy-owned knobs onto `args` before anything reads
+    #       them, and print the resolution when a package was named.
+    # Why:  §2.2 -- "which knob came from where" must be visible in the run's own
+    #       output, because a pinned deployment and a hand-typed override now look
+    #       identical once they reach the model. Nothing is printed on the bare
+    #       path so an existing recorded command's output is unchanged.
+    origins = _resolve_strategy_knobs(args)
+    if args.strategy is not None:
+        # Tech: stamp the package's forecaster hash onto `args`, so it reaches
+        #       the banner and `params.json` without a second lookup.
+        # Why:  §2.4 — this is the column a `results.tsv` row needs to say which
+        #       forecast stream it was scored on, and a number nobody can find is
+        #       a number nobody records. Printing it beside the knobs makes it
+        #       copyable straight out of the run that produced the result.
+        args.forecaster_sha = strategy_wiring.forecaster_sha(args.strategy)
+        print(f"strategy: {args.strategy} "
+              f"(forecaster_sha {args.forecaster_sha})")
+        for knob in sorted(origins):
+            print(f"  {knob:22} = {getattr(args, knob)!r:24} "
+                  f"[{origins[knob]}]")
 
     # Tech: validate the lookback fraction is strictly inside (0, 1).
     # Why:  0 or 1 would leave either no warmup or no eval window; rejecting it early
@@ -279,22 +388,44 @@ def main(argv=None) -> int:
     #       context length) and the threshold emitter.
     # Why:  here warmup is the data-driven 30% split, so trading is suppressed for the
     #       whole lookback region; context_length still caps each forecast's window.
-    fc = Toto2Forecaster(
-        warmup_bars=warmup,
-        forecast_stride_bars=args.stride_bars,
-        forecast_horizon_bars=args.horizon_bars,
-        context_length=args.context_length,
-        checkpoint=args.checkpoint,
-        device="auto",
-        bar_freq=None,
-        signal_step="last",
-    )
-    em = ThresholdEmitter(
-        buy_threshold=args.buy_threshold,
-        sell_threshold=args.sell_threshold,
-        min_prob=args.min_prob,
-        full_confidence_prob=args.full_confidence_prob,
-    )
+    # Tech: with `--strategy`, the three components come from that package; the
+    #       Trader arrives as a factory over Execution and any exit rule with it.
+    #       Without it, the original construction runs unchanged.
+    # Why:  §2.2/§2.1. This is the whole selector: one branch, and the `None` side
+    #       is the code that was here before, so a recorded flag-string command is
+    #       byte-identical. The resolved knobs are passed through explicitly
+    #       rather than re-read inside the package, so an explicit CLI flag still
+    #       beats the package's own default.
+    if args.strategy is None:
+        fc = Toto2Forecaster(
+            warmup_bars=warmup,
+            forecast_stride_bars=args.stride_bars,
+            forecast_horizon_bars=args.horizon_bars,
+            context_length=args.context_length,
+            checkpoint=args.checkpoint,
+            device="auto",
+            bar_freq=None,
+            signal_step="last",
+        )
+        em = ThresholdEmitter(
+            buy_threshold=args.buy_threshold,
+            sell_threshold=args.sell_threshold,
+            min_prob=args.min_prob,
+            full_confidence_prob=args.full_confidence_prob,
+        )
+        make_trader = None
+        exit_rule = None
+    else:
+        stack = strategy_wiring.make_strategy(
+            args.strategy,
+            warmup_bars=warmup,
+            tick_size=1.0,
+            **{knob: getattr(args, knob) for knob in CLI_STRATEGY_DEFAULTS},
+        )
+        fc = stack["forecaster"]
+        em = stack["emitter"]
+        make_trader = stack["make_trader"]
+        exit_rule = stack["exit_rule"]
 
     # Tech: print the expected forecast count over the eval window.
     # Why:  same cheap sanity check as the demo, computed against the split warmup.
@@ -310,6 +441,8 @@ def main(argv=None) -> int:
         ticks,
         forecaster=fc,
         emitter=em,
+        make_trader=make_trader,
+        exit_rule=exit_rule,
         tick_size=1.0,
         aggression_ticks=args.aggression_ticks,
         max_aggression_ticks=args.max_aggression_ticks,

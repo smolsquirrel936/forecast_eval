@@ -220,3 +220,7 @@ __marimo__/
 # Claude
 .claude/
 CLAUDE.md
+# Live trading credentials (STRATEGY_SPLIT_PLAN S8) — never commit these.
+config/secrets.toml
+config/secrets.*.toml
+!config/secrets.example.toml
