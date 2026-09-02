@@ -24,6 +24,7 @@ from forecast_eval.live.broker.dryrun import DryRunBroker
 from forecast_eval.live.broker.shadow import ShadowBroker
 from forecast_eval.live.broker.shioaji import ShioajiBroker
 from forecast_eval.live.recorder import Recorder
+from forecast_eval.live.runtime import LiveRuntime
 from forecast_eval.live.state import HaltAction
 
 from .fakes.fake_shioaji import FakePosition, FakeShioaji, make_contract
@@ -35,6 +36,12 @@ NOW = datetime(2026, 5, 14, 18, 0)
 class _HeldBroker(DryRunBroker):
     """A broker that reports a venue position. Everything else is the offline
     fill model, so a bar can be driven through the loop without a feed."""
+
+    # Tech: this double stands in for a broker with a real account.
+    # Why:  it answers `broker_position_detail`, so a None from it means the
+    #       query failed rather than "there is no venue" — which is the case the
+    #       reconciliation must refuse rather than skip.
+    has_venue = True
 
     def __init__(self, detail, **kw):
         super().__init__(Execution(fee_rate=0.0), **kw)
@@ -58,7 +65,8 @@ def test_adopting_a_long_seeds_both_mirrors():
     rt = _runtime(HeldPosition(1, 17480.0))
     adopted = rt.adopt_position(timestamp=NOW)
 
-    assert adopted == {"position": 1, "entry_price": 17480.0, "adopted_at": NOW}
+    assert adopted == {"position": 1, "entry_price": 17480.0, "adopted_at": NOW,
+                       "source": "venue"}
     assert rt.trader.position == 1
     assert rt.trader.entry_price == 17480.0
     assert rt.trader.entry_timestamp == NOW
@@ -260,3 +268,73 @@ def test_the_shadow_passes_the_venue_position_through():
                                   price=17480.0)]
     shadow = ShadowBroker(_broker(api), fee_rate=0.0)
     assert shadow.broker_position_detail() == HeldPosition(1, 17480.0)
+
+
+# ---- adopting when there is no venue to ask (a dry run's own ledger) ---------
+
+
+def _ledger_fills():
+    from forecast_eval.events import FillEvent as _F
+    # the night ledger as it stands: a closed SHORT and one BUY left open
+    return [_F(timestamp=NOW, side="SELL", fill_price=44893.0, quantity=1, fee=0.0),
+            _F(timestamp=NOW, side="BUY", fill_price=44520.0, quantity=1, fee=0.0),
+            _F(timestamp=NOW, side="BUY", fill_price=44555.0, quantity=1, fee=0.0)]
+
+
+def test_venue_position_separates_a_flat_account_from_no_account():
+    """The distinction the ledger reconciliation turns on. `adopt_position`
+    returns None for both, which is why the answer is recorded separately."""
+    flat = _runtime(HeldPosition(0, 0.0))
+    flat.adopt_position(timestamp=NOW)
+    assert flat.venue_position == 0             # a venue answered: flat
+
+    from forecast_eval.live.ledger import open_position
+    offline = LiveRuntime(_config(), broker=DryRunBroker(Execution(fee_rate=0.0)))
+    offline.adopt_position(timestamp=NOW, fallback=open_position(_ledger_fills()))
+    assert offline.venue_position is None       # nobody was asked
+
+
+def test_a_broker_with_no_venue_adopts_from_the_ledger():
+    """MEASURED on `live_night_20260902_082640`: a dry run's ledger replayed to
+    +1 against a venue that was never asked, so the history was refused on every
+    start and the run wrote an empty fills.csv and trades.csv."""
+    from forecast_eval.live.ledger import open_position
+
+    rt = LiveRuntime(_config(), broker=DryRunBroker(Execution(fee_rate=0.0)))
+    adopted = rt.adopt_position(timestamp=NOW,
+                                fallback=open_position(_ledger_fills()))
+    assert adopted["source"] == "ledger"
+    assert adopted["position"] == 1
+    assert adopted["entry_price"] == 44555.0     # the lot left open, not an average
+    # Both mirrors, or the seeded fills net +1 against a Trader that thinks it is
+    # flat and the next fill pairs against a lot it does not know it holds.
+    assert rt.trader.position == 1
+    assert rt.portfolio.position == 1
+    assert rt.portfolio.avg_entry_price == 44555.0
+
+
+def test_a_failed_venue_query_never_adopts_from_the_ledger():
+    """`ShioajiBroker.broker_position_detail` also returns None when
+    `list_positions` raised. Substituting the ledger there would seed a history
+    nothing checked against the real account — the exact confidently-wrong
+    trades.csv the reconciliation exists to prevent."""
+    from forecast_eval.live.ledger import open_position
+
+    rt = _runtime(None)                          # has_venue=True, query failed
+    assert rt.adopt_position(timestamp=NOW,
+                             fallback=open_position(_ledger_fills())) is None
+    assert rt.trader.position == 0
+    assert rt.venue_position is None
+
+
+def test_a_flat_venue_still_refuses_a_ledger_that_disagrees():
+    """The fallback must not become a back door around the reconciliation: a
+    real account reporting flat is an answer, and a ledger claiming +1 against
+    it is still wrong."""
+    from forecast_eval.live.ledger import open_position
+
+    rt = _runtime(HeldPosition(0, 0.0))
+    assert rt.adopt_position(timestamp=NOW,
+                             fallback=open_position(_ledger_fills())) is None
+    assert rt.trader.position == 0
+    assert rt.venue_position == 0                # which is what cli.py compares

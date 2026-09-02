@@ -221,6 +221,11 @@ class ShioajiBroker(Broker):
             pass
         self.api.set_order_callback(self._on_order_state)
 
+    # Tech: this broker has a real account behind it.
+    # Why:  so a None from `broker_position_detail` reads as "the query
+    #       failed" rather than "there is no venue" — see `base.Broker`.
+    has_venue = True
+
     # ---- Broker interface --------------------------------------------------
 
     def submit(self, order: OrderEvent, *, current_price: float) -> None:

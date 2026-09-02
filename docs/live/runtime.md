@@ -25,7 +25,8 @@ first live decision, and only the first is obvious.
 | Symbol | Kind | One-liner |
 |---|---|---|
 | `LiveRuntime(config, *, broker=None, recorder=None, rails=None, rails_config=None, simulation=True, emitter_prime_boundaries=500, tick_capture=None)` | class | builds the whole stack; defaults to [DryRunBroker](broker/dryrun.md) |
-| `adopt_position(*, timestamp)` | method | seed both mirrors from the venue's held position, or `None` when flat; raises when the state cannot be adopted |
+| `adopt_position(*, timestamp, fallback=None)` | method | seed both mirrors from the venue's held position — or from `fallback` when the broker has no venue — or `None` when flat; raises when the state cannot be adopted |
+| `venue_position` | attribute | what the venue answered at start-up; `None` when none was asked |
 | `fetch_warmup_bars(api, contract, start, end, *, cache_path=None, front_month_at=None)` | method | [fetch_bars_continuous](backfill.md) with *this* runtime's policy — the caller never picks one; `contract` may be a list, spliced on volume |
 | `settle_rolled_leg(*, price, timestamp, session="NIGHT")` | method | close the expiring month in both mirrors and arm the same exposure for re-entry (§2.6) |
 | `request_roll(now=None)` / `resume_roll(now=None)` | methods | the scheduled roll's two halves — close on the old month, then re-open on the new once the caller has switched |
@@ -59,6 +60,7 @@ bar. Held once, at start-up — the per-bar path stays on `broker_position()`.
 | Situation | Result |
 |---|---|
 | Account flat, or broker cannot answer | `None` — nothing adopted, nothing refused |
+| No venue at all (`has_venue = False`) and a `fallback` given | adopted from the **ledger**, `source="ledger"` |
 | 1 lot | adopted at the **venue's** average entry price |
 | Above `max_position` | raises — `Trader.on_fill` cannot average a second lot's entry (§2.10) |
 | An `ExitRule` is configured | raises — the entry *bar index* belongs to the dead process |
@@ -96,3 +98,25 @@ bar. Held once, at start-up — the per-bar path stays on `broker_position()`.
 
 ## Related
 [live/cli.py](cli.md) · [live/loop.py](loop.md) · [live/backfill.py](backfill.md) · [live/bars.py](bars.md) · [live/state.py](state.md) · [live/config.py](config.md) · [SHIOAJI_PLAN.md §2.8](../../SHIOAJI_PLAN.md)
+
+## Adopting from the ledger when there is no venue
+
+`adopt_position` returns `None` for a flat account *and* for a broker that has no
+account at all, and the ledger reconciliation in [cli.py](cli.md) has to tell
+those apart — so the raw answer is kept on **`venue_position`**: the venue's
+signed lots, or `None` when nobody was asked. `cli.py` reconciles only when it is
+not `None`.
+
+A `--broker dryrun --resume` run then has nothing to check its ledger against, and
+the ledger is the only record of what the deployment holds. Passing
+`ledger.open_position(inherited)` as `fallback` seeds both mirrors from it, and
+the adoption reports `source="ledger"` rather than `"venue"` so an operator
+reading `position_adopted` can tell which stood behind the numbers.
+
+**The fallback is not a back door around the reconciliation.** It applies only
+when `broker.has_venue` is `False`. A `shioaji` query that *raised* also returns
+`None` here, and that case still adopts nothing — the answer is unknown, and
+substituting the ledger would seed a history nothing checked against the real
+account. Seeding the mirrors matters as much as seeding the fills: without it the
+inherited fills net +1 while the Trader believes it is flat, and the next fill
+pairs against a lot it does not know it holds.

@@ -2171,6 +2171,87 @@ cycle, which is V5's pass criterion exercised in miniature.
 **Not yet covered:** adoption of a **short**, and the refusal paths, live. Both
 are unit-tested; neither is worth a market window to stage.
 
+### 2.20b The ledger was refused against a venue nobody asked — FIXED (2026-09-02)
+
+The deployment's fill ledger ([docs/live/ledger.md](docs/live/ledger.md)) replays
+a soak's fills on `--resume`, so `trades.csv` shows the soak's history rather than
+one segment of it. This is the reconciliation that guards that replay.
+
+**The symptom, and why it took a reader to catch.** Two dry runs on 2026-09-02
+(`live_night_20260902_024124`, `_082640`) both logged:
+
+```
+fills_replay_refused: the night ledger replays to +1 lot(s) but the venue holds +0
+  ledger_net 1, venue_position 0, replayed 3, broker "dryrun"
+```
+
+and then wrote an empty `fills.csv` and `trades.csv`. Their reports drew a
+soak-wide price line spanning 2026-08-24 → 09-02 with **no fill markers on it**
+and an empty PnL panel — a report that looks like weeks of doing nothing rather
+than like a defect. Nothing raised.
+
+**The cause: `None` means two things, and the check read only one of them.**
+`Broker.broker_position_detail()` returns `None` for an offline broker because
+there is **no venue to ask** — `DryRunBroker.broker_position`'s own comment says
+so, and §2.9's per-bar rail already skips on it. `ShioajiBroker` returns the same
+`None` when `list_positions` **raised**, where the answer is merely *unknown*.
+The two need opposite handling. The ledger reconciliation collapsed both into a
+flat venue:
+
+```python
+held_now = adopted["position"] if adopted else 0     # 0 also means "never asked"
+if inherited and net_position(inherited) != held_now:
+    ...refuse...
+```
+
+so a dry run's ledger — three real fills netting +1, seeded from
+`live_20260824_150112` — was compared against a `0` that nobody reported, and
+refused on every single start.
+
+**The fix.** `Broker.has_venue`, a class attribute, because which case applies is
+a property of the implementation and not of any one call's outcome:
+
+| | meaning | correct response |
+|---|---|---|
+| `has_venue = False` | no account behind this broker | **skip** — nothing to reconcile against |
+| `has_venue = True`, `None` returned | the query failed | **refuse** — assuming flat seeds an unchecked history |
+
+`LiveRuntime.venue_position` keeps the raw answer (`None` when nobody was asked),
+which is what `cli.py` now reconciles against; the skip is recorded as
+`fills_replay_unreconciled`. A broker with no venue then has nothing *but* the
+ledger, so `adopt_position(fallback=...)` seeds both mirrors from
+`ledger.open_position(inherited)` and reports `source="ledger"` rather than
+`"venue"`.
+
+**Seeding the mirrors is not optional, and is the part worth remembering.**
+Seeding only the fills would leave `loop.fills` netting +1 while `Trader.position`
+believed it was flat, and the next dry-run fill would pair against a lot the
+Trader did not know it held — a wrong `trades.csv`, arrived at from the opposite
+direction to §2.20's. `open_position` is FIFO for the same reason: a sequence that
+goes short, closes, then goes long holds **only** the long, and averaging over
+every row would price the residual from a trade already closed and booked.
+
+**What did not change.** `--broker shioaji` takes the identical path it always
+did — `HeldPosition(0, 0.0)` is a real answer and still refuses a ledger that
+disagrees with it. The behavioural change is confined to a broker with no venue:
+a `--broker dryrun --resume` run now starts holding what the deployment holds
+instead of flat, which is what `--resume` ("continue the current soak epoch")
+means and what makes a dry run actually shadow the deployment.
+
+**Verified** by replaying the real `fills_night.csv` through the startup path:
+3 fills, net +1, adopted +1 @ 44555.0 from the ledger, reconciliation skipped,
+and the rendered report showing 2 BUY / 1 SELL markers over the soak price line
+with the round trip (SHORT 44893 → 44520, **+359.59** net) on the PnL curve.
+`tests/test_live_resume.py` and `tests/test_live_ledger.py` cover all four
+branches; 960 tests pass.
+
+**Found alongside it, and separately fixed:** every cumulative curve in the
+report emitted **one row per close**, so a run with a single round trip produced
+a one-point line and `mode="lines"` drew nothing at all — the PnL panel was empty
+on a run that had made +359.59, and had been for every one-trade run. The curves
+now open at zero at the moment they were last flat (`reports._with_origin`); see
+[docs/reports.md](docs/reports.md).
+
 ### 2.21 The staleness watchdog halted a healthy soak — MEASURED 2026-08-13
 
 **The event.** The V5 soak ran 22h54m (2026-08-12 03:43 → 08-13 02:37) and ended

@@ -19,6 +19,7 @@ untouched.
 | `submit` / `cancel` / `has_pending` / `pending_order` | method | straight pass-through |
 | `poll_fills(market)` | method | `check_fill(market)` boxed into a 0- or 1-element list |
 | `broker_position()` | inherited | returns `None` — no venue to ask |
+| `has_venue` | inherited | `False` — no account behind it ([base](base.md)) |
 
 ## Key points
 - **Composition, not subclassing.** `Execution` predates the `Broker` interface

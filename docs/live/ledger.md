@@ -88,6 +88,7 @@ deliberately not a ledger row at all.
 | `FillLedger.summary()` | method | `fills_replayed` / `fills_appended` / `ledger_failures` |
 | `ledger_path(out_parent, policy)` | function | `fills_<slug>.csv`, keyed like the bar cache |
 | `net_position(fills)` | function | the signed lots a fill sequence leaves |
+| `open_position(fills)` | function | the lot a fill sequence leaves open, and its entry price |
 | `LEDGER_COLUMNS` | constant | a `FillEvent`'s columns, plus `soak_id` |
 
 ## Why the schema check comes before the emptiness check
@@ -98,3 +99,19 @@ lenient enough to parse a truncated write into a header-only frame with garbage
 column names, which is empty and would slip past an emptiness check placed first.
 Asking the more specific question first separates "nothing recorded yet" from
 "this is not our file". Both replay nothing; only the second is a failure.
+
+## `open_position` — the ledger's answer to `broker_position_detail`
+
+`net_position` says *how many* lots a sequence leaves; the reconciliation needs
+nothing more. Adopting **from** the ledger needs *at what price* as well, because
+the entry is what the Portfolio realizes PnL against — a run that invented one
+would book a fictional number on the closing fill. So `open_position` returns the
+same `HeldPosition` the venue would have, which is what lets a broker with no
+venue (`--broker dryrun`) use the ledger in its place — see
+[live/runtime.md](runtime.md).
+
+FIFO, not an average over every row: a sequence that goes short, closes, then
+goes long holds **only** the long, and averaging across all three would price the
+residual from a trade that is already closed and booked. At `max_position=1` the
+residual is always one lot and the weighting is a no-op; it is written generally
+so it does not quietly become wrong if that limit moves.

@@ -77,9 +77,42 @@ def _equity_series(trades: pd.DataFrame) -> pd.DataFrame:
     s["equity"] = s["net_pnl_points"].cumsum()
     s["peak"] = s["equity"].cummax()
     s["drawdown"] = s["equity"] - s["peak"]
-    return s.rename(columns={"exit_ts": "timestamp"})[
+    out = s.rename(columns={"exit_ts": "timestamp"})[
         ["timestamp", "equity", "drawdown"]
     ]
+    return _with_origin(out, _first_entry(trades), ["equity", "drawdown"])
+
+
+def _with_origin(curve: pd.DataFrame, start, value_cols: list) -> pd.DataFrame:
+    # Tech: prepend a zero row at `start`, so a cumulative curve opens from flat
+    #       rather than from the value of its first close.
+    # Why:  MEASURED 2026-09-02 — a run with ONE closed round trip produced a
+    #       one-point curve, and a `mode="lines"` trace through one point draws
+    #       nothing at all: the Cumulative PnL panel rendered empty on a run that
+    #       had made +359.59. The origin is not a display trick, it is the missing
+    #       datum — the curve was at zero before the first trade, and one that
+    #       opens at +359.59 hides the very step it exists to show. It also gives
+    #       `_buy_and_hold_curve` a window with width, which a single-trade run
+    #       otherwise collapsed to one print. Every curve in the report takes its
+    #       origin from here so the panels can be read against each other; a
+    #       `start` that is missing or not before the curve is left alone rather
+    #       than invented.
+    if curve.empty or start is None or pd.isna(start):
+        return curve
+    if start >= curve["timestamp"].iloc[0]:
+        return curve
+    origin = {"timestamp": start, **{c: 0.0 for c in value_cols}}
+    return pd.concat([pd.DataFrame([origin]), curve], ignore_index=True)
+
+
+def _first_entry(trades: pd.DataFrame):
+    # Tech: the earliest `entry_ts` in a trades frame, or None when the column is
+    #       not there.
+    # Why:  it is the moment the curve was last at zero. Bundles written before
+    #       `build_trades` carried `entry_ts` simply get no origin.
+    if trades.empty or "entry_ts" not in trades.columns:
+        return None
+    return trades["entry_ts"].min()
 
 
 def _buy_and_hold_curve(
@@ -405,12 +438,30 @@ def _curves(signals: pd.DataFrame, trades: pd.DataFrame) -> tuple[pd.DataFrame, 
         signal_attribution_curve(signals.to_dict("records"))
         if not signals.empty else pd.DataFrame(columns=["timestamp", "cum_signal_pnl_points"])
     )
+    # Tech: open the signal curve at the first signal that took a side.
+    # Why:  `signal_attribution_curve` emits one row per *close*, so it opens at
+    #       its first round trip's PnL while the realized curve now opens at zero.
+    #       Read against each other — which is the entire panel — that would put
+    #       the gap at the wrong height for the first trade, and on a run with one
+    #       round trip it leaves a one-point line that draws nothing.
+    if not sig_curve.empty and not signals.empty:
+        took_a_side = signals[signals["direction"] != "HOLD"]
+        if not took_a_side.empty:
+            sig_curve = _with_origin(sig_curve, took_a_side["timestamp"].min(),
+                                     ["cum_signal_pnl_points"])
     if not trades.empty:
         real = trades.sort_values("exit_ts").copy()
         real["cum_realized_pnl_points"] = real["net_pnl_points"].cumsum()
         real = real.rename(columns={"exit_ts": "timestamp"})[
             ["timestamp", "cum_realized_pnl_points"]
         ]
+        # Tech: same zero origin the equity curve gets.
+        # Why:  the two are read against each other, so a realized line starting
+        #       at its first exit while the signal line starts at flat would put
+        #       the gap — which is the whole point of the panel — at the wrong
+        #       height for the first trade.
+        real = _with_origin(real, _first_entry(trades),
+                            ["cum_realized_pnl_points"])
     else:
         real = pd.DataFrame(columns=["timestamp", "cum_realized_pnl_points"])
     return sig_curve, real

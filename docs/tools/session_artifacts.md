@@ -59,6 +59,40 @@ because a second copy is how the two drift. Simtrade prints are dropped there
 run's own `trades.csv` too, not an artifact of the reconstruction. The `fill`
 records do carry `bar_idx`, so it is recoverable if it is ever wanted.
 
+## `params.json`, which is the Settings block on the report
+
+A live run writes `params.json` at start-up, so `generate_report` opens its
+report with a **Settings** table. A historical directory has none, and its
+rebuilt report opened straight into the charts — the one structural difference
+between a rebuilt report and a live one (measured 2026-09-02, comparing
+`live_20260824_150112` against `live_night_20260902_024124`).
+
+`params_from_meta` closes it by parsing the recorder's `meta` header, whose
+`config` field is `LiveConfig.describe()`. Looking the summary up in `CONFIGS`
+instead would be exact and useless: the runs that need rebuilding are precisely
+the ones the registry has moved past — `live_20260824_150112` ran
+`e44a047 calmar=13.6742` against today's `4282d33 calmar=3.6006` — so the lookup
+would miss exactly when it is needed.
+
+The keys and their order are `live/artifacts.live_params`', so the two files
+diff. Three of them are **not in the summary line** and are written `null`
+rather than guessed:
+
+| key | why it is missing |
+|---|---|
+| `source_dataset` | never printed; today's path would be a plausible-looking lie |
+| `max_aggression_ticks` | never printed |
+| `warmup_days` | the `warm_up` record logs bars and a date range, not the requested window |
+
+`sell_threshold` is the negation of `band=±x`; an asymmetric band is lost at
+`describe()`, not here. `roll_at` is recovered exactly, because
+`SessionPolicy.roll_at_time()` is a pure function of the session set.
+
+An unparseable header is not an error — the rebuild proceeds and the report opens
+without Settings, which is where it was before. And an existing `params.json` is
+**never** overwritten, `--force` included: that one came from the run's own
+`LiveConfig` and is complete, where this is a reconstruction from one line.
+
 ## Seeding the ledger — a migration, not the ordinary path
 
 `--seed-ledger` appends a finished run's fills to the deployment's
@@ -97,6 +131,7 @@ already exist and asks for `--force` rather than deciding.
 | `rebuild(records)` | function | the event lists a `LiveLoop` held, as a `BacktestResult` |
 | `check_alignment(result, records)` | function | complains when a fill lands outside the run's bars |
 | `load_price_series(run_dir)` | function | `ticks.csv` as the report's price frame |
+| `params_from_meta(records, run_dir)` | function | `params.json` from the `meta` header, or None |
 | `seed_ledger(result, run_dir, *, config, soak_id)` | function | append the fills to a deployment's ledger, once |
 | `main(argv)` | function | CLI: rebuild, verify, write, render |
 | `VENUE_UTC_OFFSET` | constant | `timedelta(hours=8)` — Asia/Taipei, no DST |

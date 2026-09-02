@@ -171,6 +171,13 @@ class ShadowBroker(Broker):
 
         return live_fills
 
+    @property
+    def has_venue(self) -> bool:
+        # Tech: whatever the wrapped live broker is.
+        # Why:  every position query here passes through to it, so answering
+        #       differently would describe a broker this class never asks.
+        return self.live.has_venue
+
     def broker_position(self) -> Optional[int]:
         return self.live.broker_position()
 

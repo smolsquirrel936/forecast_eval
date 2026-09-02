@@ -141,6 +141,20 @@ there degrades to `[front]`, which is exactly the old behaviour.
   a position that *cannot* be adopted: above `max_position`, or with an
   `ExitRule` configured. A broker that cannot answer adopts nothing and does not
   block, which is "cannot compare", the same degradation the rail makes.
+- **The ledger is reconciled only when a venue actually answered.** `--resume`
+  replays the deployment's fills and refuses them when their net disagrees with
+  what the venue holds — that check is load-bearing against a real account, since
+  a replay that does not add up means the history is wrong and seeding it would
+  produce a confidently wrong `trades.csv`. It used to run against
+  `adopted["position"] if adopted else 0`, which fabricated a flat venue for a
+  broker that has none. MEASURED on `live_night_20260902_082640`: a `--broker
+  dryrun` run's ledger replayed to +1 against a venue that was never asked, so it
+  was refused on every start and the run wrote an empty `fills.csv` and
+  `trades.csv`. It now reads [`rt.venue_position`](runtime.md) and skips when that
+  is `None`, adopting the position from the ledger instead — while a `shioaji`
+  query that *raised* still refuses, because there the answer is unknown rather
+  than absent (see [broker/base](broker/base.md)). The skip is recorded as
+  `fills_replay_unreconciled`.
 - **The rails' config is built by `_rails_config`, not inline in `main`.** `main`
   needs a login, so anything assembled there is untestable — and a flag that is
   parsed but never reaches the rails looks exactly like one that works. That

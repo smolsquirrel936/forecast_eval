@@ -186,3 +186,77 @@ def test_day_and_night_ledgers_stay_separate_when_seeding(tmp_path):
     main([str(d), "--no-report", "--seed-ledger", "--config", "night"])
     day = FillLedger(ledger_path(tmp_path, PINNED_DAY.policy), soak_id="soak_test")
     assert day.replay() == []
+
+
+# ---- params.json, which is what puts the Settings block on the report --------
+
+
+def _meta(cfg, **kw):
+    from forecast_eval.tools.session_artifacts import params_from_meta
+    from pathlib import Path
+    rec = {"event": "meta", "config": cfg.describe(), "broker": "shioaji"}
+    rec.update(kw)
+    return params_from_meta([rec], Path("outputs/live_x"))
+
+
+@pytest.mark.parametrize("name", ["night", "day"])
+def test_the_rebuilt_params_are_the_live_ones_key_for_key(name):
+    """The drift guard. `live_params` and this parser both claim to describe the
+    same run, and a rebuilt report is meant to be read beside a live one — so the
+    key sets and the order have to match, and every field `describe()` carries
+    has to come back as the value it went in as."""
+    from forecast_eval.live.artifacts import live_params
+    from forecast_eval.live.config import config_named
+    from pathlib import Path
+
+    cfg = config_named(name)
+    live = live_params(cfg, out_dir=Path("outputs/live_x"), broker="shioaji",
+                       warmup_days=30, soak_id="soak_test")
+    got = _meta(cfg, soak_id="soak_test")
+
+    assert list(got) == list(live)
+    # The three the one-line summary does not carry; None, not a plausible guess.
+    for key in ("source_dataset", "max_aggression_ticks", "warmup_days"):
+        assert got[key] is None
+    for key in live:
+        if key not in ("source_dataset", "max_aggression_ticks", "warmup_days"):
+            assert got[key] == live[key], key
+
+
+def test_an_unparseable_meta_line_leaves_the_report_alone(tmp_path):
+    """A run whose header this cannot read must still rebuild — without a
+    Settings block, which is where it was before this existed."""
+    from forecast_eval.tools.session_artifacts import params_from_meta
+
+    assert params_from_meta([{"event": "meta", "config": "LiveConfig[x]"}],
+                            tmp_path) is None
+    assert params_from_meta([{"event": "bar"}], tmp_path) is None
+    d = _session(tmp_path)                              # RECORDS' meta is "LiveConfig[x]"
+    assert main([str(d), "--no-report"]) == 0
+    assert not (d / "params.json").exists()
+
+
+def test_a_runs_own_params_are_never_overwritten(tmp_path, capsys):
+    """`--force` is about the artifacts the loop derives. `params.json` came from
+    the run's own LiveConfig and is complete; this parser's output is a
+    reconstruction from a one-line summary, so it is strictly a downgrade."""
+    from forecast_eval.live.config import PINNED
+
+    d = _session(tmp_path, [dict(RECORDS[0], config=PINNED.describe())] + RECORDS[1:])
+    (d / "params.json").write_text('{"data": "live", "source_dataset": "kept"}',
+                                   encoding="utf-8")
+    assert main([str(d), "--no-report", "--force"]) == 0
+    assert json.loads((d / "params.json").read_text())["source_dataset"] == "kept"
+    assert "left alone" in capsys.readouterr().out
+
+
+def test_the_settings_block_lands_on_the_rebuilt_report(tmp_path):
+    """End to end: the section a rebuilt report was missing next to a live one."""
+    pytest.importorskip("plotly")
+    from forecast_eval.live.config import PINNED
+
+    d = _session(tmp_path, [dict(RECORDS[0], config=PINNED.describe())] + RECORDS[1:])
+    assert main([str(d)]) == 0
+    html = (d / "report.html").read_text(encoding="utf-8")
+    assert "<h2>Settings</h2>" in html
+    assert PINNED.source_commit in html

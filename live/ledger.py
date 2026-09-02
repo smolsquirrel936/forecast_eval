@@ -36,11 +36,12 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
-from typing import Any, List, Optional, Sequence
+from typing import Any, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
 from ..events import FillEvent
+from .broker.base import HeldPosition
 
 # Tech: the ledger's columns — a FillEvent, plus the soak it belongs to.
 # Why:  the fill fields are spelled exactly as `logging_io.write_fills` spells
@@ -62,6 +63,57 @@ def ledger_path(out_parent: Any, policy: Any) -> Path:
 def net_position(fills: Sequence[FillEvent]) -> int:
     """The signed lot count a sequence of fills leaves behind."""
     return sum((1 if f.side == "BUY" else -1) * int(f.quantity) for f in fills)
+
+
+def open_position(fills: Sequence[FillEvent]) -> Optional[HeldPosition]:
+    """What a sequence of fills leaves open, with the entry price it opened at.
+
+    None when the sequence closes flat.
+    """
+    # Tech: walk the fills FIFO, keeping the lots that are still open, then
+    #       size-weight their prices.
+    # Why:  `net_position` answers "how many", which is all the reconciliation
+    #       needs. Adopting from the ledger needs "at what price" as well — the
+    #       entry is what the Portfolio realizes PnL against, so a run that
+    #       invented one would book a fictional number on the closing fill. This
+    #       is the ledger's answer to the same question `broker_position_detail`
+    #       answers from the venue, and it returns the same type for that reason.
+    #
+    #       FIFO rather than average-everything: a sequence that crosses through
+    #       flat (short, close, long) must forget the closed side entirely, which
+    #       averaging over all rows would not. At `max_position=1` the residual
+    #       is always a single lot and the weighting is a no-op — it is written
+    #       generally so it does not become wrong if that ever changes.
+    lots: List[Tuple[float, int]] = []          # (price, qty), all one side
+    side = 0                                    # +1 long, -1 short, 0 flat
+    for f in fills:
+        direction = 1 if f.side == "BUY" else -1
+        qty = int(f.quantity)
+        if side == 0 or direction == side:
+            side = direction
+            lots.append((float(f.fill_price), qty))
+            continue
+        # Tech: opposite side — consume the open lots oldest-first.
+        # Why:  this is the pairing `build_trades` does, and the two must agree
+        #       about what is left open or the mirror and the record diverge.
+        while qty and lots:
+            price, held = lots[0]
+            take = min(qty, held)
+            qty -= take
+            if take == held:
+                lots.pop(0)
+            else:
+                lots[0] = (price, held - take)
+        if qty:                                 # crossed through flat
+            side = direction
+            lots = [(float(f.fill_price), qty)]
+        elif not lots:
+            side = 0
+    if not lots:
+        return None
+    gross = sum(q for _, q in lots)
+    avg = sum(p * q for p, q in lots) / gross
+    return HeldPosition(side * gross, avg)
 
 
 class FillLedger:

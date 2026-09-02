@@ -51,7 +51,7 @@ from forecast_eval.live.artifacts import (ArtifactWriter,        # noqa: E402
 from forecast_eval.live.capture import TickCapture                # noqa: E402
 from forecast_eval.live.config import CONFIGS, PINNED, config_named  # noqa: E402
 from forecast_eval.live.ledger import (FillLedger, ledger_path,     # noqa: E402
-                                       net_position)
+                                       net_position, open_position)
 from forecast_eval.live.contracts import (                        # noqa: E402
     contract_month, dated_months, resolve_txf, txf_root)
 from forecast_eval.live.alerts import Alerter                     # noqa: E402
@@ -677,15 +677,27 @@ def main(argv=None) -> int:
         #       open position. Adopting before warm-up (rather than after) means
         #       the refusal case costs seconds instead of a full backfill and
         #       model prime.
+        # Tech: read the ledger before adopting, so a broker with no venue can
+        #       adopt from it instead.
+        # Why:  purely a file read, and it has to happen first to be available as
+        #       the fallback below. A `--broker dryrun` run has no account to ask
+        #       and its ledger is then the only record of what the deployment
+        #       holds; without this the mirrors start flat while the seeded fills
+        #       net non-zero, and the next dry-run fill pairs against a lot the
+        #       Trader does not know it has.
+        inherited = ledger.replay() if args.resume else []
         try:
-            adopted = rt.adopt_position(timestamp=datetime.now())
+            adopted = rt.adopt_position(timestamp=datetime.now(),
+                                        fallback=open_position(inherited))
         except ValueError as exc:
             alerter.fatal("startup_refused", str(exc), gate="adopt_position")
             return 5
         if adopted:
+            whence = ("the venue" if adopted["source"] == "venue"
+                      else f"the {cfg.policy.cache_slug()} ledger")
             alerter.info("resumed",
                          f"adopted {adopted['position']:+d} lot(s) @ "
-                         f"{adopted['entry_price']:.2f} from the venue")
+                         f"{adopted['entry_price']:.2f} from {whence}")
         elif args.broker == "shioaji":
             print("account is flat — starting from no position")
 
@@ -712,9 +724,21 @@ def main(argv=None) -> int:
         #       the original open — the venue reports an average price, not a
         #       time — which is the same approximation `trader.entry_timestamp`
         #       already makes.
-        inherited = ledger.replay() if args.resume else []
-        held_now = adopted["position"] if adopted else 0
-        if inherited and net_position(inherited) != held_now:
+        # Tech: reconcile only when a venue actually answered. `rt.venue_position`
+        #       is None when this broker has none to ask, and the check is then
+        #       skipped rather than run against a zero nobody reported.
+        # Why:  the reconciliation is load-bearing against a REAL account — a
+        #       replay that does not add up to what the venue holds means the
+        #       history is wrong and seeding it would produce a confidently wrong
+        #       `trades.csv`. Against a broker with no venue it was comparing the
+        #       ledger to a fabricated flat, so it refused every time and the run
+        #       wrote empty artifacts (MEASURED on `live_night_20260902_082640`:
+        #       "replays to +1 lot(s) but the venue holds +0", broker `dryrun`).
+        #       A `shioaji` query that *raised* still lands here with
+        #       `venue_position` None — `has_venue` keeps that case out of the
+        #       skip, so an unknown answer refuses instead of being assumed.
+        held_now = rt.venue_position
+        if inherited and held_now is not None and net_position(inherited) != held_now:
             alerter.warn(
                 "fills_replay_refused",
                 f"the {cfg.policy.cache_slug()} ledger replays to "
@@ -726,6 +750,11 @@ def main(argv=None) -> int:
                             venue_position=held_now,
                             replayed=len(inherited))
             inherited = []
+        elif inherited and held_now is None:
+            recorder.record("fills_replay_unreconciled",
+                            ledger_net=net_position(inherited),
+                            replayed=len(inherited),
+                            broker=args.broker)
         if not inherited and adopted:
             inherited = [FillEvent(
                 timestamp=adopted["adopted_at"],

@@ -32,6 +32,17 @@ class HeldPosition:
 
 
 class Broker(ABC):
+    # Tech: whether this implementation has a venue whose position can be asked.
+    # Why:  `broker_position_detail()` returning None is ambiguous, and the two
+    #       meanings need opposite handling. An offline broker has no venue at
+    #       all, so there is nothing to reconcile against and the check must
+    #       SKIP — the same reasoning `broker_position` states below.
+    #       `ShioajiBroker` returns None when the query *raised*, where the
+    #       answer is merely unknown and the safe move is to REFUSE. Which one
+    #       applies is a property of the implementation rather than of any single
+    #       call's outcome, so it is declared here and not inferred from a None.
+    has_venue: bool = False
+
     @abstractmethod
     def submit(self, order: OrderEvent, *, current_price: float) -> None:
         # Tech: send `order` to the venue, recording the price observed at the

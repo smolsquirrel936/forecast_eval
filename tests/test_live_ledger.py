@@ -19,7 +19,7 @@ import pytest
 
 from forecast_eval.events import FillEvent
 from forecast_eval.live.ledger import (LEDGER_COLUMNS, FillLedger, ledger_path,
-                                       net_position)
+                                       net_position, open_position)
 from forecast_eval.live.sessions import SessionPolicy
 from forecast_eval.metrics import build_trades
 
@@ -190,3 +190,32 @@ def test_a_failed_append_is_counted_and_never_raised(tmp_path, monkeypatch):
     assert led.sync(THIS_SEGMENT) == 0
     assert led.failures == 1
     assert led.summary()["ledger_failures"] == 1
+
+
+def test_open_position_is_the_ledgers_answer_to_broker_position_detail():
+    """What a broker with no venue adopts from. `net_position` says how many;
+    this says at what price, which is what the Portfolio realizes PnL against."""
+    assert open_position([]) is None
+    assert open_position(OPENED_EARLIER + THIS_SEGMENT[:1]) is None   # flat
+    held = open_position(OPENED_EARLIER)
+    assert (held.signed_qty, held.avg_price) == (1, 44555.0)
+    short = open_position(THIS_SEGMENT[:1])
+    assert (short.signed_qty, short.avg_price) == (-1, 44700.0)
+
+
+def test_open_position_forgets_the_side_it_crossed_through():
+    """A sequence that goes short, closes, then goes long holds ONLY the long.
+    Averaging over every row would price the residual from a trade that is
+    already closed and booked."""
+    held = open_position(THIS_SEGMENT)         # SELL(open), BUY(close), SELL(open)
+    assert (held.signed_qty, held.avg_price) == (-1, 44900.0)
+
+
+def test_open_position_averages_what_is_left_open():
+    """Written generally though `max_position=1` makes the residual one lot, so
+    it does not silently become wrong if that limit ever moves."""
+    fills = [_f("2026-09-01 16:00", "BUY", 100.0),
+             _f("2026-09-01 16:01", "BUY", 110.0),
+             _f("2026-09-01 16:02", "SELL", 105.0)]
+    held = open_position(fills)
+    assert (held.signed_qty, held.avg_price) == (1, 110.0)   # FIFO closed the 100

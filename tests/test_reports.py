@@ -29,10 +29,17 @@ from forecast_eval.reports import (
 PV = 200.0
 
 
-def _trades(nets, *, start="2024-01-02 09:00:00", step_min=30) -> pd.DataFrame:
-    """A trades frame with the two columns the equity curve needs."""
+def _trades(nets, *, start="2024-01-02 09:00:00", step_min=30,
+            hold_min=0) -> pd.DataFrame:
+    """A trades frame with the columns the equity curve needs.
+
+    `entry_ts` defaults to the exit, so the zero origin lands on the first exit
+    and the buy-and-hold window is unchanged; pass `hold_min` for a real holding
+    period.
+    """
     ts = pd.date_range(start, periods=len(nets), freq=f"{step_min}min")
-    return pd.DataFrame({"exit_ts": ts, "net_pnl_points": nets})
+    return pd.DataFrame({"entry_ts": ts - pd.to_timedelta(hold_min, unit="m"),
+                         "exit_ts": ts, "net_pnl_points": nets})
 
 
 def _ticks(prices, *, start="2024-01-02 09:00:00") -> pd.DataFrame:
@@ -139,6 +146,24 @@ def test_equity_series_is_cumulative_net_and_drawdown_vs_peak():
     eq = _equity_series(_trades([10.0, -5.0, 3.0]))
     assert list(eq["equity"]) == pytest.approx([10.0, 5.0, 8.0])
     assert list(eq["drawdown"]) == pytest.approx([0.0, -5.0, -2.0])
+
+
+def test_equity_series_opens_at_zero_on_the_first_entry():
+    """A curve that opens at its first exit's value hides the step it exists to
+    show — and with a single trade it is one point, which `mode="lines"` draws
+    as nothing at all. MEASURED on a live run that had made +359.59 and rendered
+    an empty Cumulative PnL panel."""
+    eq = _equity_series(_trades([359.59], hold_min=90))
+    assert len(eq) == 2
+    assert list(eq["equity"]) == pytest.approx([0.0, 359.59])
+    assert list(eq["drawdown"]) == pytest.approx([0.0, 0.0])
+    assert eq["timestamp"].iloc[0] == pd.Timestamp("2024-01-02 07:30:00")
+
+
+def test_equity_series_needs_no_origin_when_entry_is_unknown():
+    """Older bundles have no `entry_ts`; the origin is skipped, not invented."""
+    t = _trades([10.0, -5.0]).drop(columns=["entry_ts"])
+    assert list(_equity_series(t)["equity"]) == pytest.approx([10.0, 5.0])
 
 
 def test_equity_series_sorts_by_exit_time():
@@ -407,3 +432,36 @@ def test_generate_report_survives_a_malformed_params_file(tmp_path):
     _write_bundle(d)
     (d / "params.json").write_text("{not json", encoding="utf-8")
     assert generate_report(d)["equity_png"].exists()
+
+
+def test_both_attribution_curves_open_from_flat():
+    """The panel IS the gap between these two lines, so they have to start at the
+    same height. `signal_attribution_curve` emits one row per close, which opened
+    it at the first round trip's PnL while the realized line opened at zero."""
+    from forecast_eval.reports import _curves
+
+    signals = pd.DataFrame([
+        {"timestamp": pd.Timestamp("2024-01-02 09:00"), "direction": "HOLD",
+         "price": 100.0},
+        {"timestamp": pd.Timestamp("2024-01-02 09:30"), "direction": "BUY",
+         "price": 100.0},
+        {"timestamp": pd.Timestamp("2024-01-02 10:30"), "direction": "SELL",
+         "price": 112.0},
+    ])
+    sig, real = _curves(signals, _trades([10.0], start="2024-01-02 10:30",
+                                         hold_min=60))
+    assert list(sig["cum_signal_pnl_points"]) == pytest.approx([0.0, 12.0])
+    assert list(real["cum_realized_pnl_points"]) == pytest.approx([0.0, 10.0])
+    # Both open at the moment a side was taken, not at the close.
+    assert sig["timestamp"].iloc[0] == pd.Timestamp("2024-01-02 09:30")
+    assert real["timestamp"].iloc[0] == pd.Timestamp("2024-01-02 09:30")
+
+
+def test_a_hold_only_signal_stream_still_has_no_curve():
+    """No side was ever taken, so there is no origin to open from either."""
+    from forecast_eval.reports import _curves
+
+    signals = pd.DataFrame([{"timestamp": pd.Timestamp("2024-01-02 09:00"),
+                             "direction": "HOLD", "price": 100.0}])
+    sig, _ = _curves(signals, _trades([]))
+    assert sig.empty

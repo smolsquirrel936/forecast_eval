@@ -27,6 +27,7 @@ the difference between what each reports is the gap.
 | `gap_summary()` | method | fill rates, slippage, divergence counts |
 | `format_summary()` | method | the console block printed at shutdown |
 | `close()` | method | score the final episode; call once at shutdown |
+| `has_venue` | property | whatever the wrapped live broker is |
 | `gaps` | attribute | every scored `OrderGap` |
 | `OrderGap` | dataclass | one order's life as each side saw it |
 
@@ -59,7 +60,10 @@ never ran.
   all answer from the venue.** Those gate §4.4, the flatten retry and the §2.20
   resume; answering from the shadow would let a simulated fill convince the loop
   that a real working order had gone away — or report flat at start-up and adopt
-  nothing while the account was holding.
+  nothing while the account was holding. **`has_venue` delegates for the same
+  reason**: it describes the broker those queries actually reach, and answering
+  `False` here would tell the ledger reconciliation there is nothing to check
+  against while a real account sits one call away ([base](base.md)).
 - **The shadow is stepped on every bar**, not only when the venue reports. A
   passive order fills on some *later* print, and skipping bars would understate
   its fill rate.

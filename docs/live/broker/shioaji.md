@@ -20,6 +20,7 @@ module and its tests run with the package absent.
 | `submit` / `cancel` / `has_pending` / `pending_order` / `poll_fills` | method | the `Broker` interface |
 | `broker_position()` | method | signed position for this contract, `None` on query failure |
 | `broker_position_detail()` | method | the same, plus the size-weighted entry price (§2.20 resume) |
+| `has_venue` | attribute | `True` — so a `None` from either accessor reads as *the query failed*, not *there is no venue* |
 | `switch_contract(contract)` | method | re-point at a new month after a roll, **rebuilding** the accepted-code set |
 | `rolling(aggression_ticks)` | context manager | submits inside are roll legs: **LMT+IOC**, priced that many ticks through |
 | `through_price(side, limit, ticks)` | method | the shared aggression pricing — FLATTEN and the roll ladder cannot drift apart |

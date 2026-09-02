@@ -21,6 +21,7 @@ change and no shim** — it is duck-typed against this ABC.
 | `poll_fills(market)` | abstract | drain fills known since the last call |
 | `broker_position()` | method | the venue's signed position; `None` = can't answer |
 | `broker_position_detail()` | method | the same position **with its entry price** (`HeldPosition`); `None` = can't answer |
+| `has_venue` | attribute | does this implementation have an account to ask? (`False` by default) |
 | `HeldPosition(signed_qty, avg_price)` | dataclass | what the venue holds, size and size-weighted entry |
 
 ## Why the last two exist
@@ -50,3 +51,26 @@ The first four mirror `Execution`. The additions are what a live venue forces:
 
 ## Related
 [live/broker/sim.py](sim.md) · [live/broker/shioaji.py](shioaji.md) · [trader.py](../../trader.md) · [execution.py](../../execution.md) · [live/loop.py](../loop.md)
+
+## `has_venue` — because `None` means two different things
+
+`broker_position_detail()` returns `None` both when an offline broker has **no
+venue to ask** and when [ShioajiBroker](shioaji.md)'s `list_positions` **raised**.
+The two need opposite handling, and no inspection of the returned `None` can tell
+them apart:
+
+| | meaning | correct response |
+|---|---|---|
+| `has_venue = False` | there is no account behind this broker | **skip** — there is nothing to reconcile against |
+| `has_venue = True`, `None` returned | the query failed; the answer is unknown | **refuse** — assuming flat would seed an unchecked history |
+
+MEASURED 2026-09-02 on `live_night_20260902_082640`. The ledger reconciliation in
+[live/cli.py](../cli.md) read both as "the venue is flat", so a `--broker dryrun`
+run's ledger — three real fills netting +1 — was compared against a venue that was
+never asked and refused on every start (`"replays to +1 lot(s) but the venue holds
++0"`). The run then wrote an empty `fills.csv` and `trades.csv`, and its report
+drew a soak-wide price line with no fills on it and an empty PnL panel.
+
+Which case applies is a property of the *implementation*, not of a call's
+outcome, so it is a class attribute. [ShadowBroker](shadow.md) delegates it to
+the broker it wraps, since it delegates every position query there too.

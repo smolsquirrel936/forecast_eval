@@ -24,6 +24,7 @@ and `place_order` is never called.
 | `poll_fills(market)` | method | `check_fill`, recorded as `dryrun_fill` with `simulated=True` |
 | `cancel` / `has_pending` / `pending_order` | method | straight pass-through |
 | `broker_position()` | method | `None` — no venue to ask |
+| `has_venue` | attribute | `False` (inherited) — there is no account behind this broker |
 | `intended` | attribute | the list of orders that would have been sent |
 
 ## Key invariants / gotchas
@@ -35,6 +36,17 @@ and `place_order` is never called.
 - **`broker_position()` returns `None`, not `0`.** `None` makes the reconciliation
   rail skip — correct, because there is no real position to reconcile against and
   fabricating one would test nothing.
+- **`has_venue` is `False`, which is that same reasoning given a name.** A `None`
+  from this broker means "there is no account", where the same `None` from
+  [ShioajiBroker](shioaji.md) means "the query failed" — see
+  [base](base.md#has_venue--because-none-means-two-different-things). The
+  distinction is what lets `--resume` work here at all: the ledger reconciliation
+  in [cli.py](../cli.md) used to compare this broker's ledger against a
+  fabricated flat venue and refuse it every time, leaving a dry run with an empty
+  `fills.csv` and `trades.csv` (MEASURED 2026-09-02 on
+  `live_night_20260902_082640`). A dry run now **adopts from the ledger**
+  instead, which is also what keeps its mirrors consistent with the fills it was
+  seeded with.
 - **Shadow parity follows from the shared fill model.** Replaying a dry run's bars
   offline through [run_backtest](../../run.md) should reproduce it exactly, because
   both sides use the same `Execution`. Any divergence is therefore attributable to

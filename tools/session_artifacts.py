@@ -24,7 +24,9 @@ uv run python -m forecast_eval.tools.session_artifacts outputs\live_20260824_150
 from __future__ import annotations
 
 import argparse
+import ast
 import json
+import re
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -152,6 +154,94 @@ def check_alignment(result: BacktestResult, records: List[dict]) -> Optional[str
             f"probably wrong — see VENUE_UTC_OFFSET.")
 
 
+# Tech: the shape of `LiveConfig.describe()`, which is what the recorder's `meta`
+#       header carries as its `config` field.
+# Why:  a live run writes `params.json` at start-up, so its report opens with a
+#       Settings block; a historical directory has no such file and its rebuilt
+#       report opened straight into the charts instead — the one structural
+#       difference between a rebuilt report and a live one. `describe()` is the
+#       only place the run recorded what it was configured as, so this parses it
+#       back. Matching the summary against `CONFIGS` would be exact but useless
+#       here: the runs that need rebuilding are precisely the ones whose config
+#       the registry has since moved past (`e44a047 calmar=13.6742` on
+#       `live_20260824_150112` against today's `4282d33 calmar=3.6006`), so the
+#       lookup would miss exactly when it is needed.
+_DESCRIBE_RE = re.compile(
+    r"LiveConfig\[(?P<source_commit>\S+) calmar=(?P<source_calmar>\S+) "
+    r"(?P<sessions>\[[^\]]*\])\] "
+    r"ckpt=(?P<checkpoint>\S+) ctx=(?P<context_length>\d+) "
+    r"stride=(?P<stride_bars>\d+) horizon=(?P<horizon_bars>\d+) "
+    r"band=\u00b1(?P<band>\S+) min_prob=(?P<min_prob>\S+) "
+    r"trend=(?P<trend>\S+) path=(?P<path>\S+) "
+    r"aggr=(?P<aggression_ticks>-?\d+) maxpos=(?P<max_position>\d+) "
+    r"forced_close=(?P<forced_close>\S+)$"
+)
+
+
+def params_from_meta(records: List[dict], run_dir: Path) -> Optional[dict]:
+    """A `params.json` payload for a historical run, from its `meta` header.
+
+    Returns None when there is no meta record or its config line does not parse.
+    """
+    # Tech: find the meta record, parse its `config` summary, and assemble the
+    #       same dict `live/artifacts.live_params` builds — same keys, same order,
+    #       with None for the three the summary line does not carry.
+    # Why:  `reports.generate_report` reads `params.json` for its Settings block,
+    #       so writing this is what makes a rebuilt report open the way a live one
+    #       does. Keeping the *key set* identical is what keeps a rebuilt run
+    #       diffable against a live one, which is the property `live_params` says
+    #       its shared keys exist for; None reads as "the run did not record
+    #       this", which is true, where a plausible-looking guess — today's
+    #       dataset path, the default warm-up — would not be. Key order matters
+    #       only because the Settings table renders in dict order, and the two
+    #       reports are meant to be read side by side.
+    meta = next((r for r in records if r.get("event") == "meta"), None)
+    if meta is None:
+        return None
+    m = _DESCRIBE_RE.match(str(meta.get("config", "")))
+    if m is None:
+        return None
+
+    # Tech: sessions come back as the repr of a sorted list, so literal_eval is
+    #       the reader; the policy is rebuilt from them only to recover `roll_at`.
+    # Why:  `roll_at_time()` is a pure function of the session set (any policy
+    #       containing DAY rolls at 12:45, NIGHT alone at 15:30), so this is
+    #       recovered exactly rather than assumed — see `live/sessions.py`.
+    from forecast_eval.live.sessions import SessionPolicy
+    sessions = list(ast.literal_eval(m.group("sessions")))
+    band = float(m.group("band"))
+
+    return {
+        "data": "live",
+        "source_commit": m.group("source_commit"),
+        "source_calmar": float(m.group("source_calmar")),
+        "source_dataset": None,
+        "checkpoint": m.group("checkpoint"),
+        "context_length": int(m.group("context_length")),
+        "horizon_bars": int(m.group("horizon_bars")),
+        "stride_bars": int(m.group("stride_bars")),
+        # Tech: `describe()` prints one `band=±x`, so the sell side is the
+        #       negation of the buy side.
+        # Why:  an asymmetric band would not survive this round trip, and the
+        #       summary line is where that information was lost, not here. Both
+        #       pinned configs are symmetric, and the ± notation is the config's
+        #       own claim that they are meant to be.
+        "buy_threshold": band,
+        "sell_threshold": -band,
+        "aggression_ticks": int(m.group("aggression_ticks")),
+        "min_prob": None if m.group("min_prob") == "None" else float(m.group("min_prob")),
+        "max_aggression_ticks": None,
+        "max_position": int(m.group("max_position")),
+        "forced_close": m.group("forced_close") == "True",
+        "sessions": sessions,
+        "roll_at": str(SessionPolicy.of(sessions).roll_at_time()),
+        "broker": meta.get("broker"),
+        "warmup_days": None,
+        "soak_id": meta.get("soak_id"),
+        "output_dir": str(run_dir),
+    }
+
+
 def load_price_series(run_dir: Path) -> Optional[pd.DataFrame]:
     """`ticks.csv` as the `(timestamp, price)` frame the report charts against."""
     # Tech: delegate to `live/capture.py`, which owns the capture format.
@@ -256,7 +346,24 @@ def main(argv=None) -> int:
     if ticks is not None:
         print(f"  {len(ticks):,} non-simtrade prints for the price charts")
 
-    written = write_all(result, args.run_dir, ext=".csv",
+    # Tech: synthesise `params.json` from the meta header, but only when the run
+    #       did not write one itself.
+    # Why:  it is what gives the rebuilt report the Settings block a live run's
+    #       report opens with — the one section a rebuilt directory was missing.
+    #       Never over an existing file: that one came from the run's own
+    #       `LiveConfig` and is complete, where this is a reconstruction from a
+    #       one-line summary, and `--force` is about the artifacts the loop
+    #       derives, not about the run's own record of what it was.
+    params = None
+    if (args.run_dir / "params.json").exists():
+        print("  params.json already there — left alone")
+    else:
+        params = params_from_meta(records, args.run_dir)
+        if params is None:
+            print("  WARNING: the meta header carries no parseable config line, "
+                  "so the report opens without its Settings block", file=sys.stderr)
+
+    written = write_all(result, args.run_dir, ext=".csv", params=params,
                         auto_report=not args.no_report, report_ticks=ticks)
     for name, path in sorted(written.items()):
         print(f"  {name:12} {path}")

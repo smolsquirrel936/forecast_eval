@@ -26,6 +26,25 @@ re-rendering from existing logs.
 - **signal_vs_realized** — the frictionless signal curve overlaid on realized PnL;
   the shaded gap is the execution + cost drag.
 
+### Every cumulative curve opens at zero
+
+MEASURED 2026-09-02. All three cumulative series — equity, drawdown, realized PnL
+and the frictionless signal curve — emitted **one row per close**, so a run with a
+single closed round trip produced a one-point line, and a `mode="lines"` trace
+through one point draws *nothing*. The Cumulative PnL panel rendered empty on a
+run that had made +359.59 points.
+
+`_with_origin` prepends a zero row at the moment the curve was last flat: the
+first trade's `entry_ts` for the equity and realized curves, the first non-HOLD
+signal for the frictionless one. This is the missing datum rather than a display
+trick — a curve that opens at +359.59 hides the step it exists to show, and the
+two lines in the attribution panel have to start at the same height or the gap
+between them, which *is* the panel, sits at the wrong height for the first trade.
+It also gives `_buy_and_hold_curve` a window with width; a single-trade run
+previously collapsed it to one print, so the reference line vanished.
+
+A bundle whose `trades` frame predates `entry_ts` simply gets no origin.
+
 ## Key points / gotchas
 - **PNGs always work** (matplotlib is a hard dep); the combined `report.html` is
   produced only when `plotly` is installed (`_HAS_PLOTLY`).

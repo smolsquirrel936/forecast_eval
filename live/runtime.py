@@ -111,6 +111,15 @@ class LiveRuntime:
         self.simulation = simulation
         self.emitter_prime_boundaries = emitter_prime_boundaries
         self.tick_capture = tick_capture
+        # Tech: what the venue said it held at start-up; None until
+        #       `adopt_position` runs, and None after it when this broker
+        #       has no venue to ask.
+        # Why:  the ledger reconciliation needs "was a venue asked at all",
+        #       which the adopt call's own return value cannot express — it
+        #       is None both for a flat account and for no account. Read
+        #       once and remembered, because `broker_position_detail` is a
+        #       start-up query by contract and must not be issued twice.
+        self.venue_position: Optional[int] = None
         self.alerter = alerter
 
         self.rails = rails or SafetyRails(
@@ -198,7 +207,8 @@ class LiveRuntime:
 
     # ---- resuming into an open position ------------------------------------
 
-    def adopt_position(self, *, timestamp: Any) -> Optional[dict]:
+    def adopt_position(self, *, timestamp: Any,
+                       fallback: Optional[Any] = None) -> Optional[dict]:
         # Tech: read what the venue holds and seed the Trader's and Portfolio's
         #       mirrors from it. Returns a summary of what was adopted, or None
         #       when the account is flat or the broker cannot answer.
@@ -210,6 +220,22 @@ class LiveRuntime:
         #       no-flip state machine would read "flat" and open a second lot.
         #       Adopting makes a restart continue the trade rather than refuse it.
         held = self.broker.broker_position_detail()
+        # Tech: record what the venue answered — None when this broker has no
+        #       venue to ask — and, in that case only, adopt from `fallback`.
+        # Why:  MEASURED 2026-09-02 on `live_night_20260902_082640`. A None here
+        #       has two meanings (`broker/base.py`), and the ledger
+        #       reconciliation in `cli.py` read both as "the venue is flat": a
+        #       dry run's ledger replayed to +1 against a venue that was never
+        #       asked, so the history was refused on every start and the run left
+        #       an empty `fills.csv` and `trades.csv` — weeks of price on the
+        #       report with no fills drawn on it. `has_venue` is what separates
+        #       "nothing to ask" from "the query failed", and only the first is
+        #       safe to substitute for; a failed query still adopts nothing, so
+        #       the caller refuses rather than guesses.
+        self.venue_position = None if held is None else held.signed_qty
+        source = "venue"
+        if held is None and not self.broker.has_venue and fallback is not None:
+            held, source = fallback, "ledger"
         if held is None or held.signed_qty == 0:
             return None
 
@@ -264,6 +290,11 @@ class LiveRuntime:
             "position": held.signed_qty,
             "entry_price": held.avg_price,
             "adopted_at": timestamp,
+            # Tech: which of the two sources the mirrors were seeded from.
+            # Why:  an operator reading `position_adopted` needs to know whether
+            #       a real account was asked or the deployment's own ledger stood
+            #       in for one; the numbers are indistinguishable otherwise.
+            "source": source,
         }
         if self.recorder is not None:
             self.recorder.record("position_adopted", **adopted)
