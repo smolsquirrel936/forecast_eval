@@ -81,6 +81,20 @@ def _bars(n, start="2026-05-14 16:00", price=17500.0, step=3.0):
     })
 
 
+def _session_bars(n, policy, start="2026-05-14 16:00", price=17500.0, step=3.0):
+    # `_bars` emits contiguous minutes, which walk out of the session once n
+    # exceeds one sitting (840 for NIGHT). Keep only the minutes the policy
+    # trades, so a long frame spans several sessions the way a real backfill does.
+    ts = [t for t in pd.date_range(start, periods=n * 4, freq="1min")
+          if policy.includes(t)][:n]
+    assert len(ts) == n, "widen the generated range"
+    return pd.DataFrame({
+        "timestamp": ts,
+        "price": [price + i * step for i in range(n)],
+        "volume": [5] * n,
+    })
+
+
 def _runtime(policy=None, **kw):
     return LiveRuntime(_config(policy), **kw)
 
@@ -192,6 +206,47 @@ def test_startup_refuses_when_priming_fails_on_a_quiet_stretch():
     with pytest.raises(RuntimeError, match="priming incomplete"):
         rt.warm_up(flat)
     assert not rt.warm
+
+
+def test_prime_cap_spends_every_boundary_the_frame_offers_up_to_K():
+    """DAY_SESSION_PLAN §2.5. K was 500, sized against night's longest HOLD run
+    (385 boundaries). That is the wrong statistic — samples are counted, not
+    required to be adjacent, so a start-up is decided by the fewest non-HOLD
+    signals in any K-boundary window, measured at 1 for NIGHT and 3 for DAY at
+    K=500 against a floor of 3. K=900 is what makes the replay reach far enough
+    to use the bars a seeded cache already holds."""
+    rt = _runtime()
+    n_boundaries = 600                                  # > the old cap of 500
+    rt.warm_up(_session_bars(CTX + n_boundaries * STRIDE, rt.policy))
+    # +1 for the prewarm forecast `warm_up` issues before seeding the context
+    assert rt.forecaster.n_calls == n_boundaries + 1, (
+        "the replay stopped short of the boundaries the frame offered"
+    )
+
+
+def test_prime_cap_takes_what_exists_when_the_frame_is_shorter_than_K():
+    """NIGHT is in exactly this state today: its live-accumulated cache holds
+    14 669 bars — 388 boundaries — against a cap of 900. Falling back to
+    "all of them" is what keeps raising K safe for a deployment whose cache has
+    not been seeded."""
+    rt = _runtime()
+    rt.warm_up(_bars(CTX + 20 * STRIDE))
+    assert rt.warm and rt.forecaster.n_calls == 21
+
+
+def test_the_prime_cap_is_deliberately_wider_than_the_fetch_it_is_sized_against():
+    """These two numbers are NOT meant to agree, and a future reader will want
+    to reconcile them. `warmup_days_default` sizes the *request* (a guaranteed
+    500 boundaries); the cap governs the *replay*, and the bar cache routinely
+    carries more than the request — a seeded DAY cache holds 30 000 bars, or 899
+    boundaries. Raising the request to match would widen every warm-up fetch
+    across delisted months (C7) to buy what is already on disk."""
+    import inspect
+    cap = inspect.signature(LiveRuntime.__init__).parameters[
+        "emitter_prime_boundaries"].default
+    request = inspect.signature(LiveConfig.warmup_days_default).parameters[
+        "emitter_prime_boundaries"].default
+    assert cap == 900 and request == 500 and cap > request
 
 
 def test_priming_check_is_skipped_when_the_filter_is_off():

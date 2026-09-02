@@ -96,7 +96,7 @@ class LiveRuntime:
         rails: Optional[SafetyRails] = None,
         rails_config: Optional[RailsConfig] = None,
         simulation: bool = True,
-        emitter_prime_boundaries: int = 500,
+        emitter_prime_boundaries: int = 900,
         tick_capture: Any = None,
         alerter: Any = None,
     ):
@@ -109,6 +109,30 @@ class LiveRuntime:
         self.policy = config.policy
         self.recorder = recorder
         self.simulation = simulation
+        # Tech: how many stride boundaries `_prime_emitter` replays; the slice
+        #       takes all of them when the warm-up frame holds fewer.
+        # Why:  900, raised from 500 on 2026-09-02 (DAY_SESSION_PLAN §2.5). K
+        #       was originally sized to clear night's longest HOLD run (385
+        #       boundaries) with margin, but that is the wrong statistic:
+        #       samples are counted, not required to be consecutive, so what
+        #       decides a start-up is the FEWEST non-HOLD signals in any
+        #       K-boundary window. MEASURED over each pinned run's whole eval
+        #       window on the @2026-09-01 tape: at K=500 the worst window holds
+        #       3 for DAY (exactly `_check_primed`'s floor) and **1 for NIGHT**
+        #       — below it, so there are historical stretches where a NIGHT
+        #       start-up would have refused. At K=900 the worst windows are 10
+        #       and 7. The failure is a refused start-up, never unfiltered
+        #       trading (`_check_primed` raises), so this buys availability,
+        #       not correctness.
+        #
+        #       It is deliberately LARGER than the 500 `warmup_days_default`
+        #       sizes its request for, and the two are not meant to agree: the
+        #       fetch guarantees 500 boundaries, while the bar cache routinely
+        #       carries more (a seeded DAY cache holds 30 000 bars = 899
+        #       boundaries), and this cap is what lets the replay spend them.
+        #       Raising the *request* instead would widen every warm-up fetch
+        #       across delisted months — C7's problem — to buy what the cache
+        #       already has on disk.
         self.emitter_prime_boundaries = emitter_prime_boundaries
         self.tick_capture = tick_capture
         # Tech: what the venue said it held at start-up; None until
@@ -691,12 +715,15 @@ class LiveRuntime:
     def _check_primed(self, n_bars: int) -> None:
         # Tech: refuse to start when replay failed to accumulate enough samples
         #       for the trend filter to actually evaluate.
-        # Why:  MEASURED from the pinned backtest's 40 443 signals — only 3.74 %
-        #       are non-HOLD, and `_trend_confirms` appends on those alone. So a
-        #       quiet stretch primes nothing: the longest observed run of
-        #       consecutive HOLDs is **385 boundaries** (~11 550 bars, ~14 night
-        #       sessions), which is why the default window is 500 rather than the
-        #       ~80 the average rate would suggest.
+        # Why:  MEASURED from each pinned run's signals on the @2026-09-01 tape —
+        #       `_trend_confirms` appends once per non-HOLD emission, and those
+        #       are 4.11 % of NIGHT's 43 674 boundaries and 2.61 % of DAY's
+        #       15 687. So a quiet stretch primes nothing. The statistic that
+        #       governs this is the fewest non-HOLD signals in any K-boundary
+        #       window, NOT the longest consecutive HOLD run (385 for NIGHT, 246
+        #       for DAY) — samples are counted, not required to be adjacent. At
+        #       K=500 those worst windows were 1 (NIGHT) and 3 (DAY) against the
+        #       floor of 3, which is why K is now 900 (§2.5).
         #
         #       Starting anyway is the worse option: below 3 samples
         #       `_trend_confirms` returns True — it fails **open**, trading signals
@@ -711,9 +738,11 @@ class LiveRuntime:
                 f"emitter priming incomplete: {have}/{need} samples from "
                 f"{n_bars} bars over {self.emitter_prime_boundaries} boundaries. "
                 f"The trend filter fails OPEN below {need} samples, so starting "
-                f"now would trade signals it exists to veto. Widen the backfill "
-                f"window (the longest observed HOLD run is 385 boundaries) or "
-                f"raise emitter_prime_boundaries."
+                f"now would trade signals it exists to veto. The warm-up frame "
+                f"held too few non-HOLD signals, so widen it — seed the bar "
+                f"cache for this policy (live/seed_cache.py) or raise "
+                f"--warmup-days — or raise emitter_prime_boundaries above "
+                f"{self.emitter_prime_boundaries}."
             )
 
     def _prewarm_model(self, window: pd.DataFrame) -> None:

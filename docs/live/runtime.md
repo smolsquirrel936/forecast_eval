@@ -24,7 +24,7 @@ first live decision, and only the first is obvious.
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
-| `LiveRuntime(config, *, broker=None, recorder=None, rails=None, rails_config=None, simulation=True, emitter_prime_boundaries=500, tick_capture=None)` | class | builds the whole stack; defaults to [DryRunBroker](broker/dryrun.md) |
+| `LiveRuntime(config, *, broker=None, recorder=None, rails=None, rails_config=None, simulation=True, emitter_prime_boundaries=900, tick_capture=None)` | class | builds the whole stack; defaults to [DryRunBroker](broker/dryrun.md) |
 | `adopt_position(*, timestamp, fallback=None)` | method | seed both mirrors from the venue's held position — or from `fallback` when the broker has no venue — or `None` when flat; raises when the state cannot be adopted |
 | `venue_position` | attribute | what the venue answered at start-up; `None` when none was asked |
 | `fetch_warmup_bars(api, contract, start, end, *, cache_path=None, front_month_at=None)` | method | [fetch_bars_continuous](backfill.md) with *this* runtime's policy — the caller never picks one; `contract` may be a list, spliced on volume |
@@ -76,10 +76,22 @@ bar. Held once, at start-up — the per-bar path stays on `broker_position()`.
   emitter's own code — `ThresholdEmitter` appends only on non-HOLD while
   `VolMultiTfEmitter` appends on every forecast — so replay is correct for either
   by construction, and immune to that asymmetry.
-- **`emitter_prime_boundaries` defaults to 500 because the tail, not the average,
-  sets it.** Only 3.74 % of signals are non-HOLD, and the longest observed run of
-  consecutive HOLDs is **385 boundaries**. The ~80 the average rate suggests would
-  prime nothing at all during a quiet stretch.
+- **`emitter_prime_boundaries` defaults to 900 because the tail, not the average,
+  sets it** — raised from 500 on 2026-09-02, [DAY_SESSION_PLAN §2.5](../../DAY_SESSION_PLAN.md).
+  Non-HOLD signals are 4.11 % of NIGHT's boundaries and 2.61 % of DAY's, so the
+  ~80 the average rate suggests would prime nothing during a quiet stretch. The
+  statistic that sets K is the **fewest non-HOLD signals in any K-boundary
+  window**, *not* the longest consecutive HOLD run (385 NIGHT / 246 DAY) — samples
+  are counted, not required to be adjacent. Measured at K=500 those worst windows
+  were **1 for NIGHT** and 3 for DAY against a floor of 3; at K=900 they are 7 and
+  10.
+- **The cap is deliberately wider than the fetch is sized for**, and the two are
+  not meant to agree: [`warmup_days_default`](config.md) sizes the *request* for
+  500 boundaries, while the bar cache routinely holds more (a
+  [seeded](seed_cache.md) DAY cache is 30 000 bars = 899 boundaries) and this cap
+  is what lets the replay spend them. The slice takes all available when the frame
+  holds fewer, so a policy whose cache has not been seeded simply gets what it has
+  — NIGHT's live-accumulated cache was 14 669 bars (388 boundaries) on 2026-09-02.
 - **An under-primed emitter refuses to start.** Below 3 samples the filter fails
   open; refusing is recoverable (widen the window), trading unfiltered is not.
 - **`warm_up` rejects bars from outside the policy**, and requires at least
