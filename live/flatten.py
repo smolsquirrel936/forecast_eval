@@ -23,7 +23,6 @@ close" is not "flat" (§2.12).
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import time
 from pathlib import Path
@@ -34,6 +33,39 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from forecast_eval.live.contracts import contract_codes, resolve_txf  # noqa: E402
 
 CLOSE_AGGRESSION_POINTS = 30.0
+
+
+def _warn_other_deployments(out_parent, held: int) -> None:
+    """Name the deployments whose ledgers say they are holding (§18.3 item 8)."""
+    # Tech: read every `fills_*.csv` beside the run directory and report each
+    #       deployment's own net; stay silent when there is nothing to read.
+    # Why:  the venue can only say what the ACCOUNT holds. The per-deployment
+    #       ledgers are the only record of who holds what (§16), so they are what
+    #       turns "closing 2 lots" into "closing day's 1 and night's 1". Silence
+    #       when no ledger is found is deliberate: the single-deployment case is
+    #       still the normal one, and a warning with nothing behind it trains an
+    #       operator to ignore warnings.
+    if out_parent is None:
+        return
+    try:
+        from .ledger import per_deployment_nets
+        holders = [(slug, net)
+                   for slug, net in sorted(per_deployment_nets(out_parent).items())
+                   if net]
+    except Exception as exc:                            # noqa: BLE001
+        print(f"  (could not read fill ledgers in {out_parent}: {exc!r})")
+        return
+    if len(holders) < 2:
+        return
+    print("")
+    print("  *** THIS CLOSES THE WHOLE ACCOUNT, AND MORE THAN ONE DEPLOYMENT "
+          "IS HOLDING ***")
+    for slug, net in holders:
+        print(f"      {slug:<10} {net:+d} lot(s)")
+    print(f"      venue      {held:+d} lot(s)  <- what will be closed")
+    print("  Their position mirrors will NOT know. After this, restart each of")
+    print("  them with --fresh-start, or they halt on the first bar.")
+    print("")
 
 
 def net_position(positions: Any, codes: set) -> int:
@@ -102,6 +134,37 @@ def cancel_working(api: Any, account: Any, codes: set) -> int:
     return n
 
 
+def report_orders(api: Any, account: Any, codes: set) -> None:
+    """Print every order on our contract this session, with what became of it."""
+    # Tech: the same `update_status` + `list_trades` pair `cancel_working` runs,
+    #       printed instead of filtered to the working ones.
+    # Why:  STRATEGY_SPLIT_PLAN §23.2 — after G6 reported STILL HOLDING, the
+    #       operator's question was "did my closes fill?", and this tool already
+    #       had the answer in hand and discarded it. On a netted account two
+    #       opposed lots read as `+0`, so "already flat" is true and still does
+    #       not say whether four orders filled or none did. `deal_quantity` is
+    #       what separates them, and nothing else here reports it.
+    try:
+        api.update_status(account)
+        trades = api.list_trades() or []
+    except Exception as exc:                            # noqa: BLE001
+        print(f"  ! could not list orders: {exc!r}")
+        return
+    ours = [t for t in trades
+            if not codes
+            or str(getattr(getattr(t, "contract", None), "code", "") or "") in codes]
+    print(f"\norders on this contract this session: {len(ours)}")
+    for trade in ours:
+        order = getattr(trade, "order", None)
+        status = getattr(trade, "status", None)
+        print(f"  ordno={getattr(order, 'ordno', None)!r} "
+              f"{str(getattr(order, 'action', None)).split('.')[-1]:4s} "
+              f"qty={getattr(order, 'quantity', None)} "
+              f"@{getattr(order, 'price', None)} "
+              f"status={str(getattr(status, 'status', None)).split('.')[-1]} "
+              f"dealt={getattr(status, 'deal_quantity', None)}")
+
+
 def close_price(reference: float, side: str,
                 aggression: float = CLOSE_AGGRESSION_POINTS,
                 tick_size: float = 1.0) -> float:
@@ -119,8 +182,22 @@ def close_price(reference: float, side: str,
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--contract", default="TXFR1")
+    ap.add_argument("--credential", default="night",
+                    help="Which section of config/secrets.toml to log in with "
+                         "(default: night). All three name the same futures "
+                         "account (§13), so this only chooses the login.")
+    ap.add_argument("--show-orders", action="store_true",
+                    help="List every order on this contract this session with "
+                         "its status and dealt quantity, before doing anything. "
+                         "Read-only. On a netted account two opposed lots read "
+                         "as +0, so a flat position does not say whether orders "
+                         "filled (STRATEGY_SPLIT_PLAN 23.2).")
     ap.add_argument("--dry-run", action="store_true",
                     help="Report the position and the order that would be sent")
+    ap.add_argument("--out-parent", default=None,
+                    help="Directory holding the deployments' fills_<slug>.csv. "
+                         "When given, a flatten that would close more than one "
+                         "deployment's lots says whose they are (§18.3 item 8).")
     ap.add_argument("--attempts", type=int, default=3)
     ap.add_argument("--wait-seconds", type=float, default=8.0)
     ap.add_argument("--aggression-points", type=float,
@@ -130,17 +207,27 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    api_key = os.environ.get("SHIOAJI_API_KEY")
-    secret_key = os.environ.get("SHIOAJI_SECRET_KEY")
-    if not api_key or not secret_key:
-        print("ERROR: set SHIOAJI_API_KEY and SHIOAJI_SECRET_KEY.",
-              file=sys.stderr)
+    # Tech: resolve the credential through `credentials.load`, which reads
+    #       `config/secrets.toml` first and falls back to the legacy
+    #       SHIOAJI_API_KEY/SHIOAJI_SECRET_KEY pair.
+    # Why:  this was the last live entry point still reading the environment
+    #       directly, so the emergency tool was the ONE that could not log in on
+    #       a machine configured the way every other tool here expects — found
+    #       2026-09-07 when the flatten in §22.5 could not run. The fallback
+    #       keeps existing env-only setups working unchanged.
+    from forecast_eval.live import credentials
+    cred = credentials.load(args.credential)
+    if cred is None:
+        print(f"ERROR: no credential for {args.credential!r} — add a "
+              f"[{args.credential}] section to config/secrets.toml, or set "
+              f"SHIOAJI_API_KEY and SHIOAJI_SECRET_KEY.", file=sys.stderr)
         return 2
+    print(f"credential {args.credential} (from {cred.source})")
 
     import shioaji as sj
     api = sj.Shioaji(simulation=True)
     try:
-        api.login(api_key=api_key, secret_key=secret_key)
+        api.login(api_key=cred.api_key, secret_key=cred.secret_key)
         contract, note = resolve_txf(api, args.contract)
         codes = contract_codes(contract)
         account = getattr(api, "futopt_account", None)
@@ -154,6 +241,9 @@ def main(argv=None) -> int:
         #       short, which is a worse state than the one being repaired. ROD
         #       makes this reachable in a way IOC did not (§2.19), so the check
         #       belongs here rather than being assumed away.
+        if args.show_orders:
+            report_orders(api, account, codes)
+
         cancelled = cancel_working(api, account, codes)
         if cancelled:
             print(f"cancelled {cancelled} working order(s) first")
@@ -164,6 +254,23 @@ def main(argv=None) -> int:
         if held == 0:
             print("already flat — nothing to do.")
             return 0
+
+        # Tech: name every deployment whose fill ledger says it is holding, and
+        #       say plainly that this close is account-wide.
+        # Why:  STRATEGY_SPLIT_PLAN §18.3 item 8. This tool reads
+        #       `list_positions`, which on a shared book is the SUM of what the
+        #       deployments hold (§14) — so closing it closes other people's
+        #       positions too, and their mirrors will not know. That is still the
+        #       right behaviour for the emergency tool: it exists precisely for
+        #       when nothing else can be trusted to close a position, and a
+        #       flatten that could only close a third of the account would be
+        #       useless in the one situation it is for. What it must not do is
+        #       stay silent about it — so the operator is told whose lots are
+        #       about to be closed, and told to restart those deployments with
+        #       --fresh-start afterwards, because a ledger that still claims a
+        #       lot the venue no longer holds halts on the first bar.
+        _warn_other_deployments(Path(args.out_parent) if args.out_parent else None,
+                                held)
 
         side = "SELL" if held > 0 else "BUY"
         quantity = abs(held)

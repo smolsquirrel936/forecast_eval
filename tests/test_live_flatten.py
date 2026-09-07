@@ -133,3 +133,73 @@ def test_one_stubborn_order_does_not_stop_the_others():
     api = _PartlyBroken([_trade(), _trade()])
     cancel_working(api, None, CODES)
     assert len(api.cancelled) == 2, "the second order must still be attempted"
+
+
+# ---- logging in (§22.6) -----------------------------------------------------
+
+
+def test_the_credential_comes_from_secrets_not_the_environment(monkeypatch):
+    """§22.6 — flatten was the last entry point reading the env pair directly.
+
+    It is the EMERGENCY tool, so it was the one that could not log in on a
+    machine configured the way every other tool here expects.
+    """
+    from forecast_eval.live import credentials, flatten
+
+    # With no env pair set at all, the old code refused before doing anything.
+    monkeypatch.delenv("SHIOAJI_API_KEY", raising=False)
+    monkeypatch.delenv("SHIOAJI_SECRET_KEY", raising=False)
+    seen = {}
+
+    def _fake_load(deployment):
+        seen["deployment"] = deployment
+        return None            # stops main before it imports shioaji or logs in
+
+    monkeypatch.setattr(credentials, "load", _fake_load)
+
+    flatten.main(["--credential", "day"])
+    assert seen["deployment"] == "day", "the --credential flag must select the section"
+
+
+def test_a_missing_credential_is_a_clear_refusal_not_a_crash(monkeypatch):
+    from forecast_eval.live import credentials, flatten
+
+    monkeypatch.setattr(credentials, "load", lambda deployment: None)
+    # returns before `import shioaji`, so this needs no venue at all
+    assert flatten.main(["--credential", "nosuch"]) == 2
+
+
+def test_the_parser_defaults_to_the_night_section():
+    from forecast_eval.live.flatten import build_parser
+
+    assert build_parser().parse_args([]).credential == "night"
+
+
+# ---- reporting what became of each order (§23.2) ----------------------------
+
+
+def test_report_orders_names_the_dealt_quantity(capsys):
+    """On a netted account `+0` is true whether four orders filled or none did."""
+    from forecast_eval.live.flatten import report_orders
+
+    filled = _trade(code="TXFH6", status="Filled")
+    filled.status.deal_quantity = 1
+    resting = _trade(code="TXFH6", status="PendingSubmit")
+    resting.status.deal_quantity = 0
+
+    report_orders(_Api([filled, resting]), None, CODES)
+    out = capsys.readouterr().out
+    assert "orders on this contract this session: 2" in out
+    assert "status=Filled" in out and "dealt=1" in out
+    assert "status=PendingSubmit" in out and "dealt=0" in out
+
+
+def test_report_orders_survives_a_venue_that_will_not_answer(capsys):
+    from forecast_eval.live.flatten import report_orders
+
+    class _Broken(_Api):
+        def list_trades(self):
+            raise RuntimeError("venue down")
+
+    report_orders(_Broken([]), None, CODES)          # must not raise
+    assert "could not list orders" in capsys.readouterr().out
