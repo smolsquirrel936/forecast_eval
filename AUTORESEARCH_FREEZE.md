@@ -27,6 +27,12 @@ imports from a sibling.
 files are frozen *in place* but copyable — to change one, copy it into your package and edit
 the copy.
 
+**A new module there also owns its page under `docs/strategy/<session>/` and its tests
+under `tests/`.** The docs page is not optional: `tests/test_docs_coverage.py` asserts every
+module has one, so adding a file inside the playground forces a write outside it. That is
+permission to ADD your own files, never to edit anyone else's — a page or test belonging to
+a frozen file is frozen with it, and editing the guard to pass is the worst version of that.
+
 ## Related
 
 [STRATEGY_SPLIT_PLAN.md](STRATEGY_SPLIT_PLAN.md) · [docs/strategy/wiring.md](docs/strategy/wiring.md) · [SPEC.md](SPEC.md)
