@@ -80,16 +80,17 @@ def test_fresh_start_and_resume_together_are_refused():
 # and the neither-flag launch minted a phantom epoch on its way to being
 # refused. These two tests pin the agreement rather than the symptom.
 
+@pytest.mark.parametrize("broker", cli.ORDER_PLACING_BROKERS)
 @pytest.mark.parametrize("flags", [
     [],                              # neither — refused
     ["--fresh-start"],               # accepted
     ["--resume"],                    # accepted
     ["--fresh-start", "--resume"],   # both — refused
 ])
-def test_only_a_launch_the_preflight_accepts_resolves_an_epoch(flags):
+def test_only_a_launch_the_preflight_accepts_resolves_an_epoch(flags, broker):
     """The guard and the refusal are one condition, so they cannot drift."""
     args = cli.build_parser().parse_args(
-        ["--broker", "shioaji", "--i-understand-this-places-orders", *flags])
+        ["--broker", broker, "--i-understand-this-places-orders", *flags])
     accepted = cli._preflight_orders(args) is None
     assert cli._resolves_soak_epoch(args) is accepted
 
@@ -532,3 +533,53 @@ def test_the_banner_carries_the_selected_deployments_provenance():
     assert "1.6937" in text           # its Calmar
     assert "0.001" in text            # the band that differs from NIGHT
     assert "NIGHT" not in text
+
+
+# ---- every order-placing broker passes through every gate (§18) -------------
+#
+# `client` places nothing itself; it submits intents to the owning process,
+# which does. Four gates used to be spelled `== "shioaji"` — the preflight, the
+# soak-epoch resolution, the `--fresh-start` flatness check and the banner — and
+# a mode that sends orders through one more hop is still a mode that sends
+# orders. These are written over `ORDER_PLACING_BROKERS` rather than over
+# "client" so a fifth mode cannot be added without facing them.
+
+@pytest.mark.parametrize("broker", cli.ORDER_PLACING_BROKERS)
+def test_an_order_placing_broker_alone_is_refused(broker):
+    """One flag must never be enough, whichever way the orders reach the venue."""
+    args = cli.build_parser().parse_args(["--broker", broker, "--fresh-start"])
+    refusal = cli._preflight_orders(args)
+    assert refusal and "--i-understand-this-places-orders" in refusal
+    assert broker in refusal, "the refusal names the mode the operator typed"
+
+
+@pytest.mark.parametrize("broker", cli.ORDER_PLACING_BROKERS)
+def test_an_order_placing_broker_needs_a_retention_choice(broker):
+    args = cli.build_parser().parse_args(
+        ["--broker", broker, "--i-understand-this-places-orders"])
+    refusal = cli._preflight_orders(args)
+    assert refusal and "--fresh-start or --resume" in refusal
+
+
+@pytest.mark.parametrize("broker", cli.ORDER_PLACING_BROKERS)
+def test_an_order_placing_broker_says_so_in_its_banner(broker):
+    """§5 — the mode must be unmistakable in the log and on the console."""
+    args = cli.build_parser().parse_args(
+        ["--broker", broker, "--i-understand-this-places-orders"])
+    banner = cli._broker_banner(args, "TXFR1 -> TXFH6")
+    assert "ORDERS: NONE" not in banner
+    assert "nothing is sent" not in banner
+
+
+def test_the_client_banner_names_the_owner_not_the_venue():
+    """An operator reading 'via Shioaji' here would debug the wrong process."""
+    args = cli.build_parser().parse_args(
+        ["--broker", "client", "--i-understand-this-places-orders"])
+    banner = cli._broker_banner(args, "TXFR1 -> TXFH6")
+    assert "VIA OWNER" in banner
+    assert "places nothing directly" in banner
+
+
+def test_the_offline_brokers_are_not_order_placing():
+    assert set(cli.ORDER_PLACING_BROKERS).isdisjoint({"dryrun", "sim"})
+    assert set(cli.ORDER_PLACING_BROKERS) <= set(cli.BROKERS)

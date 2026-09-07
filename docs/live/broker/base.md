@@ -2,7 +2,7 @@
 
 **Role:** The `Broker` ABC — the seam between order *intent* and order *reality*.
 **Pipeline:** Trader → **Broker** → (sim fill model | real venue).
-**Depends on:** [events.py](../../events.md)   **Used by:** [live/broker/sim.py](sim.md), [live/broker/shioaji.py](shioaji.md), [live/loop.py](../loop.md)
+**Depends on:** [events.py](../../events.md)   **Used by:** [live/broker/sim.py](sim.md), [live/broker/dryrun.py](dryrun.md), [live/broker/shadow.py](shadow.md), [live/broker/shioaji.py](shioaji.md), [live/broker/client.py](client.md), [live/loop.py](../loop.md)
 
 ## Responsibility
 Defines the smallest interface that can stand in for both the offline fill
@@ -74,3 +74,22 @@ drew a soak-wide price line with no fills on it and an empty PnL panel.
 Which case applies is a property of the *implementation*, not of a call's
 outcome, so it is a class attribute. [ShadowBroker](shadow.md) delegates it to
 the broker it wraps, since it delegates every position query there too.
+
+## The five implementations
+
+| | what is on the other side |
+|---|---|
+| [SimBroker](sim.md) | the offline fill model — infers fills from prints |
+| [DryRunBroker](dryrun.md) | the same model, with every intended order recorded |
+| [ShadowBroker](shadow.md) | a real venue *and* the sim model, run beside it, for V4's fill-gap |
+| [ShioajiBroker](shioaji.md) | the venue itself |
+| [ClientBroker](client.md) | the **owning process**, which then talks to the venue (§18.2) |
+
+`ClientBroker` is the one that is not a venue at all, and `has_venue = True` is
+what makes that safe: a `None` from it means *the query failed*, so the
+reconciliation **refuses** rather than skipping. An unreachable owner is exactly
+that case — the account exists and may be holding, we simply cannot see it.
+
+It also shows why `poll_fills` returns a **list**: MEASURED (§18.9) a 2-lot order
+filling as two 1-lot deals nine seconds apart, so a fill does not end an order
+and anything tracking one must accumulate partials.

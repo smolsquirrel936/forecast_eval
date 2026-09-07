@@ -69,6 +69,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from forecast_eval.events import FillEvent                        # noqa: E402
 from forecast_eval.execution import Execution                     # noqa: E402
+from forecast_eval.live.broker.client import ClientBroker         # noqa: E402
 from forecast_eval.live.broker.dryrun import DryRunBroker         # noqa: E402
 from forecast_eval.live.broker.shadow import ShadowBroker         # noqa: E402
 from forecast_eval.live.broker.shioaji import ShioajiBroker       # noqa: E402
@@ -92,11 +93,18 @@ from forecast_eval.live.roll import (                             # noqa: E402
 from forecast_eval.live.runtime import LiveRuntime                # noqa: E402
 from forecast_eval.live import soak_epoch                         # noqa: E402
 from forecast_eval.live.startup import (                          # noqa: E402
-    RestartBlocked, RestartGuard, RestartPolicy,
+    RestartBlocked, RestartGuard, RestartPolicy, usage_bytes,
 )
 from forecast_eval.live.state import RailsConfig, SafetyRails     # noqa: E402
 
-BROKERS = ("dryrun", "sim", "shioaji")
+# Tech: the broker modes, and which of them can move real lots.
+# Why:  STRATEGY_SPLIT_PLAN §18 adds `client`, which places nothing itself but
+#       submits intents to the owning process, which does. Every gate that used
+#       to read `== "shioaji"` must read this set instead — a mode that sends
+#       orders through one more hop is still a mode that sends orders, and a gate
+#       that forgets it is a gate that is off.
+BROKERS = ("dryrun", "sim", "shioaji", "client")
+ORDER_PLACING_BROKERS = ("shioaji", "client")
 MIN_FREE_VRAM_GIB = 5.0
 
 
@@ -233,7 +241,7 @@ def _preflight_orders(args: Any) -> Optional[str]:
     #       flat. What remains fatal (a size above `max_position`) is refused
     #       there, where the size is known.
     if not args.i_understand_this_places_orders:
-        return ("--broker shioaji places simulated orders. Re-run with "
+        return (f"--broker {args.broker} places simulated orders. Re-run with "
                 "--i-understand-this-places-orders to confirm.")
     # Tech: exactly one of --fresh-start / --resume, always.
     # Why:  SHIOAJI_PLAN.md's "Open items" §3 — retention across a restart was
@@ -245,7 +253,7 @@ def _preflight_orders(args: Any) -> Optional[str]:
     if args.fresh_start and args.resume:
         return "--fresh-start and --resume are mutually exclusive — pick one."
     if not args.fresh_start and not args.resume:
-        return ("--broker shioaji needs --fresh-start or --resume: state "
+        return (f"--broker {args.broker} needs --fresh-start or --resume: state "
                 "retention across a restart must be a deliberate choice.")
     return None
 
@@ -261,7 +269,8 @@ def _resolves_soak_epoch(args: Any) -> bool:
     #       `soak_epoch.json`. A seam here is the same remedy `_rails_config`
     #       exists for — a condition that is read once in `main` cannot be
     #       tested, and a wrong one looks exactly like a right one.
-    return args.broker == "shioaji" and (args.fresh_start != args.resume)
+    return (args.broker in ORDER_PLACING_BROKERS
+            and (args.fresh_start != args.resume))
 
 
 def _rails_config(args: Any, cfg: Any) -> RailsConfig:
@@ -290,6 +299,14 @@ def _broker_banner(args: Any, contract_note: str) -> str:
     if args.broker == "shioaji":
         return (f"[ORDERS: SIMULATED-LIVE] placing via Shioaji on {contract_note}"
                 f" | flatten={args.flatten_aggression_ticks} ticks through, ROD")
+    if args.broker == "client":
+        # Tech: name the owner, not the venue.
+        # Why:  §18.2 — this deployment sends no orders itself, and an operator
+        #       reading "placing via Shioaji" here would look in the wrong process
+        #       when something stops. It still MOVES LOTS, which is the part the
+        #       banner exists to make unmistakable (§5).
+        return ("[ORDERS: VIA OWNER] intents to the owning process on "
+                f"{contract_note} | this process places nothing directly")
     return f"[ORDERS: NONE] broker={args.broker} — nothing is sent to the venue"
 
 
@@ -299,7 +316,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="dryrun: simulated fills, orders recorded not sent. "
                          "sim: same fill model, no order log. "
                          "shioaji: PLACES SIMULATED ORDERS (V4) — also needs "
-                         "--i-understand-this-places-orders")
+                         "--i-understand-this-places-orders. "
+                         "client: submits intents to the owning process, which "
+                         "places them (§18) — same acknowledgement.")
     ap.add_argument("--i-understand-this-places-orders", action="store_true",
                     help="Required with --broker shioaji. Orders are simulated "
                          "(the CLI cannot reach a production account), but they "
@@ -564,7 +583,7 @@ def main(argv=None) -> int:
     #       `args` alone has no side effects and cannot fail for an environmental
     #       reason, so it belongs in front of every gate that touches persisted
     #       state or the venue.
-    if args.broker == "shioaji":
+    if args.broker in ORDER_PLACING_BROKERS:
         refusal = _preflight_orders(args)
         if refusal:
             alerter.fatal("startup_refused", refusal, gate="preflight")
@@ -659,6 +678,12 @@ def main(argv=None) -> int:
     #       production account, whatever else is passed.
     api = sj.Shioaji(simulation=True)
     rt = None
+    # Tech: bound before the try, like `rt`, so the finally block can subtract
+    #       from it whatever happened.
+    # Why:  the teardown runs after a login failure too, and an unbound name
+    #       there would replace the real error with a NameError — the same trap
+    #       `rt` is bound early for, one line up.
+    usage_at_start = None
     # Tech: bound before the try so the finally block can always test it.
     # Why:  the broker is built after login, and a login failure still runs the
     #       teardown — an unbound name there would replace the real error with a
@@ -740,6 +765,16 @@ def main(argv=None) -> int:
             #       change it.
             broker = ShadowBroker(live_broker, fee_rate=cfg.fee_rate,
                                   recorder=recorder)
+        elif args.broker == "client":
+            # Tech: this deployment's end of the wire to the owning process.
+            # Why:  §18.2. `out.parent` is the same directory `ledger_path`
+            #       writes into and the owner reads, so the two ends address each
+            #       other by the deployment slug rather than by a path either
+            #       could get wrong. No `ShadowBroker` wrapper: V4's fill-gap
+            #       measurement compares OUR fill model against the venue's, and
+            #       the owner is neither.
+            broker = ClientBroker(out.parent, cfg.policy.cache_slug(),
+                                  rails=rails)
         elif args.broker == "dryrun":
             broker = DryRunBroker(execution, recorder=recorder)
         else:
@@ -768,7 +803,7 @@ def main(argv=None) -> int:
         #       "start clean," which is the one thing an operator reaching for
         #       it actually wants. `flatten.py` stays the only path that closes
         #       a position; this is a check, not a second implementation of it.
-        if args.broker == "shioaji" and args.fresh_start:
+        if args.broker in ORDER_PLACING_BROKERS and args.fresh_start:
             held = rt.broker.broker_position_detail()
             if held is not None and held.signed_qty != 0:
                 alerter.fatal(
@@ -808,8 +843,8 @@ def main(argv=None) -> int:
             alerter.info("resumed",
                          f"adopted {adopted['position']:+d} lot(s) @ "
                          f"{adopted['entry_price']:.2f} from {whence}")
-        elif args.broker == "shioaji":
-            print("account is flat — starting from no position")
+        elif args.broker in ORDER_PLACING_BROKERS:
+            print("this deployment is flat — starting from no position")
 
         # Tech: replay this deployment's fills for the live soak, and seed the
         #       loop's list with them; fall back to one synthetic opening fill

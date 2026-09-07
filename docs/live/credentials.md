@@ -64,8 +64,26 @@ established check deliberately **warns**, and that check's own comment says why:
 > *"An account change can be legitimate (a new sub-account) … so the honest
 > action is to make the change impossible to miss, not to block on it."*
 
-Which is exactly the situation here — obtaining sub-accounts is the expected next
-step, and a hard refusal would have blocked it. See STRATEGY_SPLIT_PLAN §13.
+That reasoning assumed sub-accounts were the expected next step, and a hard
+refusal would have blocked them. **MEASURED 2026-09-07 (§17.1), they are not
+reachable:** `shioaji` 1.7.2 cannot address a sub-account at all — `subaccount`
+is a read-only label on inbound deals, with no handle on `FuturesOrder`,
+`Account`, `list_positions` or `FuturePosition`. The conclusion survives the
+premise: warning is still right, because the check cannot tell simulation from
+production either, and an account moving for any reason should be impossible to
+miss rather than fatal. See STRATEGY_SPLIT_PLAN §§13 and 17.1.
+
+## What these three credentials are for now (§18)
+
+Not separation — §14 measured that separate API keys give separate
+authentication and a **shared position book**, so two deployments on two keys
+still net against each other and still halt each other.
+
+What they are for is **selecting which key a single process uses**. Under
+option (b) that is the [owner](owner_cli.md) (`--credential`, default `night`),
+which holds the one session that places orders; each deployment logs in on its
+own key for the **market feed** only. Four sessions on one credential — MEASURED
+§18.13 to coexist, with the first still usable.
 
 ## Key points / gotchas
 - **Paths resolve from this file, not the CWD.** `--out` is deliberately relative

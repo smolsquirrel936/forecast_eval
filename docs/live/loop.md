@@ -74,6 +74,23 @@ So the reconciliation mirror is now **what we recorded for the whole account**:
 epochs. Both sides of the comparison then mean "the account", and a disagreement
 means what the rail was written to catch: a fill missed or counted twice.
 
+**Under `--broker client` the operand changes again, and improves.** With an
+owner ([owner_process.py](owner_process.md)) the comparison splits in two, and
+they are not the same check:
+
+* the **owner** compares its own `account_net` against `list_positions` — the
+  venue check, made in memory by the one process that can see every deployment,
+  which is what retires §16's freshness race (the ledger sum is only as current
+  as the other deployments' last flush);
+* each **deployment** compares its `Trader.position` against the owner's
+  `net_for(slug)`, delivered as a `position` event. Both sides are then "the
+  fills this deployment had", so a disagreement means an event lost on the wire
+  rather than a peer holding a position.
+
+The ledger sum stays exactly as described above for a `--broker shioaji`
+deployment, and becomes the owner's **restart seed** rather than a per-bar
+operand.
+
 **It degrades, it does not guess.** No ledger directory, no ledger files, or one
 that cannot be parsed all return `None`, and the loop falls back to this
 deployment's own position — the previous behaviour exactly. A partial sum would

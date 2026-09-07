@@ -139,3 +139,24 @@ be a confident wrong number, which is the failure mode this removes.
 does not stop two deployments' orders netting into one book. See
 STRATEGY_SPLIT_PLAN §15 — one instance at a time — which stands until the venue
 gives each deployment its own book.
+
+## `per_deployment_nets` — the same rows, split by who owns them (§18.3 item 8)
+
+`account_net_position` answers *"what does the account hold"*.
+`per_deployment_nets` answers *"who holds it"*, as `{slug: signed lots}` from
+each `fills_<slug>.csv`.
+
+It exists for [flatten.py](flatten.md), which closes the account's **whole** net.
+On a shared book that is the sum of every deployment's position, so an operator
+about to flatten needs "closing day's 1 and night's 1", not "closing 2 lots".
+
+**The two functions degrade in opposite directions, on purpose:**
+
+| | unreadable ledger | because |
+|---|---|---|
+| `account_net_position` | returns `None` for the whole set | it feeds a safety rail, where a partial sum is a confident wrong number |
+| `per_deployment_nets` | skips that file, keeps the rest | it feeds a warning, where naming two of three beats naming none |
+
+The CSV-reading rule lives here beside `account_net_position` rather than being
+spelled a second time at the call site — two readers of one format are how they
+drift.

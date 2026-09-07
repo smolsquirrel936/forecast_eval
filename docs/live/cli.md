@@ -25,8 +25,18 @@ uv run python -m forecast_eval.live.cli --duration-minutes 60
 > calendar days**, NIGHT's is 4.5 — a position opened in one session is still
 > open through the other. The sessions are disjoint; the positions are not.
 >
-> Lifts only when the venue gives each deployment its own book: real
-> sub-accounts, or the shared position broker (§7.1(b)). Not more API keys.
+> **This applies to `--broker shioaji`, which is what it was written for.**
+> Lifting it needs the venue to give each deployment its own book — and MEASURED
+> 2026-09-07 (§17.1), **`shioaji` 1.7.2 cannot address a sub-account at all**:
+> `subaccount` is a read-only label on inbound deals, absent from `FuturesOrder`,
+> `Account`, `list_positions` and `FuturePosition`. So that route is closed
+> whatever the broker offers.
+>
+> The other route, the shared position broker (§7.1(b)), is **built**: run the
+> [owner](owner_cli.md) and start each deployment with `--broker client`, and
+> every order goes through one process holding one book. The rule stands until
+> [G6](../tools/g6_live.md) passes against a real session — it lifts on evidence,
+> not on a build — and then only for the shape G6 tested.
 
 ## Responsibility
 The thin network shell around [LiveRuntime](runtime.md). Everything decidable
@@ -41,10 +51,10 @@ live half and V3's shadow parity are both read back from.
 ## Flags
 | Flag | Default | Notes |
 |---|---|---|
-| `--broker {dryrun,sim,shioaji}` | `dryrun` | `dryrun` records intended orders; `sim` shares the fill model without the order log; **`shioaji` places simulated orders** and needs the flag below |
-| `--i-understand-this-places-orders` | off | **Required** with `--broker shioaji` |
-| `--fresh-start` | off | Start a new [soak epoch](soak_epoch.md). **Required with `--broker shioaji`** (with `--resume`, exactly one). Refuses at start-up unless the account is already flat — never flattens itself |
-| `--resume` | off | Continue the current [soak epoch](soak_epoch.md). **Required with `--broker shioaji`** (with `--fresh-start`, exactly one). Bootstraps the first epoch if none exists yet |
+| `--broker {dryrun,sim,shioaji,client}` | `dryrun` | `dryrun` records intended orders; `sim` shares the fill model without the order log; **`shioaji` places simulated orders**; **`client` submits intents to the owning process**, which places them (§18). The last two need the flag below |
+| `--i-understand-this-places-orders` | off | **Required** with `--broker shioaji` or `client` |
+| `--fresh-start` | off | Start a new [soak epoch](soak_epoch.md). **Required with an order-placing broker** (with `--resume`, exactly one). Refuses at start-up unless *this deployment* is flat — never flattens itself |
+| `--resume` | off | Continue the current [soak epoch](soak_epoch.md). **Required with an order-placing broker** (with `--fresh-start`, exactly one). Bootstraps the first epoch if none exists yet |
 | `--flatten-aggression-ticks` | `5` | how far through the touch a FLATTEN close is priced before going IOC (`shioaji` only) |
 | `--config {night,day,fullday}` | `night` | selects the WHOLE deployment — policy, band, probability gate and provenance together (C2). **`fullday` is UNTUNED and is refused** (exit 5); backtest it with `real_data.py --strategy fullday` |
 | `--contract` | `TXFR1` | resolved by attribute, falling back to key lookup |
@@ -75,11 +85,13 @@ live half and V3's shadow parity are both read back from.
 2. **VRAM floor** (5 GiB) — the model needs ~4.4 GiB, and a research run with
    `--batch-size auto` sizes itself to fill whatever is free.
 3. **Login**, then `check_usage` — over quota, Shioaji returns *empty* history
-   rather than erroring.
+   rather than erroring — and **read the traffic meter**, keeping the figure so
+   the teardown can report what this run cost.
 4. **Resolve the contract**, printing the resolved `code` and `delivery_month`,
    and the date the run plans to roll off it ([roll.md](roll.md)).
 5. **`--fresh-start` refuses a non-flat account** ([soak_epoch.md](soak_epoch.md))
-   — a check only, never a flatten — then **adopt any held position** (§2.20),
+   — a check only, never a flatten; under `--broker client` "non-flat" means
+   *this deployment*, not the account — then **adopt any held position** (§2.20),
    before the backfill, so an unadoptable one costs seconds instead of a full
    warm-up.
 6. **Backfill → `warm_up`** — from *every listed month up to the front one*,
@@ -253,3 +265,55 @@ the state matters — `soak_epoch.json` is the one that does, since a later
 `fatal.jsonl` stays **one file for both**, deliberately: "what has ever gone badly
 wrong" should not be a search. Its records carry no deployment field, though, so
 once two deployments run a `startup_refused` there cannot be attributed to one.
+
+## `--broker client` — running under the owner (§18)
+
+The deployment keeps its Forecaster, Trader, Portfolio, rails, ledger and PnL.
+Only its `Broker` changes: [ClientBroker](broker/client.md) writes intents to
+`intents_<slug>.jsonl` and reads fills back from `events_<slug>.jsonl`, and the
+[owner](owner_cli.md) does the placing.
+
+**Start [the owner](owner_cli.md) first.** A client whose owner has never spoken
+halts rather than reading the silence as a flat account.
+
+**This process still logs in.** It needs the market feed to build bars; only
+*orders* are delegated. That means the owner plus three deployments is **four
+sessions on one credential**, and §14b Q2 measured two coexisting, not four.
+
+**Every `== "shioaji"` gate now reads `ORDER_PLACING_BROKERS`.** A mode that
+sends orders through one more hop is still a mode that sends orders, and a gate
+that forgets it is a gate that is off. That covers the preflight, the soak-epoch
+resolution, and the `--fresh-start` flatness check.
+
+**The `--fresh-start` gate means something different here, and better.** It calls
+`broker_position_detail()`, which under a client is *this deployment's* size, not
+the account's — so a flat deployment can start fresh while a peer holds, which
+under `shioaji` would have been refused.
+
+**No `ShadowBroker` wrapper.** V4's fill-gap measurement compares our own fill
+model against the venue's, and the owner is neither.
+
+## The traffic meter, at both ends (§18.13)
+
+`check_usage` refuses to **start** below a 50 MB floor, because over quota
+Shioaji returns *empty* history rather than erroring — which would silently
+produce an empty model context. What it cannot do is say what a session
+**costs**, and that is the number deciding whether the owner's
+one-subscription-per-deployment shape fits the daily allowance.
+
+So the meter is read twice — after login and again in teardown, before the
+logout that would make it unanswerable — and the teardown prints:
+
+```
+  traffic used today    12,481,006 bytes of 524,288,000
+  traffic this run      11,648,000 bytes
+  four sessions would   46,592,000 bytes (8.9% of the allowance)
+```
+
+Both readings are recorded to the audit trail as `traffic_start` /
+`traffic_end`. `usage_at_start` is bound *before* the `try`, like `rt`, so a
+login failure does not turn into a `NameError` in teardown.
+
+The allowance was MEASURED 2026-09-07 at **500 MiB/day**, and four logins alone
+(no market) cost 833 KB. What a full session of TXF ticks costs is what these
+two lines exist to find out.

@@ -122,6 +122,23 @@ Three invariants make this honest (all enforced in code + tests):
 | [live/v1_check.py](live/v1_check.md) | ticks ⟷ `kbars` diff | V1's live half: do our bars match the venue's? |
 | [live/v1c_check.py](live/v1c_check.md) | `kbars` convention probe | how the right-labelling was discovered |
 | [live/v72_probe.py](live/v72_probe.md) | simulation-ordering probe | how "can we even place a futures order?" was answered |
+| [live/credentials.py](live/credentials.md) | `load(deployment)` | which API key a deployment logs in with, and the guards that stop one being committed |
+| [live/soak_epoch.py](live/soak_epoch.md) | soak identity | what `--fresh-start` and `--resume` actually mean across a restart |
+| [live/seed_cache.py](live/seed_cache.md) | warm-up bar cache | why a restart does not re-backfill from scratch |
+| [live/flatten.py](live/flatten.md) | close whatever is held | the one tool that closes a position nothing else can — and now says whose lots it is closing |
+| [live/multi_deploy_probe.py](live/multi_deploy_probe.md) | S7/S8/X1-X3 probes | every question about concurrent deployments that had to be measured, not read |
+
+**The owning process** (STRATEGY_SPLIT_PLAN §18) — one process places every
+order for all three deployments, because §14 measured that a shared account
+delivers deals per session but a position book to everyone.
+
+| file | what it is | open it when you want… |
+|---|---|---|
+| [live/owner_cli.py](live/owner_cli.md) — `python -m forecast_eval.live.owner_cli` | the owner entry point | how the owner starts, seeds and refuses |
+| [live/owner.py](live/owner.md) | `OrderBook` / `plan_legs` | N working orders across three deployments, and why a `Cover` is never over-sized |
+| [live/owner_process.py](live/owner_process.md) | `OwnerProcess` | the venue-facing half: one callback, the place path, two different reconciliations |
+| [live/intents.py](live/intents.md) | `JsonlStream` | the wire between the deployments and the owner, and the three rules that stop an order going missing |
+| [live/broker/client.py](live/broker/client.md) | `ClientBroker` | a deployment's end of that wire — and why a silent owner halts it |
 | [run.py](run.md) — `python -m forecast_eval.run` | Phase 1–4 synthetic demos | a no-model, seconds-long smoke run |
 | [real_data.py](real_data.md) | Full-dataset run with warmup split | the whole-history real-data backtest |
 | [test_toto2.py](test_toto2.md) | Toto2 smoke test | the smallest "is the model wired up" check |
@@ -139,6 +156,7 @@ are the evaluated-tape rebuild (`TAPE_REBUILD_PLAN.md`), in the order they run.
 | [tools/session_artifacts.py](tools/session_artifacts.md) | a finished live run's artifacts and report, rebuilt from its `session.jsonl` | for runs that ended before `live/artifacts.py` existed |
 | [tools/roll_parity.py](tools/roll_parity.md) | the shipped tape vs the series the live warm-up would build, at every roll | to ask whether the tape and the deployment are one series — NIGHT 112/112, DAY 183 rolls adrift |
 | [tools/roll_at_measure.py](tools/roll_at_measure.md) | per-session liquidity around the roll | the raw evidence behind `ROLL_AT` (C4) |
+| [tools/g6_live.py](tools/g6_live.md) | G6's live half | to prove two deployments can hold at once against a real session — the run that lifts §15 |
 
 > `__init__.py` files (`forecast_eval/__init__.py`, and the package `__init__.py`
 > under `data/`, `forecaster/`, `strategy/`, `exits/`, `tests/`, `live/`,
@@ -202,6 +220,13 @@ For a newcomer grasping the codebase from scratch:
 7. **[metrics.py](metrics.md)** — how a finished run is scored.
 8. The concrete implementations ([forecaster/toto2.py](forecaster/toto2.md), [strategy/threshold.py](strategy/threshold.md)) and the entry point ([real_data.py](real_data.md)).
 
+For the **live** layer, after the above:
+
+9. **[live/cli.py](live/cli.md)** → **[live/runtime.py](live/runtime.md)** → **[live/loop.py](live/loop.md)** — how a session starts and what runs each bar.
+10. **[live/broker/base.py](live/broker/base.md)** — the seam, and its five implementations.
+11. **[live/state.py](live/state.md)** + **[live/ledger.py](live/ledger.md)** — what stops a run, and what it remembers across restarts.
+12. **[live/owner_cli.py](live/owner_cli.md)** → **[live/owner.py](live/owner.md)** → **[live/intents.py](live/intents.md)** — the owning process, if you need three deployments at once. Read [STRATEGY_SPLIT_PLAN](../STRATEGY_SPLIT_PLAN.md) §§14–18 first; almost every rule there was measured rather than reasoned.
+
 ## Entry points (runnable)
 
 | Command | Script | SPEC phase | Needs Toto2? |
@@ -216,3 +241,7 @@ For a newcomer grasping the codebase from scratch:
 | `python -m forecast_eval.live.v1_check --capture <ticks.csv>` | [live/v1_check.py](live/v1_check.md) | V1 live half (read-only) | No — needs Shioaji credentials |
 | `python -m forecast_eval.live.v1c_check --date <d>` | [live/v1c_check.py](live/v1c_check.md) | live-path validation (read-only) | No — needs Shioaji credentials |
 | `python -m forecast_eval.live.v72_probe [--dry-run]` | [live/v72_probe.py](live/v72_probe.md) | live-path validation (**places 1 sim order**) | No — needs Shioaji credentials |
+| `python -m forecast_eval.live.owner_cli --out <dir>` | [live/owner_cli.py](live/owner_cli.md) | the owning process — **the only thing that places orders** under §18 | No — needs Shioaji credentials |
+| `python -m forecast_eval.live.flatten [--out-parent <dir>]` | [live/flatten.py](live/flatten.md) | close whatever the account holds (**places orders**) | No — needs Shioaji credentials |
+| `python -m forecast_eval.live.multi_deploy_probe --mode {accounts,sessions,session,crossing,lag}` | [live/multi_deploy_probe.py](live/multi_deploy_probe.md) | the concurrency questions — `accounts`/`sessions` place nothing; `session`/`crossing`/`lag` **place orders** | No — needs Shioaji credentials |
+| `python -m forecast_eval.tools.g6_live --out <dir>` | [tools/g6_live.py](tools/g6_live.md) | G6 — two deployments holding at once (**opens 2 positions, then flattens**) | No — needs Shioaji credentials |

@@ -29,7 +29,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 from .sessions import trading_day as _trading_day
 
@@ -58,6 +58,33 @@ class RestartPolicy:
     max_backoff_seconds: float = 3600.0
     healthy_runtime_seconds: float = 600.0
     min_remaining_bytes: int = 50 * 1024 * 1024   # 50 MB headroom
+
+
+def usage_bytes(usage: Any) -> Tuple[Optional[int], Optional[int], Optional[int]]:
+    """`(used, limit, remaining)` from a Shioaji `UsageOut`, or Nones.
+
+    Accepts an attribute-bearing object or a dict, and returns None for anything
+    it cannot read rather than a zero.
+    """
+    # Tech: duck-typed reads of `bytes` / `limit_bytes` / `remaining_bytes`.
+    # Why:  `check_usage` below already had this rule for one field, and the
+    #       quota is now read in three more places — a soak's start and end, and
+    #       the owner's periodic check (STRATEGY_SPLIT_PLAN §18.13). Four copies
+    #       of a duck-typed getattr is how they drift, and this module stays
+    #       importable without shioaji precisely because it never names the type.
+    #
+    #       None rather than 0 for the same reason everywhere else in this
+    #       package: "cannot read" and "nothing left" are opposite states, and a
+    #       zero would make a working session look exhausted.
+    def _read(name: str) -> Optional[int]:
+        if usage is None:
+            return None
+        value = getattr(usage, name, None)
+        if value is None and isinstance(usage, dict):
+            value = usage.get(name)
+        return None if value is None else int(value)
+
+    return _read("bytes"), _read("limit_bytes"), _read("remaining_bytes")
 
 
 class RestartGuard:

@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -221,6 +221,45 @@ class FillLedger:
         return {"fills_replayed": self.replayed,
                 "fills_appended": self.appends,
                 "ledger_failures": self.failures}
+
+
+def per_deployment_nets(out_parent: Any) -> Dict[str, int]:
+    """`{slug: signed lots}` from each `fills_<slug>.csv`. Empty when unreadable.
+
+    The account total is `account_net_position`; this is the same rows split by
+    who owns them.
+    """
+    # Tech: read each ledger separately and key the result by the slug in its
+    #       filename.
+    # Why:  STRATEGY_SPLIT_PLAN §18.3 item 8. The venue can only say what the
+    #       ACCOUNT holds; these files are the only record of WHO holds what
+    #       (§16), which is what turns "closing 2 lots" into "closing day's 1 and
+    #       night's 1" for an operator about to flatten. The CSV-reading rule
+    #       lives here beside `account_net_position` rather than being spelled a
+    #       second time at the call site, because two readers of one format are
+    #       how they drift.
+    #
+    #       An unreadable or malformed ledger is SKIPPED rather than returning
+    #       None for the whole set: this feeds a warning, and naming two of three
+    #       deployments is more useful than naming none. `account_net_position`
+    #       refuses instead, correctly — it feeds a safety rail, where a partial
+    #       sum would be a confident wrong number.
+    parent = Path(out_parent)
+    if not parent.is_dir():
+        return {}
+    nets: Dict[str, int] = {}
+    for path in sorted(parent.glob("fills_*.csv")):
+        try:
+            df = pd.read_csv(path)
+        except Exception:                                  # noqa: BLE001
+            continue
+        if not {"side", "quantity"} <= set(df.columns):
+            continue
+        total = 0
+        for row in df.itertuples():
+            total += (1 if str(row.side) == "BUY" else -1) * int(row.quantity)
+        nets[path.stem[len("fills_"):]] = total
+    return nets
 
 
 def account_net_position(out_parent: Any) -> Optional[int]:

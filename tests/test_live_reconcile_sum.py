@@ -24,7 +24,8 @@ import csv
 
 import pytest
 
-from forecast_eval.live.ledger import LEDGER_COLUMNS, account_net_position
+from forecast_eval.live.ledger import (LEDGER_COLUMNS, account_net_position,
+                                       per_deployment_nets)
 from forecast_eval.live.sessions import SessionPolicy
 from forecast_eval.live.state import HaltAction, RailsConfig, SafetyRails
 
@@ -306,3 +307,70 @@ def test_the_glob_matches_every_deployment_filename():
     for name in CONFIGS:
         filename = ledger_path(Path("outputs"), config_named(name).policy).name
         assert fnmatch.fnmatch(filename, "fills_*.csv"), (name, filename)
+
+
+# ---- per_deployment_nets — the split behind the account total (§18.3 item 8)
+
+def test_per_deployment_nets_splits_by_slug(tmp_path):
+    _ledger(tmp_path, "day", [("BUY", 1), ("BUY", 1)])
+    _ledger(tmp_path, "night", [("SELL", 1)])
+    assert per_deployment_nets(tmp_path) == {"day": 2, "night": -1}
+
+
+def test_per_deployment_nets_agrees_with_the_account_total(tmp_path):
+    _ledger(tmp_path, "day", [("BUY", 2)])
+    _ledger(tmp_path, "night", [("SELL", 1)])
+    _ledger(tmp_path, "day_night", [("BUY", 3)])
+    nets = per_deployment_nets(tmp_path)
+    assert sum(nets.values()) == account_net_position(tmp_path)
+
+
+def test_per_deployment_nets_is_empty_when_there_is_nothing_to_read(tmp_path):
+    assert per_deployment_nets(tmp_path) == {}
+    assert per_deployment_nets(tmp_path / "absent") == {}
+
+
+def test_per_deployment_nets_skips_a_bad_ledger_instead_of_refusing_all(tmp_path):
+    """It feeds a warning: naming two of three beats naming none.
+
+    `account_net_position` refuses instead, and correctly — it feeds a safety
+    rail, where a partial sum would be a confident wrong number.
+    """
+    _ledger(tmp_path, "day", [("BUY", 1)])
+    (tmp_path / "fills_night.csv").write_text("not,a,ledger\n1,2,3\n",
+                                              encoding="utf-8")
+    assert per_deployment_nets(tmp_path) == {"day": 1}
+    assert account_net_position(tmp_path) is None
+
+
+# ---- usage_bytes — the shared quota reader (§18.13) -------------------------
+
+def test_usage_bytes_reads_an_object():
+    from forecast_eval.live.startup import usage_bytes
+
+    class _U:
+        bytes, limit_bytes, remaining_bytes = 100, 500, 400
+
+    assert usage_bytes(_U()) == (100, 500, 400)
+
+
+def test_usage_bytes_reads_a_dict():
+    from forecast_eval.live.startup import usage_bytes
+    assert usage_bytes({"bytes": 1, "limit_bytes": 2,
+                        "remaining_bytes": 3}) == (1, 2, 3)
+
+
+def test_usage_bytes_returns_none_not_zero():
+    """'Cannot read' and 'nothing left' are opposite states."""
+    from forecast_eval.live.startup import usage_bytes
+    assert usage_bytes(None) == (None, None, None)
+    assert usage_bytes(object()) == (None, None, None)
+
+
+def test_usage_bytes_reads_a_partial_answer():
+    from forecast_eval.live.startup import usage_bytes
+
+    class _U:
+        remaining_bytes = 400
+
+    assert usage_bytes(_U()) == (None, None, 400)

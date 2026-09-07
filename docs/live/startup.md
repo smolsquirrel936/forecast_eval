@@ -28,6 +28,7 @@ recovery.
 | `end(now)` | method | orderly shutdown; clears the failure count |
 | `check_usage(usage)` | method | traffic headroom; duck-typed on `remaining_bytes` |
 | `trading_day(now)` | staticmethod | delegates to [sessions.py](sessions.md) |
+| `usage_bytes(usage)` | function | `(used, limit, remaining)` from a `UsageOut`, duck-typed; `None` for anything unreadable |
 
 ## The four rails
 - **Exponential restart backoff**, keyed on consecutive *unclean* exits. A clean
@@ -60,3 +61,21 @@ recovery.
 
 ## Related
 [live/state.py](state.md) · [live/backfill.py](backfill.md) · [live/sessions.py](sessions.md) · [tests/test_live_startup.py](../tests.md) · [SHIOAJI_PLAN.md §2.8b](../../SHIOAJI_PLAN.md)
+
+## `usage_bytes` — the quota, read in one place (§18.13)
+
+`check_usage` needed `remaining_bytes`; three more callers then needed the same
+duck-typed read — a soak's start and end ([cli.py](cli.md)) and the owner's
+periodic check ([owner_cli.py](owner_cli.md)). Four copies of a `getattr` chain
+is how they drift, so it is a function here, and this module still never names
+the `shioaji` type.
+
+**`None`, never `0`.** "Cannot read" and "nothing left" are opposite states, and
+a zero would make a working session look exhausted.
+
+**The guard is start-up only, and that is now explicit.** `check_usage` refuses
+to *start* below the floor; it cannot see a quota consumed *during* a run. That
+gap is why [owner_cli.py](owner_cli.md) samples the headroom on its reconcile
+cadence — it is the process that outlives all three deployments. MEASURED
+2026-09-07: the daily allowance is **500 MiB**, and option (b)'s four sessions
+each subscribe to the same tick stream separately.
