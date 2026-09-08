@@ -1,4 +1,5 @@
-"""The plain RSI strategy — RSI(14) over 5-minute closes, BUY at 20, SELL at 80.
+"""The plain RSI strategy — RSI(14) over 5-minute closes, BUY below the buy
+level, SELL above the sell level (each package's own constants).
 
 Both session packages hold their own copy, so every behavioural test runs against
 both: a divergence between them is exactly what the split exists to allow, and
@@ -158,14 +159,25 @@ def _fc(value):
                     payload={"rsi": value, "last_price": 100.0})
 
 
+# Tech: the level cells are derived from each module's OWN constants, not
+#       hardcoded 20/80 -- night moved RSI_BUY_BELOW 20 -> 30 in its iter06.
+# Why:  the invariant under test is "each package trades at ITS declared levels,
+#       inclusive, mean-reversion direction" -- which is what survives a session
+#       legitimately moving its own knob inside its own file. Hardcoding 20/80
+#       would make the test fail for a legal divergence, and loosening it to
+#       "just some BUY somewhere" would make it vacuous. Reading the constants
+#       keeps day's cells exactly what they were (20/80) and night's honest.
 @pytest.mark.parametrize("mod", MODULES, ids=IDS)
-@pytest.mark.parametrize("value,expected", [
-    (0.0, "BUY"), (19.9, "BUY"), (20.0, "BUY"),      # at the level, inclusive
-    (20.1, "HOLD"), (50.0, "HOLD"), (79.9, "HOLD"),
-    (80.0, "SELL"), (80.1, "SELL"), (100.0, "SELL"),
-])
-def test_the_levels_are_20_and_80_and_inclusive(mod, value, expected):
-    assert mod.RsiEmitter().emit(_fc(value)) == expected
+def test_the_levels_are_the_module_constants_and_inclusive(mod):
+    b, s = mod.RSI_BUY_BELOW, mod.RSI_SELL_ABOVE
+    cases = [
+        (0.0, "BUY"), (b - 0.1, "BUY"), (b, "BUY"),      # at the level, inclusive
+        (b + 0.1, "HOLD"),
+        ((b + s) / 2.0, "HOLD"), (s - 0.1, "HOLD"),
+        (s, "SELL"), (s + 0.1, "SELL"), (100.0, "SELL"),
+    ]
+    for value, expected in cases:
+        assert mod.RsiEmitter().emit(_fc(value)) == expected, f"{value} -> {expected}"
 
 
 @pytest.mark.parametrize("mod", MODULES, ids=IDS)

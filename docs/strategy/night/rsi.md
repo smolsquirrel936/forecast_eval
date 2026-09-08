@@ -5,7 +5,7 @@
 **Depends on:** [events.py](../../events.md), [forecaster/base.py](../../forecaster/base.md), [strategy/base.py](../base.md)   **Used by:** [strategy/night/wiring.py](wiring.md)
 
 ## Responsibility
-RSI(14) over **5-minute closes**; **BUY at 20, SELL at 80**. No model, no GPU, no
+RSI(14) over **5-minute closes**; **BUY at 30, SELL at 80**. No model, no GPU, no
 probability gate, no trend or path confirmation — this replaces the Toto2 banded
 threshold strategy on the backtest path.
 
@@ -14,9 +14,9 @@ threshold strategy on the backtest path.
 |---|---|---|
 | `rsi(closes, period=14)` | function | Wilder's RSI, or `None` when there are fewer than `period+1` closes |
 | `RsiForecaster(...)` | class | resamples `price` to 5-minute closes and reports `payload["rsi"]` |
-| `RsiEmitter(buy_below=20, sell_above=80)` | class | BUY at or below 20 **inside the entry window**, SELL at or above 80 at any hour, else HOLD |
+| `RsiEmitter(buy_below=30, sell_above=80)` | class | BUY at or below 30 **inside the entry window**, SELL at or above 80 at any hour, else HOLD |
 | `make_rsi_forecaster(...)` | function | construction seam; swallows the Toto2-shaped keywords |
-| `RSI_PERIOD` / `RSI_BUY_BELOW` / `RSI_SELL_ABOVE` / `BAR_MINUTES` | constants | 14 / 20.0 / 80.0 / 5 |
+| `RSI_PERIOD` / `RSI_BUY_BELOW` / `RSI_SELL_ABOVE` / `BAR_MINUTES` | constants | 14 / 30.0 (iter06) / 80.0 / 5 |
 | `ENTRY_FIRST_HOUR` / `ENTRY_LAST_HOUR` | constants | 15 / 21 — BUY candidates outside this clock window HOLD |
 
 ## Key points / gotchas
@@ -29,6 +29,14 @@ threshold strategy on the backtest path.
   `_resolve_strategy_knobs` raises unless a package's `PARAMS` keys are *exactly*
   the CLI's knob set, and `real_data.py` is frozen. Same convention
   `short_window` / `min_trend_ticks` already follow: edit this file.
+- **`RSI_BUY_BELOW` is 30, not 20, since iter06 (2026-09-08).** With the hour
+  window and the one-week cap in place, a scratch sweep read
+  26/28/30/32/34 → 5.90/7.03/7.28/5.74/5.91 Calmar — a hump whose whole band
+  beats the incumbent, centred on the textbook oversold line. Night-session mean
+  reversion pays at the standard dip; waiting for RSI 20 in a thin tape skips
+  the V-recoveries entirely. The shared level test in
+  [tests/test_rsi_strategy.py](../../../tests/test_rsi_strategy.py) now reads
+  each package's own constants.
 - **Wilder smoothing, not a rolling mean** — `ewm(alpha=1/period, adjust=False)`.
   The simple moving average is a different indicator sharing the name and would
   not match any chart this is compared against.

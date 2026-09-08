@@ -1,7 +1,9 @@
 """Plain RSI mean-reversion for the NIGHT package — no model, no GPU.
 
-RSI(14) over **5-minute closes**; **BUY at 20, SELL at 80**. That is the whole
-strategy: no Toto2, no probability gate, no trend or path confirmation.
+RSI(14) over **5-minute closes**; **BUY at 30, SELL at 80**, with **BUY
+entries clock-windowed** (iter03): the entry only fires inside the
+15:00-21:59 stretch of the night session. No Toto2, no probability gate, no
+trend or path confirmation.
 
 **Why the indicator lives in a Forecaster.** The run loop hands the emitter a
 `Forecast`, never price history, and it only calls it at stride boundaries. An
@@ -34,11 +36,17 @@ from ..base import SignalEmitter
 
 Direction = Literal["BUY", "SELL", "HOLD"]
 
-# Tech: the strategy's three numbers, as specified.
+# Tech: the strategy's three numbers.
 # Why:  named constants rather than literals buried in the classes, so the search
 #       surface is one obvious block at the top of the file this package owns.
+#       RSI_BUY_BELOW moved 20 -> 30 in night-loop iter06: with the hour window
+#       and the one-week cap in place, a scratch sweep of the buy level read
+#       26/28/30/32/34 -> 5.90/7.03/7.28/5.74/5.91 Calmar -- a hump whose whole
+#       26-34 band beats the incumbent, centred on the textbook oversold line.
+#       Night-session mean reversion pays at the STANDARD dip, not the deep
+#       one: waiting for RSI 20 in a thin tape skips the V-recoveries entirely.
 RSI_PERIOD = 14
-RSI_BUY_BELOW = 20.0            # oversold -> BUY
+RSI_BUY_BELOW = 30.0            # oversold -> BUY (iter06: 20 -> 30)
 RSI_SELL_ABOVE = 80.0           # overbought -> SELL
 BAR_MINUTES = 5
 
