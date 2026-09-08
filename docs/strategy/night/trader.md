@@ -31,6 +31,14 @@ aggression and sizing, and the fill bookkeeping that feeds `ExitRule` queries.
 - `on_fill` has **no average-entry branch**: anything above `max_position=1` is
   unsound rather than merely risky, which is why the live rails refuse it at
   start-up.
+- **Long-only entries since night-loop iter02 (2026-09-08).** A SELL from flat
+  submits no order at all — but it still cancels any resting one (§4.4), and a
+  SELL while long still closes, so the RSI>=80 exit path is untouched. Grounded
+  in the iter01 baseline's side split: 236 longs at +6,000 pts net vs 273 shorts
+  at -17,692 pts on a tape that 4.5x'd across the eval window. The shared
+  Trader and the day/fullday copies still open shorts; the divergence is the
+  split's purpose and is pinned by
+  [tests/test_night_trader.py](../../../tests/test_night_trader.py).
 
 ## Related
 [strategy/night/wiring.md](wiring.md) · [strategy/wiring.py](../wiring.md) · [strategy/base.py](../base.md) · [STRATEGY_SPLIT_PLAN.md](../../../STRATEGY_SPLIT_PLAN.md)
