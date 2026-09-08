@@ -1,6 +1,6 @@
 """Plain RSI mean-reversion for the NIGHT package — no model, no GPU.
 
-RSI(14) over **5-minute closes**; **BUY at 30, SELL at 80**, with **BUY
+RSI(14) over **5-minute closes**; **BUY at 30, SELL at 84**, with **BUY
 entries clock-windowed** (iter03): the entry only fires inside the
 15:00-21:59 stretch of the night session. No Toto2, no probability gate, no
 trend or path confirmation.
@@ -47,7 +47,15 @@ Direction = Literal["BUY", "SELL", "HOLD"]
 #       one: waiting for RSI 20 in a thin tape skips the V-recoveries entirely.
 RSI_PERIOD = 14
 RSI_BUY_BELOW = 30.0            # oversold -> BUY (iter06: 20 -> 30)
-RSI_SELL_ABOVE = 80.0           # overbought -> SELL
+# Tech: RSI_SELL_ABOVE moved 80 -> 84 in night-loop iter07.
+# Why:  a scratch sell-level sweep from the iter06 state read
+#       78/80/82/84/85/86/88 -> 5.63/7.28/9.00/8.74/8.65/6.06/4.42 Calmar --
+#       a 82-85 plateau with the fall-off at 86. 84 is the measured interior
+#       cell, not the top edge: at night the thin tape's overbought readings
+#       rarely clear the low 80s, so waiting for a deeper print lets the
+#       winner run while the one-week cap still bounds the tail. Exits only
+#       -- the SELL fires at any hour and is never windowed.
+RSI_SELL_ABOVE = 84.0           # overbought -> SELL (iter07: 80 -> 84)
 BAR_MINUTES = 5
 
 # Tech: the entry window, as local clock hours of the forecast timestamp.

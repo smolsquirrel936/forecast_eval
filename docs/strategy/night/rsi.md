@@ -5,7 +5,7 @@
 **Depends on:** [events.py](../../events.md), [forecaster/base.py](../../forecaster/base.md), [strategy/base.py](../base.md)   **Used by:** [strategy/night/wiring.py](wiring.md)
 
 ## Responsibility
-RSI(14) over **5-minute closes**; **BUY at 30, SELL at 80**. No model, no GPU, no
+RSI(14) over **5-minute closes**; **BUY at 30, SELL at 84**. No model, no GPU, no
 probability gate, no trend or path confirmation — this replaces the Toto2 banded
 threshold strategy on the backtest path.
 
@@ -14,9 +14,9 @@ threshold strategy on the backtest path.
 |---|---|---|
 | `rsi(closes, period=14)` | function | Wilder's RSI, or `None` when there are fewer than `period+1` closes |
 | `RsiForecaster(...)` | class | resamples `price` to 5-minute closes and reports `payload["rsi"]` |
-| `RsiEmitter(buy_below=30, sell_above=80)` | class | BUY at or below 30 **inside the entry window**, SELL at or above 80 at any hour, else HOLD |
+| `RsiEmitter(buy_below=30, sell_above=84)` | class | BUY at or below 30 **inside the entry window**, SELL at or above 84 at any hour, else HOLD |
 | `make_rsi_forecaster(...)` | function | construction seam; swallows the Toto2-shaped keywords |
-| `RSI_PERIOD` / `RSI_BUY_BELOW` / `RSI_SELL_ABOVE` / `BAR_MINUTES` | constants | 14 / 30.0 (iter06) / 80.0 / 5 |
+| `RSI_PERIOD` / `RSI_BUY_BELOW` / `RSI_SELL_ABOVE` / `BAR_MINUTES` | constants | 14 / 30.0 (iter06) / 84.0 (iter07) / 5 |
 | `ENTRY_FIRST_HOUR` / `ENTRY_LAST_HOUR` | constants | 15 / 21 — BUY candidates outside this clock window HOLD |
 
 ## Key points / gotchas
@@ -37,6 +37,13 @@ threshold strategy on the backtest path.
   the V-recoveries entirely. The shared level test in
   [tests/test_rsi_strategy.py](../../../tests/test_rsi_strategy.py) now reads
   each package's own constants.
+- **`RSI_SELL_ABOVE` is 84, not 80, since iter07 (2026-09-08).** A scratch
+  sell-level sweep from the iter06 state read 78/80/82/84/85/86/88 →
+  5.63/7.28/9.00/8.74/8.65/6.06/4.42 — an 82–85 plateau with the fall-off at
+  86. 84 is the measured interior cell: the thin tape's overbought readings
+  rarely clear the low 80s, so waiting past 84 would rely on prints that stop
+  arriving, and the exit stays ungated by the hour window and only bounded by
+  the one-week cap.
 - **Wilder smoothing, not a rolling mean** — `ewm(alpha=1/period, adjust=False)`.
   The simple moving average is a different indicator sharing the name and would
   not match any chart this is compared against.
