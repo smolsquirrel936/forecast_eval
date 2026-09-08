@@ -83,16 +83,22 @@ def test_an_explicit_flag_beats_the_strategy_at_its_own_default_value():
     assert origins["sell_threshold"] == "night"
 
 
-def test_fullday_is_days_band_and_is_marked_untuned():
-    # Tech: full-day inherits DAY's band, and says so in its own docstring.
-    # Why:  §5/D5 — the inheritance is deliberate and the marking is the only
-    #       thing stopping it from being read as provenance. If someone tunes
-    #       full-day and forgets the docstring, this fails and asks for it.
-    assert wiring.params("fullday") == wiring.params("day")
+def test_fullday_band_is_seeded_from_the_sweep_and_says_so():
+    # Tech: full-day trades the Step-0 band-sweep winner (band +/-0.00075,
+    #       min_prob 0.5), not DAY's inherited values, and its docstring names
+    #       the sweep as provenance.
+    # Why:  autoresearch_trading_plan_fullday.md Step 0 — the sweep is the thing
+    #       that replaces "day's values, copied" (iter00), and the docstring is
+    #       where the provenance lives. If someone moves the band and forgets
+    #       the docstring, this fails and asks for it.
+    p = wiring.params("fullday")
+    assert p["buy_threshold"] == 0.00075
+    assert p["sell_threshold"] == -0.00075
+    assert p["min_prob"] == 0.5
     doc = __import__(
         "forecast_eval.strategy.fullday.wiring", fromlist=["wiring"]
     ).__doc__
-    assert "UNTUNED" in doc
+    assert "Step-0 sweep" in doc
 
 
 def test_an_unknown_strategy_raises():
