@@ -2,7 +2,7 @@
 
 RSI(14) over **5-minute closes**; **BUY at 30, SELL at 84**, with **BUY
 entries clock-windowed** (iter03): the entry only fires inside the
-15:00-21:59 stretch of the night session. No Toto2, no probability gate, no
+15:00-20:59 stretch of the night session. No Toto2, no probability gate, no
 trend or path confirmation.
 
 **Why the indicator lives in a Forecaster.** The run loop hands the emitter a
@@ -65,8 +65,13 @@ BAR_MINUTES = 5
 #       stretch is the thin globex tape, where a 5-minute RSI dip is noise
 #       that keeps falling. Entries only -- SELL exits are never windowed, so
 #       a position can always be closed overnight.
+#       ENTRY_LAST_HOUR narrowed 21 -> 20 in iter08: the 21:00-21:59 entries
+#       read net-negative in two consecutive states (iter06: 7.4435 vs 7.2781;
+#       iter07: 9.3767 vs 8.7403, dd identical both times) -- 21:30-22:00
+#       local is the US equities open, a fresh momentum impulse window where
+#       the evening's mean-reversion edge has decayed.
 ENTRY_FIRST_HOUR = 15
-ENTRY_LAST_HOUR = 21
+ENTRY_LAST_HOUR = 20
 
 # Tech: how many raw rows `forecast()` keeps before resampling.
 # Why:  MEASURED — resampling the whole history-through-t frame made one call
@@ -312,7 +317,7 @@ class RsiEmitter(SignalEmitter):
         #       opposite of a momentum reading of the same number, so it is worth
         #       being explicit: RSI 20 is a market that has fallen hard, and this
         #       strategy buys it. The window keeps that dip-buying to the liquid
-        #       15:00-21:59 stretch; a missing timestamp is unreadable, and
+        #       15:00-20:59 stretch; a missing timestamp is unreadable, and
         #       trading the absence of a clock is the same bug as trading the
         #       absence of a signal. SELL below is NOT windowed: an exit that
         #       could not fire overnight could strand a position to the next
