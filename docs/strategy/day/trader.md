@@ -21,6 +21,13 @@ aggression and sizing, and the fill bookkeeping that feeds `ExitRule` queries.
 - **This is a per-session copy** of [trader.py](../../trader.md), verbatim at the
   split with only the import depth changed (STRATEGY_SPLIT_PLAN S1). The shared
   original is frozen and hash-guarded.
+- **Diverged at autoresearch `iter02`: long-only entries.** A SELL from flat
+  submits nothing — no short is ever opened — while a SELL while long still
+  closes. Grounds: the iter01 baseline on the day tape split 146 longs
+  (+2,592 pts net) against 184 shorts (−19,784 pts) over 2011–2026, a window in
+  which the tape 5x'd; selling overbought into that rise was the entire loss.
+  The shared Trader and the night/fullday copies still open shorts — this
+  package-level divergence is exactly what the split exists to allow.
 - It is handed to `run_backtest` as a **factory**, not an instance —
   `make_trader(execution)` — because `Execution` is built inside the run
   (`fee_rate` is a run parameter). See [run.py](../../run.md) §2.1 of the split
