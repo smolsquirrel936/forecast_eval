@@ -33,7 +33,7 @@ class _Pending:
 
 
 class Execution:
-    def __init__(self, fee_rate: float = 0.00015):
+    def __init__(self, fee_rate: float = 0.0002):
         # Tech: store the per-side fee rate and start with no resting order.
         # Why:  v1 models a single working order at a time (`_pending`); the
         #       trader cancels-then-submits, so there is never a need to track a

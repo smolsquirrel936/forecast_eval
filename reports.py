@@ -145,7 +145,7 @@ def plot_equity_drawdown_mpl(
     out_path: Path,
     *,
     ticks: Optional[pd.DataFrame] = None,
-    fee_rate: float = 0.00015,
+    fee_rate: float = 0.0002,
     point_value: float = 200.0,
 ) -> None:
     # Tech: a 2-row figure (equity on top 3/4, drawdown below); when there are no
@@ -215,7 +215,7 @@ def plot_equity_drawdown_plotly(
     trades: pd.DataFrame,
     *,
     ticks: Optional[pd.DataFrame] = None,
-    fee_rate: float = 0.00015,
+    fee_rate: float = 0.0002,
     point_value: float = 200.0,
 ) -> "go.Figure":
     # Tech: the interactive twin of the equity/drawdown chart — two stacked panels,
@@ -586,6 +586,16 @@ _FRACTION_PERCENT_KEYS = frozenset({
 _ALREADY_PERCENT_KEYS = frozenset({"percent_profitable"})
 
 
+# Tech: keys whose value is a left-aligned string rather than a right-aligned
+#       number — the long, path-like Settings fields.
+# Why:  long values read left-to-right. A right-aligned command or `data` path
+#       either pins to the far edge of the table, disconnected from its key, or
+#       wraps into lines that read bottom-up; both read as mistakes. Numbers
+#       keep the right alignment so the tables still mirror the terminal's
+#       columnar convention.
+_LEFT_ALIGN_KEYS = frozenset({"command", "data"})
+
+
 def fmt_value(v, key: Optional[str] = None) -> str:
     # Tech: format a scalar for the report — ints/None/str pass through unchanged,
     #       floats get a sign; for the fraction/percent keys the float is scaled to a
@@ -641,51 +651,127 @@ def _currency_axis_range(
     return (lo, hi), (lo * point_value, hi * point_value)
 
 
+# Tech: the annual-returns columns whose value is a signed number — the two
+#       that render sign-aligned (sign parked in a fixed column, magnitude
+#       right-justified to the column's widest value).
+# Why:  a bare right-aligned "+82,135.830" next to "-5,696.760" leaves the
+#       signs drifting with each value's digit count; parking the sign and
+#       padding the magnitude is what makes the column read as one block of
+#       numbers (user request 2026-09-08). Only these two columns carry signs,
+#       so only they take the split-formatter path.
+_SIGNED_ANNUAL_COLS = ("rate_of_return", "net_pnl_currency")
+
+
+def _annual_sign_magnitude(v, col: str):
+    # Tech: split a finite numeric into its sign character and its unsigned,
+    #       column-formatted magnitude — rate as a 3-decimal percentage,
+    #       currency as a 3-decimal comma-grouped number; None for anything
+    #       else (other columns, non-numeric, non-finite).
+    # Why:  sign-aligned cells are built from the two halves separately: the
+    #       sign parks in a fixed column and the magnitude is right-justified
+    #       per column, which one pre-joined "+1,234.568" string cannot
+    #       express. Non-finite values return None so the caller falls back to
+    #       the plain form — there is no magnitude to align for a NaN.
+    if not isinstance(v, (int, float)) or not math.isfinite(v):
+        return None
+    sign = "+" if v >= 0 else "-"
+    if col == "rate_of_return":
+        return sign, f"{abs(v) * 100:.3f}%"
+    if col == "net_pnl_currency":
+        return sign, f"{abs(v):,.3f}"
+    return None
+
+
 def _fmt_annual_value(v, col: str) -> str:
-    # Tech: the annual-returns table's own convention — rate_of_return as a 3-decimal
-    #       percentage, net_pnl_currency as a 3-decimal comma-grouped signed number,
-    #       the year literal (never comma-grouped into "2,022").
-    # Why:  this table mixes a fraction, a currency amount, and an integer year, so a
-    #       single formatter would mis-render at least one column; the per-column
-    #       dispatch keeps each value legible and the year a clean integer.
-    if col == "rate_of_return" and isinstance(v, (int, float)) and math.isfinite(v):
-        return f"{v * 100:+.3f}%"
-    if col == "net_pnl_currency" and isinstance(v, (int, float)) and math.isfinite(v):
-        return f"{v:+,.3f}"
+    # Tech: the annual-returns table's convention for the non-signed cells —
+    #       the year as a literal integer (never comma-grouped into "2,022"),
+    #       everything else through fmt_value.
+    # Why:  the two signed numeric columns are formatted via
+    #       _annual_sign_magnitude for sign-aligned rendering, so what remains
+    #       here is the year and the fallbacks (partial_year's True/False, a
+    #       NaN rate) — cells with no sign to park.
     if col == "year":
         return str(int(v))
     return fmt_value(v, col)
 
 
 def _kv_table_html(mapping: Mapping) -> str:
-    # Tech: render any mapping as a two-column key/value HTML table, formatting each
-    #       value with fmt_value keyed by its own field name.
-    # Why:  the Settings block and every metric block share the same shape (a flat
-    #       dict of scalars), so one renderer keeps them visually consistent; passing
-    #       the key to fmt_value is what makes fraction fields render as percentages.
-    rows = "".join(
-        f"<tr><td class='k'>{k}</td><td class='v'>{fmt_value(v, k)}</td></tr>"
-        for k, v in mapping.items()
-    )
-    return f"<table class='kv'>{rows}</table>"
+    # Tech: render any mapping as a two-column key/value HTML table, formatting
+    #       each value with fmt_value keyed by its own field name; every value
+    #       cell holds an inner div, and the cells of the left-aligned fields
+    #       (_LEFT_ALIGN_KEYS) carry the extra class "left".
+    # Why:  the Settings block and every metric block share the same shape (a
+    #       flat dict of scalars), so one renderer keeps them visually
+    #       consistent, and passing the key to fmt_value is what makes fraction
+    #       fields render as percentages. The div is the width limiter: an
+    #       auto-layout table cell ignores max-width, but the block inside it
+    #       is a normal box, so the stylesheet can cap the value column at
+    #       50ch while short values still size the table naturally. The left
+    #       class lets the stylesheet left-align just the long path-like
+    #       fields — wrapped under the column's numeric right-alignment their
+    #       lines would read bottom-up.
+    rows = []
+    for k, v in mapping.items():
+        cls = "v left" if k in _LEFT_ALIGN_KEYS else "v"
+        rows.append(
+            f"<tr><td class='k'>{k}</td>"
+            f"<td class='{cls}'><div>{fmt_value(v, k)}</div></td></tr>"
+        )
+    return f"<table class='kv'>{''.join(rows)}</table>"
 
 
 def _annual_returns_html(rows) -> str:
-    # Tech: render the annual-returns table — one <th> per column, one <tr> per year,
-    #       each cell formatted via _fmt_annual_value keyed by its column name.
-    # Why:  this table mixes a fraction (rate_of_return), a currency amount
-    #       (net_pnl_currency), and an integer year, so it needs per-column formatting
-    #       rather than the uniform _kv_table_html; the year must stay literal so it
-    #       isn't comma-grouped into "2,022".
+    # Tech: render the annual-returns table — one <th> per column, one <tr> per
+    #       year; the two signed numeric columns emit "sign + space + magnitude
+    #       right-justified to that column's widest magnitude", every other
+    #       cell goes through _fmt_annual_value.
+    # Why:  the mixed types (fraction, currency, integer year, bool) need
+    #       per-column formatting, and the signed columns need the sign parked
+    #       in a fixed column so "+ 82,135.830" and "-  5,696.760" read as one
+    #       aligned block of numbers — the whole point of the table. The pad
+    #       spaces only survive rendering because the stylesheet gives these
+    #       cells white-space:pre and a monospace font.
     cols = ["year", "rate_of_return", "net_pnl_currency", "partial_year"]
     head = "".join(f"<th>{c}</th>" for c in cols)
-    body = []
+
+    # Tech: first pass — format every cell, keeping the signed numerics as
+    #       (sign, magnitude) pairs and recording each such column's widest
+    #       magnitude.
+    # Why:  a cell cannot be padded until the width of its whole column is
+    #       known, so the pass exists only to measure; non-signed and
+    #       non-finite cells format straight to their final string.
+    widths = dict.fromkeys(_SIGNED_ANNUAL_COLS, 0)
+    rendered = []
     for r in rows:
-        cells = "".join(f"<td>{_fmt_annual_value(r.get(c), c)}</td>" for c in cols)
-        body.append(f"<tr>{cells}</tr>")
+        cells = {}
+        for c in cols:
+            sm = _annual_sign_magnitude(r.get(c), c)
+            if sm is None:
+                cells[c] = _fmt_annual_value(r.get(c), c)
+            else:
+                cells[c] = sm
+                widths[c] = max(widths[c], len(sm[1]))
+        rendered.append(cells)
+
+    # Tech: second pass — join each row's cells, expanding every (sign,
+    #       magnitude) pair to "{sign} {magnitude:>width}".
+    # Why:  equal-length cell strings under right alignment are what put every
+    #       sign in the same column; the literal spaces are preserved by the
+    #       white-space:pre cell style.
+    body = []
+    for cells in rendered:
+        tds = []
+        for c in cols:
+            v = cells[c]
+            if isinstance(v, tuple):
+                sign, mag = v
+                tds.append(f"<td>{sign} {mag.rjust(widths[c])}</td>")
+            else:
+                tds.append(f"<td>{v}</td>")
+        body.append(f"<tr>{''.join(tds)}</tr>")
     return (
         "<h3>Annual returns (by calendar year of exit)</h3>"
-        f"<table class='kv'><thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table>"
+        f"<table class='annual'><thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table>"
     )
 
 
@@ -816,16 +902,16 @@ def generate_report(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Tech: pull the per-side fee and the contract point_value from settings
-    #       (params.json), defaulting to the framework defaults (0.00015 / 200 for
+    #       (params.json), defaulting to the framework defaults (0.0002 / 200 for
     #       TXF) when absent or unparseable.
     # Why:  the reference line must be charged the same fee as the strategy to be a
     #       fair comparison, and the currency axis must rescale by the run's own
     #       point_value; reading both from the run's params keeps them in sync, while
     #       older bundles written before point_value existed fall back to the TXF value.
     try:
-        fee_rate = float(settings["fee_rate"]) if settings and "fee_rate" in settings else 0.00015
+        fee_rate = float(settings["fee_rate"]) if settings and "fee_rate" in settings else 0.0002
     except (TypeError, ValueError):
-        fee_rate = 0.00015
+        fee_rate = 0.0002
     try:
         point_value = float(settings["point_value"]) if settings and "point_value" in settings else 200.0
     except (TypeError, ValueError):
@@ -865,6 +951,40 @@ def generate_report(
             "table.kv td{border:1px solid #ddd;padding:3px 10px;}"
             "table.kv td.k{color:#555;}"
             "table.kv td.v{font-family:monospace;text-align:right;}"
+            # Tech: the 50ch cap on the Settings value column lives on the div
+            #       inside the cell (see _kv_table_html), with overflow-wrap to
+            #       let unbreakable tokens (a 60ch UNC path) break; the cells of
+            #       the left-aligned fields (_LEFT_ALIGN_KEYS) are left-aligned.
+            # Why:  an auto-layout table cell ignores max-width — the inner
+            #       block is the only reliable width limiter — and wrapped long
+            #       values (the command, the data path) under the column's
+            #       numeric right-alignment would read bottom-up, so their
+            #       cells override the alignment.
+            "table.kv td.v div{max-width:50ch;overflow-wrap:anywhere;}"
+            "table.kv td.v.left{text-align:left;}"
+            # Tech: the annual-returns table gets its own class with per-column
+            #       widths — 15ch each, 20ch for net_pnl_currency — right-aligned
+            #       columns, monospace td cells with white-space:pre.
+            # Why:  the per-column ch widths (user spec 2026-09-08) keep the
+            #       table compact instead of stretching to the page width; the
+            #       currency column is 20ch because the widest realistic value
+            #       ('+ 16,427,166.000') is 17ch — a 15ch cap would clip the
+            #       sign-aligned format that column exists to carry (auto
+            #       layout still grows a column past its width if a value ever
+            #       exceeds it, so nothing is ever cut off). The monospace +
+            #       pre combination is what makes the sign-aligned cells
+            #       actually align: pre keeps the pad spaces from collapsing,
+            #       and only a fixed-width font turns equal-length strings
+            #       into equal-width cells.
+            "table.annual{border-collapse:collapse;margin:6px 0 18px;}"
+            "table.annual th{border:1px solid #ddd;padding:4px 12px;"
+            "text-align:right;}"
+            "table.annual td{border:1px solid #ddd;padding:4px 12px;"
+            "font-family:monospace;text-align:right;white-space:pre;}"
+            "table.annual td:nth-child(1){width:15ch;}"
+            "table.annual td:nth-child(2){width:15ch;}"
+            "table.annual td:nth-child(3){width:20ch;}"
+            "table.annual td:nth-child(4){width:15ch;}"
             ".fig{margin-bottom:30px;}</style></head><body>",
             f"<h1>forecast_eval report — {run_dir.name}</h1>",
             f"<p>currency @ {point_value:g}</p>",

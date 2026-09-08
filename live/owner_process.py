@@ -82,7 +82,7 @@ class OwnerProcess:
         account: Any = None,
         sj: Any = None,
         book: Optional[OrderBook] = None,
-        fee_rate: float = 0.00015,
+        fee_rate: float = 0.0002,
         tick_size: float = 1.0,
         flatten_aggression_ticks: int = 5,
         deployment_timeout: float = DEFAULT_DEPLOYMENT_TIMEOUT,

@@ -189,7 +189,7 @@ Trade-print-only data means fills are inferred from subsequent prints. Two cases
 
 ### 4.6 Fees
 
-Per-side fee = `fill_price × fee_rate`, applied at every fill (both opening and closing). Default `fee_rate = 0.00015`; configurable. The default bundles slippage and tax into a single number; the fill simulator does **not** apply additional slippage on top.
+Per-side fee = `fill_price × fee_rate`, applied at every fill (both opening and closing). Default `fee_rate = 0.0002` (raised from `0.00015` on 2026-09-08); configurable. The default bundles slippage and tax into a single number; the fill simulator does **not** apply additional slippage on top.
 
 ### 4.7 Session handling
 
@@ -249,7 +249,7 @@ trader:
   aggression_ticks: 0
   max_position: 1
   # max_aggression_ticks: 5   # optional confidence-scaled aggression ceiling (OFF by default)
-  fee_rate: 0.00015
+  fee_rate: 0.0002
   forced_close_on_session_end: false
 
 exit_rule:
@@ -295,7 +295,7 @@ reporting:
 - Unit tests for fill simulator (golden cases at marketable / passive boundary).
 - Integration test with trivial model on known data → expected PnL.
 - Buy-and-hold baseline as a floor.
-- Fee sensitivity sweep: `fee_rate ∈ {0, 0.00015, 0.0003}`.
+- Fee sensitivity sweep: `fee_rate ∈ {0, 0.0002, 0.0004}`.
 
 ## 7. Metrics
 

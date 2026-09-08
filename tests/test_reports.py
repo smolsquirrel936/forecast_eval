@@ -344,9 +344,14 @@ def test_summary_renders_annual_returns_rows_as_percentages():
     assert "<h3>Annual returns (by calendar year of exit)</h3>" in html
     assert html.index("Trading metrics") < html.index("Annual returns")
     assert "<th>year</th>" in html
-    # 3 decimals, comma-grouped digits — this table's convention (fmt_annual_value)
-    assert "+2.000%" in html and "-0.980%" in html
-    assert "+1,234.568" in html and "-9.877" in html
+    # Signed columns: sign parked in a fixed column, magnitude right-justified
+    # to the column's widest value (3 decimals, comma-grouped for currency).
+    # "9.877" pads against "1,234.568" (9 wide) -> 4 pad spaces + 1 separator.
+    assert "+ 2.000%" in html and "- 0.980%" in html
+    assert "+ 1,234.568" in html and "-     9.877" in html
+    # Equal-length cells are the alignment invariant itself: same length under
+    # right alignment puts every sign in the same column.
+    assert len("+ 1,234.568") == len("-     9.877")
     # integer-valued columns stay literal: the year must not be grouped into 2,022
     assert ">2022<" in html
 
@@ -374,13 +379,81 @@ def test_summary_skips_the_trades_record_list():
     assert "records" not in html
 
 
-def test_summary_renders_settings_including_command():
+def test_summary_renders_settings_with_command_as_the_last_row():
+    # Tech: pass settings with `command` as the last key, then compare the
+    #       position of the final <tr> with the command row's own <tr>.
+    # Why:  real_data appends `command` last so it lands at the bottom of the
+    #       Settings section — after every knob the run used — where a reader
+    #       who wants to re-run it has just read them all. The renderer
+    #       preserves mapping order, so this pins the contract both sides rely
+    #       on; equal rindex positions mean the command row IS the last row.
     html = _summary_sections_html(
-        {"command": "python -m forecast_eval.real_data --n-bars 10",
-         "point_value": 200.0}, None, None,
+        {"point_value": 200.0,
+         "data": r"\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_day.csv",
+         "command": "uv run python -m forecast_eval.real_data --n-bars 10"},
+        None, None,
     )
     assert "<h2>Settings</h2>" in html
-    assert "python -m forecast_eval.real_data --n-bars 10" in html
+    assert "uv run python -m forecast_eval.real_data --n-bars 10" in html
+    assert html.rindex("<tr>") == html.rindex("<tr><td class='k'>command</td>")
+    # Tech: the cells of the left-aligned fields (_LEFT_ALIGN_KEYS — command
+    #       and the data path) are tagged with their own class and, like every
+    #       value cell, wrap the value in the width-limiting div.
+    # Why:  the tag is what the stylesheet keys on to left-align just the long
+    #       path-like fields (their wrapped lines would read bottom-up under
+    #       the column's numeric right-alignment), and the div is the box
+    #       max-width actually binds to — a table cell in auto layout ignores
+    #       it. Numeric settings stay plain `v` cells.
+    assert "<td class='v left'><div>uv run python -m" in html
+    assert "<td class='v left'><div>\\\\DESKTOP-SQUIRRE" in html
+    assert "<td class='v'><div>+200.000000</div>" in html
+
+
+@pytest.mark.skipif(not _HAS_PLOTLY, reason="plotly not installed")
+def test_generate_report_caps_the_settings_value_column(tmp_path):
+    """Settings' value column is capped at 50ch: the ~150-char command wraps
+    inside the cap instead of stretching the page, and the left-aligned
+    fields' (command, data) lines read left-to-right. The cap and the wrap
+    rule live in the stylesheet the report embeds — removing either regresses
+    to the one-line command blowing out the page width."""
+    d = tmp_path / "run"
+    _write_bundle(d, params={"command": "x" * 80, "point_value": 200.0})
+    paths = generate_report(d)
+    html = paths["html"].read_text(encoding="utf-8")
+    assert "table.kv td.v div{max-width:50ch;overflow-wrap:anywhere;}" in html
+    assert "table.kv td.v.left{text-align:left;}" in html
+
+
+# The producer of that row: real_data records the invocation as a command the
+# reader can paste back. The quoting is the whole contract — an unquoted space
+# or backslash splits into two flags (or a mangled path) on re-run.
+
+def test_command_string_quotes_a_flag_value_containing_spaces():
+    from forecast_eval.real_data import _command_string
+    cmd = _command_string(["--data", r"\\srv\share\my data.csv", "--precompute"])
+    assert cmd == (
+        "uv run python -m forecast_eval.real_data "
+        r"--data '\\srv\share\my data.csv' --precompute"
+    )
+
+
+def test_command_string_quotes_a_backslash_path():
+    """shlex treats backslashes as unsafe, so a UNC path is single-quoted —
+    which pastes back correctly in both PowerShell and POSIX shells."""
+    from forecast_eval.real_data import _command_string
+    cmd = _command_string(
+        ["--data", r"\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_night.csv"])
+    assert cmd == (
+        "uv run python -m forecast_eval.real_data "
+        r"--data '\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_night.csv'"
+    )
+
+
+def test_command_string_leaves_plain_flags_untouched():
+    from forecast_eval.real_data import _command_string
+    cmd = _command_string(["--precompute", "--lookback-frac", "0.5"])
+    assert cmd == ("uv run python -m forecast_eval.real_data "
+                   "--precompute --lookback-frac 0.5")
 
 
 # -------- generate_report ----------------------------------------------------
@@ -424,6 +497,38 @@ def test_generate_report_defaults_point_value_for_older_bundles(tmp_path):
     paths = generate_report(d)
     if _HAS_PLOTLY:
         assert "currency @ 200" in paths["html"].read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(not _HAS_PLOTLY, reason="plotly not installed")
+def test_generate_report_pins_annual_column_widths(tmp_path):
+    """The annual table's columns are pinned per user spec — 15ch each, 20ch
+    for net_pnl_currency (its widest realistic value '+ 16,427,166.000' is
+    17ch, which a 15ch cap would clip) — instead of stretching to the page
+    width. The td cells must also stay monospace with white-space:pre, or the
+    pad spaces that align the signs collapse."""
+    d = tmp_path / "run"
+    _write_bundle(d)
+    paths = generate_report(d, metrics={
+        "annual_returns": {"rows": [
+            {"year": 2022, "rate_of_return": 0.02,
+             "net_pnl_currency": 4000.0, "partial_year": True},
+        ]},
+    })
+    html = paths["html"].read_text(encoding="utf-8")
+    assert "<table class='annual'>" in html
+    assert "<th>year</th>" in html
+    # No width:100% on the table rule — the page-width stretch is exactly what
+    # was removed. (The document as a whole still contains width:100% inside
+    # plotly's inline embeds, so the check is the rule itself, not the file.)
+    assert "table.annual{border-collapse:collapse;margin:6px 0 18px;}" in html
+    # Per-column widths: 15/15/20/15 by position (year, rate, currency, flag).
+    assert "table.annual td:nth-child(1){width:15ch;}" in html
+    assert "table.annual td:nth-child(2){width:15ch;}" in html
+    assert "table.annual td:nth-child(3){width:20ch;}" in html
+    assert "table.annual td:nth-child(4){width:15ch;}" in html
+    # Right-aligned columns, monospace + pre cells for the sign alignment.
+    assert "text-align:right" in html
+    assert "font-family:monospace" in html and "white-space:pre" in html
 
 
 def test_generate_report_survives_a_malformed_params_file(tmp_path):

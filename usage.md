@@ -157,7 +157,7 @@ Key CLI flags (see `--help` for the full list):
 | `--full-confidence-prob` | 0.9 | Where conviction `strength` saturates |
 | `--max-aggression-ticks` | None | Aggression ceiling for confidence-scaled offset |
 | `--max-position` | 1 | Max contracts for confidence-scaled sizing |
-| `--fee-rate` | 0.00015 | Per-side rate |
+| `--fee-rate` | 0.0002 | Per-side rate |
 | `--forced-close` | False | Flatten at DAY↔NIGHT boundaries |
 | `--precompute` | False | Batch all forecasts on the GPU, then replay |
 | `--output-dir` | (auto) | Defaults to `outputs/real_data_<ts>/` |
@@ -285,7 +285,7 @@ res = run_backtest(
     forecaster=MyForecaster(...),
     emitter=MyEmitter(...),
     exit_rule=MyExitRule(...),
-    tick_size=1.0, aggression_ticks=3, fee_rate=0.00015,
+    tick_size=1.0, aggression_ticks=3, fee_rate=0.0002,
     forced_close_on_session_end=True,
 )
 ```
@@ -306,7 +306,7 @@ print(metrics["trading"])      # round-trip Sharpe/Sortino, fee drag, drawdown
 print(metrics["forecast"])     # hit rate, Spearman IC
 print(metrics["attribution"])  # signal PnL - realized PnL = execution drag
 
-print(buy_and_hold_pnl(ticks, fee_rate=0.00015))
+print(buy_and_hold_pnl(ticks, fee_rate=0.0002))
 ```
 
 When `forced_close=True`, `metrics["trading"]` is replaced by `metrics["trading_day"]` + `metrics["trading_night"]`. See [metrics.py](metrics.py) for what each field means.

@@ -75,7 +75,7 @@ class LiveConfig:
     aggression_ticks: int = 0
     max_position: int = 1
     max_aggression_ticks: Optional[int] = None
-    fee_rate: float = 0.00015
+    fee_rate: float = 0.0002
     contract_multiplier: float = 200.0
     forced_close_on_session_end: bool = False
 

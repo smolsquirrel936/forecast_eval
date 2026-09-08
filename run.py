@@ -116,7 +116,7 @@ def run_backtest(
     *,
     tick_size: float = 1.0,
     aggression_ticks: int = 3,
-    fee_rate: float = 0.00015,
+    fee_rate: float = 0.0002,
     contract_multiplier: float = 200.0,
     max_position: int = 1,
     max_aggression_ticks: Optional[int] = None,
@@ -474,7 +474,7 @@ def demo() -> BacktestResult:
         ticks,
         tick_size=1.0,
         aggression_ticks=3,
-        fee_rate=0.00015,
+        fee_rate=0.0002,
         contract_multiplier=200.0,
         forecast_stride_bars=120,
         warmup_bars=0,
@@ -503,7 +503,7 @@ def demo_naive() -> BacktestResult:
         emitter=em,
         tick_size=1.0,
         aggression_ticks=3,
-        fee_rate=0.00015,
+        fee_rate=0.0002,
     )
 
 
@@ -519,7 +519,7 @@ def demo_stop_loss() -> BacktestResult:
         ticks,
         tick_size=1.0,
         aggression_ticks=3,
-        fee_rate=0.00015,
+        fee_rate=0.0002,
         contract_multiplier=200.0,
         forecast_stride_bars=120,
         warmup_bars=0,
@@ -537,7 +537,7 @@ def demo_forced_close() -> BacktestResult:
         ticks,
         tick_size=1.0,
         aggression_ticks=3,
-        fee_rate=0.00015,
+        fee_rate=0.0002,
         contract_multiplier=200.0,
         forecast_stride_bars=120,
         warmup_bars=0,
@@ -548,14 +548,14 @@ def demo_forced_close() -> BacktestResult:
 def fee_sensitivity_sweep(
     ticks: pd.DataFrame,
     *,
-    fee_rates: Sequence[float] = (0.0, 0.00015, 0.0003),
+    fee_rates: Sequence[float] = (0.0, 0.0002, 0.0004),
     make_emitter: Optional[Any] = None,     # callable -> SignalEmitter
     make_forecaster: Optional[Any] = None,  # callable -> Forecaster
     **kwargs: Any,
 ) -> pd.DataFrame:
     """Run the same backtest at multiple fee rates; return a DataFrame.
 
-    SPEC §6 Phase 5: ``fee_rate ∈ {0, 0.00015, 0.0003}``. Useful to see
+    SPEC §6 Phase 5: ``fee_rate ∈ {0, 0.0002, 0.0004}``. Useful to see
     how much of the strategy's edge survives reasonable execution costs.
 
     Pass ``make_emitter`` / ``make_forecaster`` (callables) when those
@@ -611,7 +611,7 @@ def demo_with_logs_and_metrics(output_dir: "str | Path | None" = None) -> Backte
         "n_synthetic_ticks": 2000,
         "tick_size": 1.0,
         "aggression_ticks": 3,
-        "fee_rate": 0.00015,
+        "fee_rate": 0.0002,
         "contract_multiplier": 200.0,
         "forecast_stride_bars": 120,
         "warmup_bars": 0,

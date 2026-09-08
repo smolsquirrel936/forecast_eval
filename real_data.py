@@ -17,6 +17,7 @@ Quick sanity run on a subset:
 from __future__ import annotations
 
 import argparse
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -32,7 +33,11 @@ import pandas as pd
 from forecast_eval.environment import Environment
 from forecast_eval.forecaster.toto2 import Toto2Forecaster
 from forecast_eval.logging_io import timestamped_run_dir, write_all
-from forecast_eval.metrics import buy_and_hold_pnl, compute_metrics
+from forecast_eval.metrics import (
+    annual_returns,
+    buy_and_hold_pnl,
+    compute_metrics,
+)
 from forecast_eval.run import run_backtest
 from forecast_eval.strategy import wiring as strategy_wiring
 from forecast_eval.strategy.threshold import ThresholdEmitter
@@ -163,6 +168,22 @@ def load_minute_bars(path: Path, n_bars: int | None) -> pd.DataFrame:
     })
 
 
+def _command_string(flags) -> str:
+    """The canonical re-invocation of this CLI with exactly these flags."""
+    # Tech: shlex-join the fixed `uv run python -m forecast_eval.real_data`
+    #       prefix with the run's own flags.
+    # Why:  a run dir is only reproducible if the command that produced it is
+    #       recorded with it; sys.argv[0] under `python -m` is a bare file
+    #       path, so the prefix is rebuilt instead of captured — what AGENTS.md
+    #       says to run is the module idiom, and shlex.join quotes any flag
+    #       value containing spaces (a --data path) so the string pastes back
+    #       as one command. A helper rather than inline code so the quoting
+    #       rule is unit-testable without running a backtest.
+    return shlex.join(
+        ["uv", "run", "python", "-m", "forecast_eval.real_data", *flags]
+    )
+
+
 def main(argv=None) -> int:
     # Tech: CLI like real_data_demo but adds --lookback-frac (warmup split) and
     #       defaults --n-bars to None (use everything).
@@ -248,7 +269,17 @@ def main(argv=None) -> int:
     ap.add_argument("--max-position", type=int, default=argparse.SUPPRESS,
                     help="#7: max contracts for a full-conviction entry; size scales "
                          "with strength up to this. 1 disables sizing.")
-    ap.add_argument("--fee-rate", type=float, default=0.00015)
+    ap.add_argument("--fee-rate", type=float, default=0.0002)
+    # Tech: --capital names the capital base the report's annual rate-of-return
+    #       table divides by, in NT$.
+    # Why:  the backtest models no account equity — PnL exists only in points —
+    #       so a percentage rate is undefined until someone declares the base.
+    #       It defaults to a flat NT$1,000,000 (user decision 2026-09-08) and is
+    #       recorded in params.json, so every rate the report shows carries its
+    #       own denominator next to it rather than an unstated assumption.
+    ap.add_argument("--capital", type=float, default=1_000_000.0,
+                    help="Capital base (NT$) for the report's annual "
+                         "rate-of-return table (default 1e6)")
     ap.add_argument("--forced-close", action="store_true",
                     default=argparse.SUPPRESS,
                     help="Force close at every DAY<->NIGHT session boundary")
@@ -474,12 +505,40 @@ def main(argv=None) -> int:
     #       numbers (Settings + Result summary) — so they must exist before it runs.
     #       The same dicts are reused for the terminal blocks below (no recompute).
     metrics = compute_metrics(res, ticks, forced_close=args.forced_close)
+    # Tech: attach the per-year returns table to the pack, built from the trade
+    #       records the pack itself just produced, at this run's own point
+    #       value and --capital base.
+    # Why:  the report renders `annual_returns` rows (rate as a percentage, by
+    #       calendar year of exit) but compute_metrics has no capital notion by
+    #       design — the CLI is where the base is declared, so only a run that
+    #       made that decision carries the section. 200.0 is the same
+    #       contract_multiplier passed to run_backtest above, so the NT$
+    #       column agrees with the report's currency axis.
+    metrics["annual_returns"] = annual_returns(
+        metrics["trades"]["records"],
+        point_value=200.0,
+        capital=args.capital,
+    )
     bh = buy_and_hold_pnl(ticks, fee_rate=args.fee_rate)
+
+    # Tech: persist the run's params with the invocation command appended as
+    #       the last key, built from the real argv (sys.argv when invoked as a
+    #       CLI, the passed list when main() is called programmatically).
+    # Why:  params.json and the report's Settings table follow dict order, so
+    #       appending `command` here is what pins it to the bottom of the
+    #       Settings section — after every knob the run actually used — where a
+    #       reader who wants to re-run it has just read them all; relying on
+    #       where a late setattr lands would break silently the next time an
+    #       attribute is stamped onto args.
+    params = {
+        **vars(args),
+        "command": _command_string(sys.argv[1:] if argv is None else list(argv)),
+    }
 
     # Tech: persist the artifact bundle (+ charts) and echo paths.
     # Why:  identical to the demo — full reproducibility via params.json and a price
     #       overlay from the source data; metrics/buy_and_hold feed the report tables.
-    paths = write_all(res, args.output_dir, params=vars(args),
+    paths = write_all(res, args.output_dir, params=params,
                       report_data_path=args.data, report_ticks=ticks,
                       metrics=metrics, buy_and_hold=bh, ext=".csv")
     print(f"\nlogs written under {args.output_dir}/")

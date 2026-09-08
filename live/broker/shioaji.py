@@ -86,7 +86,7 @@ class ShioajiBroker(Broker):
         contract: Any,
         *,
         account: Any = None,
-        fee_rate: float = 0.00015,
+        fee_rate: float = 0.0002,
         sj: Any = None,
         rails: Any = None,
         recorder: Any = None,

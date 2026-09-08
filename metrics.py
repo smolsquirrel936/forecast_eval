@@ -326,6 +326,88 @@ def trading_metrics(trades: Sequence[TradeRecord]) -> Dict[str, float]:
 
 
 # ---------------------------------------------------------------------------
+# Annual returns (per calendar year of exit).
+# ---------------------------------------------------------------------------
+
+
+def annual_returns(
+    trade_records: Sequence[Dict],
+    *,
+    point_value: float = 200.0,
+    capital: float = 1_000_000.0,
+) -> Dict[str, list]:
+    """Per-calendar-year net PnL and rate of return, grouped by exit year.
+
+    Takes the dict records ``compute_metrics`` packs under
+    ``trades.records``. ``rate_of_return`` is the year's net PnL in currency
+    (points x ``point_value``) divided by ``capital`` — the backtest models
+    no account equity, so the base is whatever the caller declares it to be.
+    ``partial_year`` marks years the trading window does not fully cover, so
+    their rate must not be read as a whole-year rate.
+    """
+    # Tech: keep only records with a usable exit timestamp and net PnL, and
+    #       return the empty pack when nothing remains.
+    # Why:  a year cannot be assigned without an exit time; the empty pack (not
+    #       a KeyError or NaN row) is what makes the report omit the section
+    #       cleanly on a run that never traded.
+    usable = [r for r in (trade_records or [])
+              if r.get("exit_ts") is not None
+              and r.get("net_pnl_points") is not None]
+    if not usable:
+        return {"rows": []}
+
+    # Tech: parse exits/entries to Timestamps, and collect the net points
+    #       alongside; entries fall back to their own exit when absent.
+    # Why:  pd.Timestamp accepts datetime objects (fresh records) and the
+    #       strings a re-read trades.csv would carry, so the function is safe
+    #       at either call site; the booking convention is "by calendar year
+    #       of exit" because TradeRecord books PnL to the exit, and the year
+    #       follows it.
+    exits = [pd.Timestamp(r["exit_ts"]) for r in usable]
+    entries = [pd.Timestamp(r["exit_ts"] if r.get("entry_ts") is None
+                            else r["entry_ts"]) for r in usable]
+    nets = [float(r["net_pnl_points"]) for r in usable]
+    years = [int(t.year) for t in exits]
+
+    # Tech: the trading window is first entry -> last exit; a year is partial
+    #       unless that window spans its whole [Jan 1, Dec 31] range.
+    # Why:  the first and last years of a run are cut short by the warmup split
+    #       or the tape's end, and their rates would read as full-year
+    #       performance; only a year the window covers completely is one.
+    window_start, window_end = min(entries), max(exits)
+
+    rows: List[Dict] = []
+    for year in sorted(set(years)):
+        # Tech: sum that year's net points, convert to currency, and divide by
+        #       the capital base (NaN when the base is zero, matching the
+        #       denominator-guard convention of trading_metrics).
+        # Why:  points x point_value is the same rescale the report's currency
+        #       axis uses, so the table agrees with the charts; guarding the
+        #       base keeps a bad --capital from crashing a finished run's
+        #       report instead of rendering an undefined rate.
+        net = sum(n for n, y in zip(nets, years) if y == year)
+        currency = net * point_value
+        rate = currency / capital if capital else float("nan")
+        # Tech: the year's last representable instant is the next year's first
+        #       nanosecond minus one, built by int arithmetic on .value rather
+        #       than by subtracting a pd.Timedelta.
+        # Why:  ns math on the underlying int is exact to the calendar boundary,
+        #       and the equivalent Timedelta subtraction fires NumPy's
+        #       generic-unit DeprecationWarning on this stack (pandas 2.3.3) —
+        #       noise the suite already carries enough of.
+        year_start = pd.Timestamp(year=year, month=1, day=1)
+        year_end = pd.Timestamp(pd.Timestamp(year=year + 1, month=1, day=1).value - 1)
+        partial = not (window_start <= year_start and window_end >= year_end)
+        rows.append({
+            "year": year,
+            "rate_of_return": rate,
+            "net_pnl_currency": currency,
+            "partial_year": bool(partial),
+        })
+    return {"rows": rows}
+
+
+# ---------------------------------------------------------------------------
 # Forecast-quality metrics.
 # ---------------------------------------------------------------------------
 
@@ -531,7 +613,7 @@ def signal_attribution_curve(signals: Sequence[Dict]) -> pd.DataFrame:
 def buy_and_hold_pnl(
     tick_df: pd.DataFrame,
     *,
-    fee_rate: float = 0.00015,
+    fee_rate: float = 0.0002,
 ) -> Dict[str, float]:
     """PnL of buying the first tick and selling the last, in price points.
 

@@ -127,7 +127,7 @@ def main(argv=None) -> int:
     ap.add_argument("--context-length", type=int, default=3008)
     ap.add_argument("--horizon-bars", type=int, default=30)
     ap.add_argument("--stride-bars", type=int, default=30)
-    ap.add_argument("--fee-rate", type=float, default=0.00015)
+    ap.add_argument("--fee-rate", type=float, default=0.0002)
     ap.add_argument("--batch-size", default="auto")
     ap.add_argument("--out", type=Path, default=None, help="write the table as CSV")
     args = ap.parse_args(argv)

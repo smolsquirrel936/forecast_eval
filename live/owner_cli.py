@@ -93,7 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--poll-seconds", type=float, default=DEFAULT_POLL_SECONDS)
     ap.add_argument("--reconcile-seconds", type=float,
                     default=DEFAULT_RECONCILE_SECONDS)
-    ap.add_argument("--fee-rate", type=float, default=0.00015)
+    ap.add_argument("--fee-rate", type=float, default=0.0002)
     ap.add_argument("--tick-size", type=float, default=1.0)
     ap.add_argument("--flatten-aggression-ticks", type=int, default=5)
     ap.add_argument("--min-remaining-mb", type=float,

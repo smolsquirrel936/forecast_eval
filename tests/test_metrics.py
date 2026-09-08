@@ -8,6 +8,7 @@ import pytest
 
 from forecast_eval.events import FillEvent, Forecast
 from forecast_eval.metrics import (
+    annual_returns,
     build_trades,
     forecast_quality,
     signal_attribution,
@@ -226,3 +227,82 @@ def test_two_rolls_in_one_trade_are_counted():
     t = build_trades(fills, roll_fills=rolls)[0]
     assert t.rolled == 2
     assert t.pnl_points == 5.0 + 4.0 + 10.0
+
+
+# ---- annual returns (per calendar year of exit) ------------------------------
+#
+# The report renders these rows with rate_of_return as a percentage; the rate
+# is the year's net PnL in currency over the declared capital base — the
+# backtest models no equity, so the base is a caller decision (NT$1e6 default).
+
+def _rec(entry, exit_, net):
+    """One trades-pack record, with just the keys annual_returns reads."""
+    return {"entry_ts": entry, "exit_ts": exit_, "net_pnl_points": net}
+
+
+def test_annual_returns_groups_by_exit_year_and_scales_to_capital():
+    recs = [
+        _rec(datetime(2022, 3, 1, 9, 0), datetime(2022, 6, 1, 9, 0), 25.0),
+        _rec(datetime(2022, 7, 1, 9, 0), datetime(2022, 8, 1, 9, 0), -5.0),
+        _rec(datetime(2023, 1, 5, 9, 0), datetime(2023, 2, 1, 9, 0), 10.0),
+    ]
+    ar = annual_returns(recs, point_value=200.0, capital=1_000_000.0)
+    assert [r["year"] for r in ar["rows"]] == [2022, 2023]
+    # 2022 nets +25 and -5 -> +20 pts -> NT$4,000 -> 0.4% of a million.
+    assert ar["rows"][0]["net_pnl_currency"] == pytest.approx(4000.0)
+    assert ar["rows"][0]["rate_of_return"] == pytest.approx(0.004)
+    # 2023 nets +10 pts -> NT$2,000 -> 0.2%.
+    assert ar["rows"][1]["net_pnl_currency"] == pytest.approx(2000.0)
+    assert ar["rows"][1]["rate_of_return"] == pytest.approx(0.002)
+
+
+def test_annual_returns_marks_window_shortened_years_partial():
+    """Window 2022-06 .. 2023-03: 2022 opens mid-year, 2023 closes mid-year —
+    neither rate is a whole-year rate and the flag must say so."""
+    recs = [
+        _rec(datetime(2022, 6, 1, 9, 0), datetime(2022, 9, 1, 9, 0), 1.0),
+        _rec(datetime(2023, 1, 3, 9, 0), datetime(2023, 3, 1, 9, 0), 2.0),
+    ]
+    rows = annual_returns(recs)["rows"]
+    assert [r["partial_year"] for r in rows] == [True, True]
+
+
+def test_annual_returns_interior_years_of_a_multi_year_run_are_not_partial():
+    """A window spanning 2022 and 2023 completely makes them whole years, while
+    the stub 2024 the last exit lands in stays partial."""
+    recs = [
+        _rec(datetime(2021, 12, 31, 9, 0), datetime(2022, 6, 1, 9, 0), 1.0),
+        _rec(datetime(2022, 6, 1, 9, 0), datetime(2023, 6, 1, 9, 0), 1.0),
+        _rec(datetime(2023, 6, 1, 9, 0), datetime(2024, 1, 2, 9, 0), 1.0),
+    ]
+    rows = annual_returns(recs)["rows"]
+    assert [r["year"] for r in rows] == [2022, 2023, 2024]
+    assert [r["partial_year"] for r in rows] == [False, False, True]
+
+
+def test_annual_returns_exact_calendar_year_boundaries_are_not_partial():
+    """Window exactly [Jan 1 00:00, Dec 31 23:59:59.999999999] spans the year
+    to the nanosecond the boundary arithmetic uses."""
+    recs = [_rec(datetime(2022, 1, 1, 0, 0),
+                 pd.Timestamp("2022-12-31 23:59:59.999999999"), 1.0)]
+    rows = annual_returns(recs)["rows"]
+    assert rows[0]["partial_year"] is False
+
+
+def test_annual_returns_accepts_string_timestamps_from_a_reread_csv():
+    recs = [{"entry_ts": "2022-03-01 09:00:00",
+             "exit_ts": "2022-06-01 09:00:00", "net_pnl_points": 25.0}]
+    rows = annual_returns(recs)["rows"]
+    assert rows[0]["year"] == 2022
+    assert rows[0]["net_pnl_currency"] == pytest.approx(25.0 * 200.0)
+
+
+def test_annual_returns_zero_capital_is_nan_not_a_crash():
+    """A bad --capital must not take down a finished run's report."""
+    recs = [_rec(datetime(2022, 3, 1, 9, 0), datetime(2022, 6, 1, 9, 0), 1.0)]
+    rows = annual_returns(recs, capital=0.0)["rows"]
+    assert math.isnan(rows[0]["rate_of_return"])
+
+
+def test_annual_returns_empty_records_yield_no_rows():
+    assert annual_returns([]) == {"rows": []}
