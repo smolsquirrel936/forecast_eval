@@ -1,19 +1,23 @@
-"""FULL-DAY's strategy wiring — UNTUNED.
+"""FULL-DAY's strategy wiring — band seeded from the Step-0 sweep (iter00).
 
-**These parameters were never measured on the full-day tape.** They are DAY's
-band and probability gate, inherited so the package is runnable and
-parity-checkable, and marked here so nothing mistakes them for provenance.
-There is no ``results.tsv`` row for full-day and this configuration has never
-traded (STRATEGY_SPLIT_PLAN §5 / D5).
+The band (±0.00075) and probability gate (min_prob 0.5) were chosen by
+``tools/band_sweep.py`` on the full-day tape — the worse-half winner of the
+33-cell grid — and committed as ``iter00: seed band from sweep``
+(autoresearch_trading_plan_fullday.md Step 0). They replace DAY's inherited
+values (±0.001 / 0.65), which were never measured on this tape.
 
 The tape to search on is ``dataset/RPT/TXF_RPT_minute_fullday.csv`` —
 2 364 417 bars, 2018-01-02 -> 2026-08-21. NOT the combined
 ``TXF_RPT_minute.csv``, whose first 15.6 % is day-only because TAIFEX had no
-night session before 2017-05-15 (TAPE_REBUILD §2.5).
+night session before 2017-05-15 (TAPE_REBUILD §2.5). The eval split is pinned
+at ``--warmup-bars 5000`` (derived once against this tape on 2026-09-09:
+warmup 2018-01-02 08:45 .. 2018-01-09 02:48, eval 2018-01-09 02:50 ->
+2026-08-21 13:44, 99.8 % of the tape) and never moves for the rest of the loop.
 
-First real work here is ``tools/band_sweep.py`` on that tape, to replace these
-inherited numbers with measured ones. Until then ``live/cli.py`` refuses
-``--config fullday``, and the values below carry no authority.
+Sweep provenance: ``outputs/fullday_band_sweep.csv`` — band 0.00075 / min_prob
+0.5, worst half 1.7818 (h1 1.7818 / h2 5.1219), full-window 6.2573, 206 trades
+(130 h1 / 76 h2). Until a tuned row exists ``live/cli.py`` still refuses
+``--config fullday``.
 """
 from typing import Any, Dict
 
@@ -35,9 +39,16 @@ PARAMS: Dict[str, Any] = {
     "horizon_bars": 30,
     "stride_bars": 30,
     # emitter
-    "buy_threshold": 0.001,
-    "sell_threshold": -0.001,
-    "min_prob": 0.65,
+    # Tech: band ±0.00075 / min_prob 0.5 — the worse-half winner of the Step-0
+    #       band sweep on the full-day tape (outputs/fullday_band_sweep.csv).
+    # Why:  autoresearch_trading_plan_fullday.md Step 0 — the previous values
+    #       (±0.001 / 0.65) were DAY's, copied at the split and never measured
+    #       here; optimising on top of an untested guess would anchor the
+    #       baseline to it. The sweep ranks on the worse half, which rejected
+    #       the trade-almost-never corner full-window Calmar picks.
+    "buy_threshold": 0.00075,
+    "sell_threshold": -0.00075,
+    "min_prob": 0.5,
     "full_confidence_prob": 0.9,
     # trader
     "aggression_ticks": 0,
