@@ -19,7 +19,7 @@ factory. This is the file a search for this session edits first.
 | key | type | meaning |
 |---|---|---|
 | `forecaster` | `Forecaster` | built by [forecaster.py](forecaster.md) |
-| `emitter` | `SignalEmitter` | a fresh [emitter.py](emitter.md) instance |
+| `emitter` | `SignalEmitter` | a fresh [combine.py](combine.md) consensus instance (iter03) |
 | `make_trader` | `callable(Execution) -> Trader` | factory, not an instance — see [trader.py](trader.md) |
 | `exit_rule` | `Optional[ExitRule]` | `None` — this session declares no risk exit |
 | `forced_close` | `bool` | force close at session boundaries |

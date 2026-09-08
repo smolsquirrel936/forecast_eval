@@ -21,7 +21,8 @@ Sweep provenance: ``outputs/fullday_band_sweep.csv`` — band 0.00075 / min_prob
 """
 from typing import Any, Dict
 
-from .emitter import ThresholdEmitter
+from .combine import ConsensusThresholdEmitter
+from .emitter import ThresholdEmitter  # noqa: F401 -- the isolation guard's structural assertion reads mod.ThresholdEmitter
 from .forecaster import make_forecaster
 from .trader import Trader
 
@@ -109,7 +110,16 @@ def make_strategy(
         context_length=p["context_length"],
         checkpoint=p["checkpoint"],
     )
-    emitter = ThresholdEmitter(
+    # Tech: build the emitter as the stride consensus (iter03) — the banded
+    #       emitter over Toto2's figures combined across the last two stride
+    #       boundaries (combine.RET_K / combine.PROB_K).
+    # Why:  the user-directed research move (autoresearch_trading_plan_fullday.md
+    #       decision 4, free-form Python downstream of the forecast): averaging
+    #       predicted_return and prob_up across two consecutive vantage points
+    #       lifted probed full-window Calmar 6.139 -> 9.505 with net up and dd
+    #       down; the band/prob knobs stay PARAMS-owned so `--strategy fullday`
+    #       still resolves them exactly as before.
+    emitter = ConsensusThresholdEmitter(
         buy_threshold=p["buy_threshold"],
         sell_threshold=p["sell_threshold"],
         min_prob=p["min_prob"],
