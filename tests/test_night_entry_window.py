@@ -37,12 +37,15 @@ def test_buy_inside_window_passes():
 
 
 def test_buy_in_the_overnight_stretch_holds():
+    """Overnight BUY candidates HOLD while the depression streak (iter09) has
+    not matured. The fifth consecutive depressed reading matures the depression
+    exit and SELLs -- that path is pinned in test_night_depression.py."""
     em = _emitter()
     assert em.emit(_forecast(12.0, "2026-09-08 21:00:00")) == "HOLD"
     assert em.emit(_forecast(12.0, "2026-09-08 22:00:00")) == "HOLD"
     assert em.emit(_forecast(12.0, "2026-09-08 23:30:00")) == "HOLD"
     assert em.emit(_forecast(12.0, "2026-09-09 03:05:00")) == "HOLD"
-    assert em.emit(_forecast(12.0, "2026-09-09 04:59:00")) == "HOLD"
+    assert em.emit(_forecast(12.0, "2026-09-09 04:59:00")) == "SELL"
 
 
 def test_window_reopens_at_the_session_start():

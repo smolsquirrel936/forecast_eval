@@ -5,19 +5,22 @@
 **Depends on:** [events.py](../../events.md), [forecaster/base.py](../../forecaster/base.md), [strategy/base.py](../base.md)   **Used by:** [strategy/night/wiring.py](wiring.md)
 
 ## Responsibility
-RSI(14) over **5-minute closes**; **BUY at 30, SELL at 84**. No model, no GPU, no
-probability gate, no trend or path confirmation — this replaces the Toto2 banded
-threshold strategy on the backtest path.
+RSI(14) over **5-minute closes**; **BUY at 30, SELL at 84**, plus a **depression
+exit** (iter09) that SELLs once RSI has sat at/below 30 for 5 consecutive
+boundaries. No model, no GPU, no probability gate, no trend or path
+confirmation — this replaces the Toto2 banded threshold strategy on the
+backtest path.
 
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
 | `rsi(closes, period=14)` | function | Wilder's RSI, or `None` when there are fewer than `period+1` closes |
 | `RsiForecaster(...)` | class | resamples `price` to 5-minute closes and reports `payload["rsi"]` |
-| `RsiEmitter(buy_below=30, sell_above=84)` | class | BUY at or below 30 **inside the entry window**, SELL at or above 84 at any hour, else HOLD |
+| `RsiEmitter(buy_below=30, sell_above=84, depression_k=5)` | class | BUY at or below 30 **inside the entry window**, SELL at or above 84 at any hour, and SELL (depression exit) after `depression_k` consecutive oversold boundaries, else HOLD |
 | `make_rsi_forecaster(...)` | function | construction seam; swallows the Toto2-shaped keywords |
 | `RSI_PERIOD` / `RSI_BUY_BELOW` / `RSI_SELL_ABOVE` / `BAR_MINUTES` | constants | 14 / 30.0 (iter06) / 84.0 (iter07) / 5 |
 | `ENTRY_FIRST_HOUR` / `ENTRY_LAST_HOUR` | constants | 15 / 20 (iter08) — BUY candidates outside this clock window HOLD |
+| `DEPRESSION_K` | constant | 5 (iter09) — consecutive oversold boundaries that mature the depression exit |
 
 ## Key points / gotchas
 - **The indicator lives in a Forecaster, and that is not a stylistic choice.** The
@@ -67,7 +70,22 @@ threshold strategy on the backtest path.
   window where the evening's mean-reversion edge has decayed). The gate reads
   the forecast's own timestamp, so it applies identically on the per-call and
   batch paths; pinned by
-  [tests/test_night_entry_window.py](../../../tests/test_night_entry_window.py).
+   [tests/test_night_entry_window.py](../../../tests/test_night_entry_window.py).
+- **The depression exit (night-loop iter09, 2026-09-08).** The 2026 crash-week
+   longs entered on a valid RSI≤30 dip and then the tape kept falling for the
+   whole week; the only exit that reached them was the one-week time-stop, whose
+   cap is a clock cliff. `DEPRESSION_K` (5) makes the emitter SELL once RSI has
+   sat at/below the buy level for 5 consecutive stride boundaries (2.5 h of
+   non-recovery) — a dip that is not recovering is a breakdown, so the long is
+   closed, and while flat the SELL stands in for a BUY (no new knife entry until
+   RSI recovers above the buy level and dips again). V-shaped dips (the winners)
+   cross back above 30 within a couple of boundaries and are untouched. The exit
+   is never windowed, like the overbought SELL. Chosen on a scratch sweep from
+   the iter08 state: k 2/3/4/5/6/7/8 → 2.32/6.67/9.99/12.06/9.35/9.04/9.31 Calmar
+   — a monotonic rise to k=5 that fades as the rule becomes inert against the
+   time-stop. The emitter is now stateful (a counter); `wiring.make_strategy`
+   builds a fresh one per run so the state never leaks across runs. Pinned by
+   [tests/test_night_depression.py](../../../tests/test_night_depression.py).
 - **Backtest and live diverge for this session.** `live/config.py` imports
   `.emitter` and `.forecaster` as *modules* and never calls `make_strategy`, so
   `--config night` still trades the pinned Toto2 threshold strategy. See
