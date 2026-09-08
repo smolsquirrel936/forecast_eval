@@ -1,20 +1,22 @@
-"""FULL-DAY's forecast-figure combination — the stride consensus (iter03).
+"""FULL-DAY's forecast-figure combination — the stride consensus (iter03/iter05).
 
 Toto2 fires one forecast per stride boundary and stride == horizon (30), so
-consecutive forecasts are two vantage points on overlapping windows. This
-module combines Toto2's two headline figures across the last two boundaries
-before the banded emitter's gates see them: ``predicted_return`` and
-``prob_up`` are each averaged over the last ``RET_K`` / ``PROB_K`` boundaries,
-and the averaged figures — not the current boundary's — must clear the band and
-the probability gate.
+consecutive forecasts are successive vantage points on overlapping windows.
+This module combines Toto2's two headline figures across the last few
+boundaries before the banded emitter's gates see them: ``predicted_return``
+and ``prob_up`` are each averaged over the last ``RET_K`` / ``PROB_K``
+boundaries, and the averaged figures — not the current boundary's — must clear
+the band and the probability gate.
 
-Measured on the full-day tape at the swept band (scratch probe, fee 0.0002,
-2026-09-09, replayed off one precompute): combining both figures (K=2/2) lifts
-full-window Calmar 6.139 -> 9.505 with net UP (+31931.5 -> +34422.6) and
-drawdown DOWN (-5201.8 -> -3621.3), n 206 -> 154. Neither figure alone explains
-it: return-only 6.263, prob-only 4.363 (worse than the single-forecast 6.139).
-The gain is the JOINT agreement — the average forecast, not the freshest one,
-has to be strong.
+Provenance (scratch probes on the full-day tape at the swept band, fee 0.0002,
+2026-09-09, replayed off one precompute each). iter03 (two-sided trader): K=1/1
+6.139, **K=2/2 9.505**, K=3/3 7.156, K=4/4 3.844; return-only 6.263, prob-only
+4.363 — the lift needs BOTH figures averaged jointly. iter04 made the trader
+long-only (side split: longs avg +318/trade vs shorts +71, plus the no-flip
+freeing effect), which shifted the consensus optimum deeper: K=2/2 10.971,
+**K=3/3 12.939** (n 77, net +35050, dd -2709, worse half 3.616 — improved on
+both halves), K=4/4 7.089, K=5/5 7.714. The band grid at K=3 keeps 0.00075
+(0.0006/0.0007/0.0008 -> 7.05/8.54/9.99).
 """
 from collections import deque
 from typing import Any, Deque, Optional, Tuple
@@ -23,14 +25,16 @@ from ...events import Forecast
 from .emitter import Direction, ThresholdEmitter
 
 # Tech: how many recent stride boundaries each figure is averaged over.
-# Why:  probed as a family on the full-day tape (2026-09-09) — K=1/1 is the
-#       iter02 baseline (6.139), 2/2 the winner (9.505), 3/3 7.156, 4/4 3.844,
-#       and the split cells (ret-only 6.263, prob-only 4.363) show the lift
-#       needs BOTH figures averaged. Stated as module constants rather than
-#       PARAMS keys because `real_data.py`'s resolver requires a package's
-#       knob set to equal the CLI's twelve exactly.
-RET_K = 2
-PROB_K = 2
+# Why:  probed as a family on the full-day tape (2026-09-09). Two-sided
+#       trader: K=1/1 is the iter02 baseline (6.139), 2/2 the iter03 winner
+#       (9.505), 3/3 7.156, 4/4 3.844. Long-only trader (iter04): 2/2
+#       10.971, 3/3 the iter05 winner (12.939), 4/4 7.089, 5/5 7.714 — and the
+#       split cells (ret-only 6.263, prob-only 4.363 at two-sided) show the
+#       lift needs BOTH figures averaged. Stated as module constants rather
+#       than PARAMS keys because `real_data.py`'s resolver requires a
+#       package's knob set to equal the CLI's twelve exactly.
+RET_K = 3
+PROB_K = 3
 
 
 class ConsensusThresholdEmitter(ThresholdEmitter):
