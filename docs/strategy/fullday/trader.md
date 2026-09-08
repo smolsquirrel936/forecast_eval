@@ -9,6 +9,16 @@ FULL-DAY's own copy of the Trader state machine — the signal → order path, t
 no-flip rule (SPEC §4.2), pending-order lifetime (§4.4), confidence-scaled
 aggression and sizing, and the fill bookkeeping that feeds `ExitRule` queries.
 
+**Diverged at iter04: this Trader is long-only.** A SELL from flat opens no
+short (it still cancels any resting order, §4.4); a SELL while long still
+closes. Grounded in the iter03 side split — 95 longs at +30,220 pts net
+(avg +318) vs 59 shorts at +4,203 (avg +71) on a tape that rose ~5x across the
+eval window — plus the no-flip freeing effect: while short, a BUY only closes,
+so dropping short entries lets BUY crossings open longs immediately. Probed:
+net +34,423 → +37,066, dd -3,621 → -3,379, full-window Calmar 9.505 → 10.971
+(n 154 → 100). The shared Trader and the day/night copies still open shorts;
+the divergence is pinned by [tests/test_fullday_trader.py](../../../tests/test_fullday_trader.py).
+
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
