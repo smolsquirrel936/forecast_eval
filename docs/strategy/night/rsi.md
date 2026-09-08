@@ -14,9 +14,10 @@ threshold strategy on the backtest path.
 |---|---|---|
 | `rsi(closes, period=14)` | function | Wilder's RSI, or `None` when there are fewer than `period+1` closes |
 | `RsiForecaster(...)` | class | resamples `price` to 5-minute closes and reports `payload["rsi"]` |
-| `RsiEmitter(buy_below=20, sell_above=80)` | class | BUY at or below 20, SELL at or above 80, else HOLD |
+| `RsiEmitter(buy_below=20, sell_above=80)` | class | BUY at or below 20 **inside the entry window**, SELL at or above 80 at any hour, else HOLD |
 | `make_rsi_forecaster(...)` | function | construction seam; swallows the Toto2-shaped keywords |
 | `RSI_PERIOD` / `RSI_BUY_BELOW` / `RSI_SELL_ABOVE` / `BAR_MINUTES` | constants | 14 / 20.0 / 80.0 / 5 |
+| `ENTRY_FIRST_HOUR` / `ENTRY_LAST_HOUR` | constants | 15 / 21 — BUY candidates outside this clock window HOLD |
 
 ## Key points / gotchas
 - **The indicator lives in a Forecaster, and that is not a stylistic choice.** The
@@ -41,6 +42,14 @@ threshold strategy on the backtest path.
 - **Empty 5-minute bars are dropped**, mirroring
   `Toto2Forecaster._prepare_context`. A NaN close would propagate through `diff()`
   and void the average gain/loss for `period` bars after a thin stretch.
+- **Entries are windowed to 15:00–21:59 (night-loop iter03, 2026-09-08).** A BUY
+  candidate outside the clock window becomes HOLD; SELL is never windowed, so an
+  exit can always fire overnight. Grounded in iter02's entry-hour split:
+  +20,733 pts for 15:00–21:59 vs -9,891 pts for 22:00–04:59 — the thin globex
+  stretch makes 5-minute RSI dips that keep falling. The gate reads the
+  forecast's own timestamp, so it applies identically on the per-call and batch
+  paths; pinned by
+  [tests/test_night_entry_window.py](../../../tests/test_night_entry_window.py).
 - **Backtest and live diverge for this session.** `live/config.py` imports
   `.emitter` and `.forecaster` as *modules* and never calls `make_strategy`, so
   `--config night` still trades the pinned Toto2 threshold strategy. See

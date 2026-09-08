@@ -147,7 +147,14 @@ def test_the_payload_carries_no_predicted_return(mod):
 # ---- the emitter -----------------------------------------------------------
 
 def _fc(value):
-    return Forecast(timestamp=None, horizon_bars=30,
+    # Tech: the forecast is stamped at 16:00, inside night's iter03 entry
+    #       window (ENTRY_FIRST_HOUR 15 .. ENTRY_LAST_HOUR 21).
+    # Why:  night's RsiEmitter windows BUY candidates by the forecast's own
+    #       clock hour; day's copy ignores the timestamp entirely. One fixture
+    #       therefore serves both packages, and only the deliberate night
+    #       divergence shows up in the expectations, not in the fixture.
+    return Forecast(timestamp=pd.Timestamp("2026-09-07 16:00"),
+                    horizon_bars=30,
                     payload={"rsi": value, "last_price": 100.0})
 
 

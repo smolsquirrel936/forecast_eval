@@ -42,6 +42,16 @@ RSI_BUY_BELOW = 20.0            # oversold -> BUY
 RSI_SELL_ABOVE = 80.0           # overbought -> SELL
 BAR_MINUTES = 5
 
+# Tech: the entry window, as local clock hours of the forecast timestamp.
+# Why:  night-loop iter03. iter02's round trips split by entry hour into
+#       +20,733 pts for 15:00-21:59 and -9,891 pts for 22:00-04:59 (36 winners
+#       vs 32 losers spanning 2020-2026, not one disaster trade). The late
+#       stretch is the thin globex tape, where a 5-minute RSI dip is noise
+#       that keeps falling. Entries only -- SELL exits are never windowed, so
+#       a position can always be closed overnight.
+ENTRY_FIRST_HOUR = 15
+ENTRY_LAST_HOUR = 21
+
 # Tech: how many raw rows `forecast()` keeps before resampling.
 # Why:  MEASURED — resampling the whole history-through-t frame made one call
 #       cost 16 ms at 500 k rows and grew linearly, which over the night tape's
@@ -246,7 +256,8 @@ class RsiForecaster(Forecaster):
 
 
 class RsiEmitter(SignalEmitter):
-    """BUY at or below `buy_below`, SELL at or above `sell_above`, else HOLD."""
+    """BUY at or below `buy_below` inside the entry window, SELL at or above
+    `sell_above` at any hour, else HOLD."""
 
     def __init__(
         self,
@@ -279,12 +290,24 @@ class RsiEmitter(SignalEmitter):
         value = payload.get("rsi")
         if value is None:
             return "HOLD"
-        # Tech: oversold buys, overbought sells — mean reversion.
+        # Tech: oversold buys, overbought sells — mean reversion — with the BUY
+        #       candidate windowed to ENTRY_FIRST_HOUR..ENTRY_LAST_HOUR.
         # Why:  the direction is the whole content of the strategy and it is the
         #       opposite of a momentum reading of the same number, so it is worth
         #       being explicit: RSI 20 is a market that has fallen hard, and this
-        #       strategy buys it.
+        #       strategy buys it. The window keeps that dip-buying to the liquid
+        #       15:00-21:59 stretch; a missing timestamp is unreadable, and
+        #       trading the absence of a clock is the same bug as trading the
+        #       absence of a signal. SELL below is NOT windowed: an exit that
+        #       could not fire overnight could strand a position to the next
+        #       entry window, which converts a gate into a new risk.
         if value <= self.buy_below:
+            ts = forecast.timestamp
+            if ts is None:
+                return "HOLD"
+            hour = pd.Timestamp(ts).hour
+            if not (ENTRY_FIRST_HOUR <= hour <= ENTRY_LAST_HOUR):
+                return "HOLD"
             return "BUY"
         if value >= self.sell_above:
             return "SELL"
