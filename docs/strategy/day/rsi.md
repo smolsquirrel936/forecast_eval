@@ -5,20 +5,33 @@
 **Depends on:** [events.py](../../events.md), [forecaster/base.py](../../forecaster/base.md), [strategy/base.py](../base.md)   **Used by:** [strategy/day/wiring.py](wiring.md)
 
 ## Responsibility
-RSI(14) over **5-minute closes**; **BUY at 20, SELL at 80**. No model, no GPU, no
-probability gate, no trend or path confirmation — this replaces the Toto2 banded
-threshold strategy on the backtest path.
+RSI(14) over **5-minute closes**; **BUY at 20, SELL at 80** — with **BUY entries
+gated on regime** (autoresearch `iter05`): the entry only fires when the last
+price sits on or above `REGIME_SMA_BARS` (6 000 one-minute rows ≈ one month of
+day sessions) simple moving average, read from the same history-through-*t*
+frame. No model, no GPU, no probability gate.
 
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
 | `rsi(closes, period=14)` | function | Wilder's RSI, or `None` when there are fewer than `period+1` closes |
-| `RsiForecaster(...)` | class | resamples `price` to 5-minute closes and reports `payload["rsi"]` |
-| `RsiEmitter(buy_below=20, sell_above=80)` | class | BUY at or below 20, SELL at or above 80, else HOLD |
+| `regime_sma(prices, window=6000)` | function | trailing SMA of raw prints, or `None` when fewer than `window` exist |
+| `RsiForecaster(...)` | class | resamples `price` to 5-minute closes; payload carries `rsi`, `last_price`, `regime_sma` |
+| `RsiEmitter(buy_below=20, sell_above=80)` | class | BUY at or below 20 **only above the regime SMA**, SELL at or above 80, else HOLD |
 | `make_rsi_forecaster(...)` | function | construction seam; swallows the Toto2-shaped keywords |
-| `RSI_PERIOD` / `RSI_BUY_BELOW` / `RSI_SELL_ABOVE` / `BAR_MINUTES` | constants | 14 / 20.0 / 80.0 / 5 |
+| `RSI_PERIOD` / `RSI_BUY_BELOW` / `RSI_SELL_ABOVE` / `BAR_MINUTES` / `REGIME_SMA_BARS` | constants | 14 / 20.0 / 80.0 / 5 / 6000 |
 
 ## Key points / gotchas
+- **The regime gate (iter05) vets BUY entries, never the SELL exit.** An
+  oversold print below the one-month SMA is a bear-phase knife-catch — iter02's
+  drawdown was exactly those entries — so it HOLDs. A missing or NaN
+  `regime_sma` also HOLDs: "regime unreadable" is not "regime fine".
+- **The gate makes `--context-length` non-inert for the *non-precompute* mode
+  only.** The batch path (what `--precompute`, the recorded-run mode, always
+  uses) computes the SMA over the full series; a per-call replay hands the
+  forecaster `history_window=context_length` (3008) rows, shorter than the 6
+  000-bar window, so every BUY HOLDs there. Deterministic either way — the
+  tsv row's invocation says which stream ran.
 - **The indicator lives in a Forecaster, and that is not a stylistic choice.** The
   run loop hands the emitter a `Forecast`, never price history, and only at stride
   boundaries — one price every 30 minutes here, which cannot produce a 5-minute

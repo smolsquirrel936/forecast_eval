@@ -1,7 +1,9 @@
 """Plain RSI mean-reversion for the DAY package — no model, no GPU.
 
-RSI(14) over **5-minute closes**; **BUY at 20, SELL at 80**. That is the whole
-strategy: no Toto2, no probability gate, no trend or path confirmation.
+RSI(14) over **5-minute closes**; **BUY at 20, SELL at 80**, with **BUY entries
+gated on a regime filter** (iter05): the entry only fires when the last price
+sits on or above a 6 000-bar (~1 month of day sessions) simple moving average,
+read from the same history-through-*t* frame. No probability gate, no model.
 
 **Why the indicator lives in a Forecaster.** The run loop hands the emitter a
 `Forecast`, never price history, and it only calls it at stride boundaries. An
@@ -42,16 +44,28 @@ RSI_BUY_BELOW = 20.0            # oversold -> BUY
 RSI_SELL_ABOVE = 80.0           # overbought -> SELL
 BAR_MINUTES = 5
 
+# Tech: the regime gate's window, in raw 1-min rows (~294 per day session, so
+#       6000 is ~20 sessions ~ 1 calendar month).
+# Why:  day-loop iter05. iter02's drawdown was concentrated in longs entered
+#       while price sat UNDER its one-month average -- bear-phase knife-catches
+#       (the long-side year buckets for 2020/2022/2025 carried the damage).
+#       Vetoing BUY below the SMA skips those phases; measured on a full-tape
+#       replay of iter02's own boundary stream, the gate took max drawdown
+#       from -4 226 to -1 662 points at the same entry/exit levels. The
+#       window sits on a plateau (4500-12000 all 5.5-7.4), not a spike.
+REGIME_SMA_BARS = 6000
+
 # Tech: how many raw rows `forecast()` keeps before resampling.
 # Why:  MEASURED — resampling the whole history-through-t frame made one call
 #       cost 16 ms at 500 k rows and grew linearly, which over the night tape's
 #       61 633 stride boundaries projected to ~31 minutes against Toto2's 259 s.
 #       Wilder's average is an EWM with alpha=1/period, so the weight of a bar k
 #       back is (1-1/14)^k: at 250 bars that is ~1e-8, far below float noise.
-#       2 500 rows is 500 five-minute bars even with no gaps at all, i.e. double
-#       that margin, and it makes the call O(1) in the length of the run.
+#       The RSI needs only 500 five-minute bars; the regime SMA needs
+#       REGIME_SMA_BARS raw rows, and the tail must cover whichever is larger
+#       so the per-call and batch paths see the same numbers.
 _TAIL_BARS = 500
-_TAIL_ROWS = _TAIL_BARS * BAR_MINUTES
+_TAIL_ROWS = max(_TAIL_BARS * BAR_MINUTES, REGIME_SMA_BARS + 50)
 
 
 def rsi(closes: pd.Series, period: int = RSI_PERIOD) -> Optional[float]:
@@ -139,6 +153,25 @@ def rsi_series(closes: pd.Series, period: int = RSI_PERIOD) -> pd.Series:
     return out.reindex(closes.index)
 
 
+def regime_sma(prices: Any, window: int = REGIME_SMA_BARS) -> Optional[float]:
+    """Simple moving average of the last `window` raw prices, or None.
+
+    The regime gate's reading: the average of the trailing `window` prints
+    through *t*, inclusive of *t*'s own print.
+    """
+    # Tech: rolling mean over the raw 1-min price sequence, read at the final
+    #       row; None when fewer than `window` prices exist.
+    # Why:  a plain SMA is the coarsest regime measure there is, which is the
+    #       point -- the gate should only distinguish "trading above its
+    #       one-month average" from "below it", not shade entries. Returning
+    #       None (not the short average, not the last price) keeps "regime
+    #       unknown" distinct from "regime fine", and the emitter HOLDs on it.
+    s = pd.Series(np.asarray(prices, dtype=float))
+    if len(s) < window:
+        return None
+    return float(s.rolling(window).mean().iloc[-1])
+
+
 class RsiForecaster(Forecaster):
     """Reports RSI over 5-minute closes. Predicts nothing."""
 
@@ -150,19 +183,22 @@ class RsiForecaster(Forecaster):
         forecast_horizon_bars: int,
         period: int = RSI_PERIOD,
         bar_minutes: int = BAR_MINUTES,
+        regime_sma_bars: int = REGIME_SMA_BARS,
     ) -> None:
-        # Tech: the three scheduling attributes the run loop reads, plus the two
+        # Tech: the three scheduling attributes the run loop reads, plus the
         #       indicator settings.
         # Why:  `warmup_bars` and `forecast_stride_bars` are contract, not choice —
         #       `run_backtest` reads them to decide when to ask for a forecast.
         #       `forecast_horizon_bars` is carried so the Forecast is well-formed
         #       and the artifact schema is unchanged, though nothing here predicts
-        #       that far: an indicator has no horizon.
+        #       that far: an indicator has no horizon. `regime_sma_bars` defaults
+        #       to the module constant so a search moves it in one place.
         self.warmup_bars = warmup_bars
         self.forecast_stride_bars = forecast_stride_bars
         self.forecast_horizon_bars = forecast_horizon_bars
         self.period = period
         self.bar_minutes = bar_minutes
+        self.regime_sma_bars = regime_sma_bars
 
     def forecast(self, history_df: pd.DataFrame) -> Forecast:
         # Tech: resample the history-through-t frame's `price` onto `bar_minutes`
@@ -183,17 +219,23 @@ class RsiForecaster(Forecaster):
         ts = history_df["timestamp"]
         last_price = float(prices.iloc[-1]) if len(prices) else None
 
-        # Tech: the payload carries the indicator and the price it was read at,
-        #       and deliberately no `predicted_return`.
+        # Tech: the payload carries the indicator, the price it was read at, and
+        #       the regime average the entry gate compares against — and
+        #       deliberately no `predicted_return`.
         # Why:  `metrics.forecast_quality` scores predicted against realized
         #       return; inventing a number to fill that column would put a
         #       fabricated forecast into `forecasts.csv` and into any comparison
         #       made from it. Absent is honest, and both readers use `.get`.
+        #       The SMA reads the RAW price sequence (not the resampled closes)
+        #       over the same tail, inclusive of t's own print, which is exactly
+        #       the reading the batch path takes at the boundary's own row.
         return Forecast(
             timestamp=pd.to_datetime(ts.iloc[-1]) if len(ts) else None,
             horizon_bars=self.forecast_horizon_bars,
             payload={"rsi": value, "last_price": last_price,
-                     "bars": int(len(closes))},
+                     "bars": int(len(closes)),
+                     "regime_sma": regime_sma(tail["price"],
+                                              self.regime_sma_bars)},
         )
 
     def forecast_series_batch(
@@ -218,6 +260,14 @@ class RsiForecaster(Forecaster):
         values = rsi_series(closes, self.period)
         ts = pd.DatetimeIndex(pd.to_datetime(pd.Series(list(timestamps))))
         prices_arr = np.asarray(prices, dtype=float)
+        # Tech: the regime SMA series over the RAW price sequence, read at each
+        #       boundary's own row (inclusive of that row), in the same one
+        #       causal pass as the RSI.
+        # Why:  rolling() looks only backwards, so the value at b is exactly
+        #       what `regime_sma()` would return on the history-through-b frame
+        #       — the batch/per-call agreement the RSI stream already upholds.
+        sma_arr = (pd.Series(prices_arr)
+                   .rolling(self.regime_sma_bars).mean().to_numpy())
 
         # Tech: for each boundary, the last completed bar strictly before the
         #       boundary's own floored minute.
@@ -236,17 +286,24 @@ class RsiForecaster(Forecaster):
             if i >= 0:
                 v = values.iloc[i]
                 value = None if pd.isna(v) else float(v)
+            sma = sma_arr[b]
             out.append(Forecast(
                 timestamp=ts[b],
                 horizon_bars=self.forecast_horizon_bars,
                 payload={"rsi": value, "last_price": float(prices_arr[b]),
-                         "bars": int(i + 1)},
+                         "bars": int(i + 1),
+                         "regime_sma": None if pd.isna(sma) else float(sma)},
             ))
         return out
 
 
 class RsiEmitter(SignalEmitter):
-    """BUY at or below `buy_below`, SELL at or above `sell_above`, else HOLD."""
+    """BUY at or below `buy_below` (gated on regime), SELL at or above `sell_above`.
+
+    The regime gate (iter05): a BUY candidate only passes when the payload
+    carries a readable `regime_sma` and `last_price` sits on or above it.
+    SELL (the long's exit) is never gated.
+    """
 
     def __init__(
         self,
@@ -279,12 +336,24 @@ class RsiEmitter(SignalEmitter):
         value = payload.get("rsi")
         if value is None:
             return "HOLD"
-        # Tech: oversold buys, overbought sells — mean reversion.
+        # Tech: oversold buys (gated on regime), overbought sells — mean reversion.
         # Why:  the direction is the whole content of the strategy and it is the
         #       opposite of a momentum reading of the same number, so it is worth
         #       being explicit: RSI 20 is a market that has fallen hard, and this
-        #       strategy buys it.
+        #       strategy buys it. The gate then asks ONE question before the
+        #       buy: is the market trading at or above its one-month average?
+        #       Below it, an oversold print is a knife in a bear phase (iter02's
+        #       drawdown was exactly those entries — the 2020/2022/2025 long
+        #       buckets carried the damage); at or above it, a dip is the trade
+        #       this strategy exists for. A missing or NaN SMA means the regime
+        #       is UNREADABLE — the first boundaries after warm-up on a fresh
+        #       series, or a per-call frame shorter than the window — and HOLDs
+        #       rather than guessing.
         if value <= self.buy_below:
+            sma = payload.get("regime_sma")
+            last = payload.get("last_price")
+            if sma is None or pd.isna(sma) or last is None or last < sma:
+                return "HOLD"
             return "BUY"
         if value >= self.sell_above:
             return "SELL"

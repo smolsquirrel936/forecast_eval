@@ -2,7 +2,10 @@
 
 Both session packages hold their own copy, so every behavioural test runs against
 both: a divergence between them is exactly what the split exists to allow, and
-exactly what a shared-code mistake would hide.
+exactly what a shared-code mistake would hide. The one DELIBERATE divergence so
+far: day's emitter regime-gates BUY entries (autoresearch iter05, 2026-09-08);
+its gate semantics are pinned in tests/test_day_regime_gate.py, and the shared
+fixture below carries a gate-passing `regime_sma` that night's copy ignores.
 """
 import numpy as np
 import pandas as pd
@@ -147,8 +150,15 @@ def test_the_payload_carries_no_predicted_return(mod):
 # ---- the emitter -----------------------------------------------------------
 
 def _fc(value):
+    # Tech: the payload carries a regime_sma that passes day's iter05 entry
+    #       gate (last_price 100.0 sits above sma 99.0).
+    # Why:  day's RsiEmitter vets BUY candidates against the regime average;
+    #       night's copy ignores the key entirely. One fixture therefore serves
+    #       both packages, and only the deliberate day divergence shows up in
+    #       the expectations, not in the fixture.
     return Forecast(timestamp=None, horizon_bars=30,
-                    payload={"rsi": value, "last_price": 100.0})
+                    payload={"rsi": value, "last_price": 100.0,
+                             "regime_sma": 99.0})
 
 
 @pytest.mark.parametrize("mod", MODULES, ids=IDS)
