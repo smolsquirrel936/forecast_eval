@@ -11,10 +11,24 @@ buy-and-hold by 9 205 points. The Calmar is earned by a small drawdown.
 """
 from typing import Any, Dict
 
+from ...exits.time_stop import TimeStop
 from .emitter import ThresholdEmitter      # noqa: F401 -- see RSI note below
 from .forecaster import make_forecaster   # noqa: F401 -- see RSI note below
 from .rsi import RsiEmitter, make_rsi_forecaster
 from .trader import Trader
+
+# Tech: the holding cap, in bars (~840 per night session, so 4000 is ~4.8
+#       sessions ~ one calendar week).
+# Why:  night-loop iter05. iter03's drawdown anatomy: the only exits are RSI>=80
+#       or a later opposing signal, so in a decline the losers ride with no exit
+#       at all -- the four disaster longs held 8 to 35 days and carried the max
+#       drawdown (-4 074 / -3 178 / -1 495 / -1 367 points). A one-week cap
+#       bounds that tail; measured on a scratch replay of iter03's own
+#       invocation (validated bit-identical against the harness numbers first),
+#       tstop 4000 took net +12 833 -> +15 623 and dd -4 799 -> -2 791, with
+#       2000/4000/6000/8000 reading 5.57/5.60/5.03/3.50 -- 2000-4000 is a
+#       plateau, 4000 the mid-band cell, not the peak of a spike.
+TIME_STOP_BARS = 4000
 
 # Tech: this session's default knobs — the twelve values `real_data.py`'s
 #       `--strategy` resolves against, keyed by the CLI destination name.
@@ -160,7 +174,14 @@ def make_strategy(
         "forecaster": forecaster,
         "emitter": emitter,
         "make_trader": make_trader,
-        "exit_rule": None,
+        # Tech: the one-week holding cap (see TIME_STOP_BARS above), as a fresh
+        #       TimeStop instance per make_strategy call.
+        # Why:  ExitRule and emitter SELL race per tick — whichever fires first
+        #       closes — so the cap only ever bounds the RSI>=80 exit's blind
+        #       spot (declines where 80 never comes), it does not replace it. A
+        #       fresh instance per call keeps a stateful rule from leaking across
+        #       runs even though TimeStop happens to be stateless.
+        "exit_rule": TimeStop(TIME_STOP_BARS),
         "forced_close": p["forced_close"],
         "params": p,
     }

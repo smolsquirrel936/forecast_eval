@@ -1,7 +1,11 @@
 """Plain RSI mean-reversion for the NIGHT package — no model, no GPU.
 
-RSI(14) over **5-minute closes**; **BUY at 20, SELL at 80**. That is the whole
-strategy: no Toto2, no probability gate, no trend or path confirmation.
+RSI(14) over **5-minute closes**; **BUY at 30, SELL at 84**, with **BUY
+entries clock-windowed** (iter03): the entry only fires inside the
+15:00-20:59 stretch of the night session, and a **depression exit** (iter09)
+SELLs once RSI has sat at/below the buy level for 5 consecutive boundaries —
+a dip that never recovers is a breakdown, not a V. No Toto2, no probability
+gate, no trend or path confirmation.
 
 **Why the indicator lives in a Forecaster.** The run loop hands the emitter a
 `Forecast`, never price history, and it only calls it at stride boundaries. An
@@ -34,13 +38,58 @@ from ..base import SignalEmitter
 
 Direction = Literal["BUY", "SELL", "HOLD"]
 
-# Tech: the strategy's three numbers, as specified.
+# Tech: the strategy's three numbers.
 # Why:  named constants rather than literals buried in the classes, so the search
 #       surface is one obvious block at the top of the file this package owns.
+#       RSI_BUY_BELOW moved 20 -> 30 in night-loop iter06: with the hour window
+#       and the one-week cap in place, a scratch sweep of the buy level read
+#       26/28/30/32/34 -> 5.90/7.03/7.28/5.74/5.91 Calmar -- a hump whose whole
+#       26-34 band beats the incumbent, centred on the textbook oversold line.
+#       Night-session mean reversion pays at the STANDARD dip, not the deep
+#       one: waiting for RSI 20 in a thin tape skips the V-recoveries entirely.
 RSI_PERIOD = 14
-RSI_BUY_BELOW = 20.0            # oversold -> BUY
-RSI_SELL_ABOVE = 80.0           # overbought -> SELL
+RSI_BUY_BELOW = 30.0            # oversold -> BUY (iter06: 20 -> 30)
+# Tech: RSI_SELL_ABOVE moved 80 -> 84 in night-loop iter07.
+# Why:  a scratch sell-level sweep from the iter06 state read
+#       78/80/82/84/85/86/88 -> 5.63/7.28/9.00/8.74/8.65/6.06/4.42 Calmar --
+#       a 82-85 plateau with the fall-off at 86. 84 is the measured interior
+#       cell, not the top edge: at night the thin tape's overbought readings
+#       rarely clear the low 80s, so waiting for a deeper print lets the
+#       winner run while the one-week cap still bounds the tail. Exits only
+#       -- the SELL fires at any hour and is never windowed.
+RSI_SELL_ABOVE = 84.0           # overbought -> SELL (iter07: 80 -> 84)
 BAR_MINUTES = 5
+
+# Tech: the entry window, as local clock hours of the forecast timestamp.
+# Why:  night-loop iter03. iter02's round trips split by entry hour into
+#       +20,733 pts for 15:00-21:59 and -9,891 pts for 22:00-04:59 (36 winners
+#       vs 32 losers spanning 2020-2026, not one disaster trade). The late
+#       stretch is the thin globex tape, where a 5-minute RSI dip is noise
+#       that keeps falling. Entries only -- SELL exits are never windowed, so
+#       a position can always be closed overnight.
+#       ENTRY_LAST_HOUR narrowed 21 -> 20 in iter08: the 21:00-21:59 entries
+#       read net-negative in two consecutive states (iter06: 7.4435 vs 7.2781;
+#       iter07: 9.3767 vs 8.7403, dd identical both times) -- 21:30-22:00
+#       local is the US equities open, a fresh momentum impulse window where
+#       the evening's mean-reversion edge has decayed.
+ENTRY_FIRST_HOUR = 15
+ENTRY_LAST_HOUR = 20
+
+# Tech: the depression exit, in consecutive stride boundaries with RSI <= the
+#       buy level (each boundary is stride_bars=30 min apart, so 5 is 2.5 h).
+# Why:  night-loop iter09. The 2026 crash-week longs entered on a valid RSI<=30
+#       dip and then the tape kept falling for the whole week; the only exit
+#       that reached them was the one-week time-stop, whose cap is a clock
+#       cliff. A dip that has sat at/below the buy level for K consecutive
+#       boundaries is not a V-shaped dip -- it is a breakdown, so the emitter
+#       SELLs (closing the long) and, while flat, stands in for a BUY (no new
+#       knife entry until RSI recovers above the buy level and dips again).
+#       V-shaped dips (the winners) cross back above the buy level within a
+#       couple of boundaries and are untouched. Chosen on a scratch sweep from
+#       the iter08 state: k 2/3/4/5/6/7/8 -> 2.32/6.67/9.99/12.06/9.35/9.04/9.31
+#       Calmar -- a monotonic rise to k=5 (2.5 h of non-recovery) that fades as
+#       the rule becomes inert against the time-stop. Exits only, never windowed.
+DEPRESSION_K = 5
 
 # Tech: how many raw rows `forecast()` keeps before resampling.
 # Why:  MEASURED — resampling the whole history-through-t frame made one call
@@ -246,13 +295,17 @@ class RsiForecaster(Forecaster):
 
 
 class RsiEmitter(SignalEmitter):
-    """BUY at or below `buy_below`, SELL at or above `sell_above`, else HOLD."""
+    """BUY at or below `buy_below` inside the entry window, SELL at or above
+    `sell_above` at any hour, and SELL (the depression exit) once RSI has sat
+    at/below the buy level for `depression_k` consecutive boundaries; else
+    HOLD."""
 
     def __init__(
         self,
         *,
         buy_below: float = RSI_BUY_BELOW,
         sell_above: float = RSI_SELL_ABOVE,
+        depression_k: int = DEPRESSION_K,
     ) -> None:
         # Tech: reject a configuration where the two levels cross or touch.
         # Why:  `buy_below >= sell_above` makes some RSI value both oversold and
@@ -265,26 +318,73 @@ class RsiEmitter(SignalEmitter):
                 f"buy_below ({buy_below}) must be strictly below "
                 f"sell_above ({sell_above})"
             )
+        # Tech: reject a non-positive depression threshold.
+        # Why:  `depression_k <= 0` would SELL on the very first oversold reading,
+        #       round-tripping every dip entry on its entry boundary; failing at
+        #       construction beats a run that exits the instant it enters.
+        if depression_k < 1:
+            raise ValueError(
+                f"depression_k ({depression_k}) must be a positive integer"
+            )
         self.buy_below = buy_below
         self.sell_above = sell_above
+        self.depression_k = depression_k
+        # Tech: the count of consecutive stride boundaries at/below the buy
+        #       level, reset by any reading above it (see `_decide`).
+        # Why:  `wiring.make_strategy` builds a fresh emitter per run, so this
+        #       state never leaks across runs -- the same reason the sweep
+        #       machinery takes factories, not instances.
+        self._depressed = 0
 
     def _decide(self, forecast: Optional[Forecast]) -> Direction:
         # Tech: HOLD on a missing forecast, a non-dict payload, or an RSI of None.
         # Why:  None means "not enough history yet", which is not the same as a
         #       neutral 50 — the first few strides after warm-up have no RSI at
         #       all, and trading them would be trading the absence of a signal.
+        #       A missing reading also breaks the depression streak: holding the
+        #       old count would let a gap in the tape fake a non-recovery.
         if forecast is None:
+            self._depressed = 0
             return "HOLD"
         payload = forecast.payload if isinstance(forecast.payload, dict) else {}
         value = payload.get("rsi")
         if value is None:
+            self._depressed = 0
             return "HOLD"
-        # Tech: oversold buys, overbought sells — mean reversion.
+        # Tech: advance the depression counter on EVERY reading before any
+        #       direction is chosen -- +1 at/below the buy level, reset to 0
+        #       above it.
+        # Why:  the counter must see the same reading that drives the decision,
+        #       so a dip that never recovers reaches the threshold exactly
+        #       `depression_k` boundaries into, and any single recovered reading
+        #       (even an overbought one) breaks the streak and resets it. The
+        #       run loop calls `emit_signal` once per stride boundary, so this
+        #       advances exactly once per boundary.
+        self._depressed = self._depressed + 1 if value <= self.buy_below else 0
+        # Tech: oversold buys, overbought sells — mean reversion — with the BUY
+        #       candidate windowed to ENTRY_FIRST_HOUR..ENTRY_LAST_HOUR, and the
+        #       depression exit (iter09) checked on the oversold branch.
         # Why:  the direction is the whole content of the strategy and it is the
         #       opposite of a momentum reading of the same number, so it is worth
-        #       being explicit: RSI 20 is a market that has fallen hard, and this
-        #       strategy buys it.
+        #       being explicit: RSI 30 is a market that has fallen hard, and this
+        #       strategy buys it. The window keeps that dip-buying to the liquid
+        #       15:00-20:59 stretch; a missing timestamp is unreadable, and
+        #       trading the absence of a clock is the same bug as trading the
+        #       absence of a signal. Both SELLs are NOT windowed: an exit that
+        #       could not fire overnight could strand a position to the next
+        #       entry window, which converts a gate into a new risk. The
+        #       depression SELL closes a long riding a non-recovering dip and,
+        #       while flat, stands in for a BUY -- no new knife entry until RSI
+        #       recovers above the buy level and dips again.
         if value <= self.buy_below:
+            if self._depressed >= self.depression_k:
+                return "SELL"
+            ts = forecast.timestamp
+            if ts is None:
+                return "HOLD"
+            hour = pd.Timestamp(ts).hour
+            if not (ENTRY_FIRST_HOUR <= hour <= ENTRY_LAST_HOUR):
+                return "HOLD"
             return "BUY"
         if value >= self.sell_above:
             return "SELL"

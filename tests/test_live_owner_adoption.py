@@ -27,6 +27,15 @@ TS = pd.Timestamp("2026-09-07 10:00:00")
 NOW = TS.to_pydatetime()
 
 
+# These build a `LiveRuntime`, which assembles from the session package since
+# LIVE_STRATEGY_ROUTING_PLAN D2. `_config()` is night-policy, and night's
+# package now returns a `TimeStop` — which `adopt_position` refuses to adopt
+# against (a bars-held rule cannot measure from a previous process's entry
+# index). These cases are about WHOSE lot is adopted, not about exit rules, so
+# they use the shared cheap strategy the other assembly tests use.
+pytestmark = pytest.mark.usefixtures("cheap_strategy")
+
+
 def _owner_and_clients(tmp_path, api=None):
     api = api or _FakeAPI()
     owner = OwnerProcess(api, _Contract(), directory=tmp_path,
