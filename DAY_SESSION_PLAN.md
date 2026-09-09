@@ -45,9 +45,11 @@ Two further constraints, both measured today and both recorded against §5
 rather than as new steps:
 
 - **The GPU is a shared resource with the NIGHT soak, and every live-CLI run
-  takes it.** `LiveRuntime.__init__` calls `config.build_forecaster()`
-  unconditionally (`live/runtime.py:174`), so a `--broker dryrun` start-up
-  loads the model exactly as a soak does — W6's banner check is GPU work, not
+  takes it.** `LiveRuntime.__init__` constructs the forecaster unconditionally
+  (`config.build_forecaster()` at the time of writing; since 2026-09-09 it comes
+  from the single `strategy.wiring.make_strategy` call — same effect, and it now
+  happens earlier in `__init__`), so a `--broker dryrun` start-up loads the model
+  exactly as a soak does — W6's banner check is GPU work, not
   just W5. (**Corrected 2026-09-01:** W7 turned out *not* to be — it drives
   `LiveLoop` directly with V0's deterministic fake forecaster, as V0 does, so
   it never constructs a `LiveRuntime` and never loads the model. It runs in

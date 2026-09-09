@@ -49,12 +49,20 @@ first live decision, and only the first is obvious.
 | Emitter **deques** | `_trend_confirms` fails **open** below 3 samples — an un-primed restart trades with a risk filter silently disabled | replay historical forecasts through `emit_signal`, discarding results (§2.8) |
 
 ## Resuming into an open position (§2.20)
-**The Trader comes from the config's strategy package** since
-STRATEGY_SPLIT_PLAN S4 — `config.build_trader(execution=self.broker)` rather than
-an inline `Trader(...)`. It reads the same declared fields the inline
-construction did, so both tuned deployments behave identically; what changes is
-that a per-session Trader is now reachable live, by the same route the backtest
-reaches it. See [live/config.py](config.md).
+**The whole strategy comes from the session's package.** Since
+LIVE_STRATEGY_ROUTING_PLAN D2 (2026-09-09) `__init__` calls
+`strategy.wiring.make_strategy(config.strategy_package, warmup_bars=0,
+tick_size=config.tick_size, **strategy_overrides)` **once**, and takes the
+forecaster, emitter, trader factory, `exit_rule` and `forced_close` from the
+returned stack. The resolved knob dict is kept as `self.strategy_params`, which
+is where everything that is a strategy value but not a component now reads from —
+`context_length` for the history window, `max_position` for the rails check.
+
+This replaced three separate `config.build_*` calls. They are gone, along with
+the strategy fields on `LiveConfig` that fed them: live and the backtest now
+reach one factory, so what a live run trades **is** what
+`real_data.py --strategy <session>` backtests, by construction rather than by two
+declarations happening to agree. See [live/config.py](config.md).
 
 Both mirrors — the Trader's and the Portfolio's — start at zero, which is only
 true of a process that starts flat. The strategy holds a **median 4.5 days**, so

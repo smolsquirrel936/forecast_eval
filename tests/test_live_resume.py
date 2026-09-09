@@ -30,6 +30,11 @@ from forecast_eval.live.state import HaltAction
 from .fakes.fake_shioaji import FakePosition, FakeShioaji, make_contract
 from .test_live_runtime import CTX, _bars, _config
 
+# These build a `LiveRuntime`, which now assembles its components from the
+# session package; the fixture stands a cheap deterministic strategy in its
+# place so a short synthetic frame is still a valid context (see conftest).
+pytestmark = pytest.mark.usefixtures("cheap_strategy")
+
 NOW = datetime(2026, 5, 14, 18, 0)
 
 

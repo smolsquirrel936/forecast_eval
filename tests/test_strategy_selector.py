@@ -16,13 +16,14 @@ import argparse
 
 import pytest
 
+from forecast_eval import real_data
 from forecast_eval.real_data import CLI_STRATEGY_DEFAULTS, _resolve_strategy_knobs
 from forecast_eval.strategy import wiring
 
 
-def resolve(strategy=None, **explicit):
+def resolve(strategy=None, param=None, **explicit):
     """Parse-and-resolve, standing in for argparse's SUPPRESS behaviour."""
-    args = argparse.Namespace(strategy=strategy, **explicit)
+    args = argparse.Namespace(strategy=strategy, param=param or [], **explicit)
     origins = _resolve_strategy_knobs(args)
     return args, origins
 
@@ -38,35 +39,92 @@ def test_bare_run_reproduces_the_old_cli_defaults():
 def test_a_named_strategy_supplies_every_knob(session):
     args, origins = resolve(strategy=session)
     declared = wiring.params(session)
-    assert set(declared) == set(CLI_STRATEGY_DEFAULTS)
+    # A package must cover every knob this CLI resolves, and may declare more
+    # (LIVE_STRATEGY_ROUTING_PLAN D6). The two guard directions are pinned
+    # separately below; this one only needs the cover.
+    assert set(CLI_STRATEGY_DEFAULTS) <= set(declared)
     for knob, expected in declared.items():
         assert getattr(args, knob) == expected, knob
         assert origins[knob] == session
 
 
-def test_the_pinned_bands_are_what_the_packages_declare():
-    # Tech: the two tuned deployments' bands and probability gates, asserted
-    #       against `live/config.py`'s pins rather than against literals here.
-    # Why:  gate G1 is a full-tape GPU run and cannot live in the unit suite, but
-    #       *this* is the part of it that can: if a package's band drifts from the
-    #       pin it claims provenance from, the parity run is already lost and this
-    #       fails in a second instead of an hour.
+def test_a_package_may_declare_a_knob_the_cli_has_no_flag_for(monkeypatch):
+    """D6. A search that invents a parameter must be able to put it in `PARAMS`.
+
+    Before this, `strategy/fullday/combine.py` had to hide RET_K/PROB_K as module
+    constants -- so the parameter behind iter03 and iter05 never reached the
+    banner, `params.json` or `results.tsv`. The extra knob resolves from the
+    package, is attributed to it, and lands on `args` like any other.
+    """
+    extended = dict(CLI_STRATEGY_DEFAULTS)
+    extended["ret_k"] = 3
+    monkeypatch.setattr(real_data.strategy_wiring, "params", lambda s: dict(extended))
+
+    args, origins = resolve(strategy="night")
+    assert args.ret_k == 3
+    assert origins["ret_k"] == "night"
+    # ...and the twelve are untouched by the extra one.
+    for knob in CLI_STRATEGY_DEFAULTS:
+        assert origins[knob] == "night"
+
+
+def test_a_typed_param_wins_over_the_package_and_says_so(monkeypatch):
+    """D7. `--param` is the only route to a knob with no flag, so it must beat
+    the package default -- and the banner has to show that it did, because a run
+    carrying a typed knob is not comparable to any `results.tsv` row."""
+    extended = dict(CLI_STRATEGY_DEFAULTS)
+    extended["ret_k"] = 3
+    monkeypatch.setattr(real_data.strategy_wiring, "params", lambda s: dict(extended))
+
+    args, origins = resolve(strategy="night", param=["ret_k=4", "min_prob=0.7"])
+    assert args.ret_k == 4 and origins["ret_k"] == "param"
+    assert args.min_prob == 0.7 and origins["min_prob"] == "param"
+    # An untouched knob still reports the package, not "param".
+    assert origins["buy_threshold"] == "night"
+
+
+def test_param_without_strategy_is_refused():
+    """The bare path exists to reproduce recorded `results.tsv` commands, and it
+    has no package whose PARAMS could type the value."""
+    with pytest.raises(ValueError, match="needs --strategy"):
+        resolve(param=["ret_k=4"])
+
+
+def test_a_package_that_drops_a_cli_knob_still_fails(monkeypatch):
+    """The half of the old equality guard that carried the safety.
+
+    A missing knob would silently fall back to a stale literal, so the run and
+    the recorded row would disagree -- which is the whole failure `live/config.py`
+    exists to prevent. Relaxing to a subset must not relax this direction.
+    """
+    short = dict(CLI_STRATEGY_DEFAULTS)
+    del short["min_prob"]
+    monkeypatch.setattr(real_data.strategy_wiring, "params", lambda s: dict(short))
+
+    with pytest.raises(ValueError, match="missing.*min_prob"):
+        resolve(strategy="night")
+
+
+def test_a_deployment_reads_its_band_from_its_own_package():
+    """What the old drift guard was for, restated for a world with one source.
+
+    This used to assert `params[knob] == PINNED.<knob>` -- a package/pin drift
+    check. `LiveConfig` holds no band any more (LIVE_STRATEGY_ROUTING_PLAN D2),
+    so that drift is not expressible and the old assertion would be comparing a
+    value to itself. What is still worth pinning is that the two deployments
+    resolve to *different* bands, which is what makes them two deployments.
+    """
     from forecast_eval.live.config import PINNED, PINNED_DAY
 
-    night, day = wiring.params("night"), wiring.params("day")
-    for params, cfg in ((night, PINNED), (day, PINNED_DAY)):
-        assert params["buy_threshold"] == cfg.buy_threshold
-        assert params["sell_threshold"] == cfg.sell_threshold
-        assert params["min_prob"] == cfg.min_prob
-        assert params["full_confidence_prob"] == cfg.full_confidence_prob
-        assert params["checkpoint"] == cfg.checkpoint
-        assert params["context_length"] == cfg.context_length
-        assert params["stride_bars"] == cfg.forecast_stride_bars
-        assert params["horizon_bars"] == cfg.forecast_horizon_bars
-        assert params["aggression_ticks"] == cfg.aggression_ticks
-        assert params["max_position"] == cfg.max_position
-        assert params["max_aggression_ticks"] == cfg.max_aggression_ticks
-        assert params["forced_close"] == cfg.forced_close_on_session_end
+    night = wiring.params(PINNED.strategy_package)
+    day = wiring.params(PINNED_DAY.strategy_package)
+    assert night["buy_threshold"] != day["buy_threshold"]
+    assert night["min_prob"] != day["min_prob"]
+    # ...and the model itself was never re-tuned, so these must still agree.
+    assert night["checkpoint"] == day["checkpoint"]
+    assert night["context_length"] == day["context_length"]
+    assert night["stride_bars"] == day["stride_bars"]
+    assert night["horizon_bars"] == day["horizon_bars"]
 
 
 def test_an_explicit_flag_beats_the_strategy_at_its_own_default_value():

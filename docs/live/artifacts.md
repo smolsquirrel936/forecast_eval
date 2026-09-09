@@ -101,7 +101,10 @@ still says what it was trying to be.
 | `ArtifactWriter.write(runtime, *, report, force)` | method | write if something changed; returns paths or `None` |
 | `ArtifactWriter.write_params(params)` | method | `params.json`, at start-up |
 | `ArtifactWriter.summary()` | method | `artifact_writes` / `artifact_failures` |
-| `live_params(config, …)` | function | the `params.json` payload for a live run |
+| `live_params(config, *, strategy_params, …)` | function | the `params.json` payload for a live run; strategy keys come from the run's **resolved** knobs, not from `LiveConfig` (D2) |
+| `strategy_sha(package)` | function | 12-hex sha256 over `strategy/<package>/*.py`, **newlines normalised** |
+| `git_commit()` | function | `git rev-parse --short=12 HEAD`, or `None` when unreadable |
+| `git_dirty()` | function | whether the tree has uncommitted changes — without it the commit misdescribes the run |
 | `MIN_INTERVAL_SECONDS`, `ARTIFACT_EXT` | constants | 60 s · `.csv` |
 
 `write()` is duck-typed on `.loop` (and an optional `.roll_fills`) rather than
@@ -114,3 +117,29 @@ Passed through to `build_trades`, exactly as `real_data.py` passes it. Without
 it a position carried across a contract roll is booked as **two** round trips
 live and **one** in the backtest — a disagreement with nothing to do with
 trading. A test pins it.
+
+
+## Provenance is the record that replaced the gate (Phase 5)
+
+`live/cli.py` no longer refuses an unprovenanced deployment (D1), so `params.json`
+and the recorder's `meta` header carry five fields that say what actually ran:
+
+| key | what it answers |
+|---|---|
+| `strategy_package` | which `strategy/<session>/` built the components |
+| `strategy_sha` | **which content** — catches an uncommitted edit, which a commit hash cannot |
+| `git_commit` | the repo state, `None` if there is no `.git` |
+| `git_dirty` | **whether that commit can be trusted.** The first live run to carry these fields reported `af4be0b` while every live module it executed was modified and unstaged |
+| `strategy_origins` | per knob: the package name, or `"param"` if typed |
+| `strategy_overridden` | one boolean: **is this row comparable to a `results.tsv` row?** |
+
+`strategy_sha` normalises newlines on purpose. `tests/test_strategy_isolation.py`
+pins raw bytes and fails on a Windows checkout purely because `autocrlf=true`
+rewrites line endings — a provenance hash that moves with the checkout records
+the checkout, not the strategy.
+
+These live as their own `meta` fields rather than inside `LiveConfig.describe()`.
+Packing them into that line would have meant extending
+`tools/session_artifacts.py:_DESCRIBE_RE`, which parses it back out of every
+session file already on disk. The rebuild reads the new fields when present and
+yields `None`/`{}` for sessions recorded before they existed.

@@ -45,9 +45,44 @@ from forecast_eval.run import run_backtest
 from forecast_eval.trader import Trader
 
 from forecast_eval.tests.test_live_parity import (
+
+
     FEE_RATE, HISTORY_WINDOW, MULTIPLIER, _assert_identical, _make_forecaster,
     _ticks,
 )
+
+def _emitter_for(cfg):
+    """This deployment's package emitter, banded at the package's own values.
+
+    Deliberately NOT `make_strategy(...)["emitter"]`. These cases are about the
+    live loop's session filtering -- they feed a synthetic Toto2-shaped forecast
+    and assert the two loops reach identical decisions -- and day and night build
+    an RSI strategy from their packages now, which reads different payload keys
+    and would emit nothing at all ("no fills — parity would be trivially true").
+
+    That live and the backtest reach the *same* factory is pinned by
+    `test_live_config.py::test_live_builds_the_package_the_backtest_would_run`;
+    this file pins the session behaviour on top of a strategy that reacts.
+    """
+    from importlib import import_module
+    from forecast_eval.strategy import wiring as _wiring
+    p = _wiring.params(cfg.strategy_package)
+    cls = import_module(
+        f"forecast_eval.strategy.{cfg.strategy_package}.emitter").ThresholdEmitter
+    return cls(buy_threshold=p["buy_threshold"], sell_threshold=p["sell_threshold"],
+               min_prob=p["min_prob"],
+               full_confidence_prob=p["full_confidence_prob"])
+
+
+def _params(cfg):
+    """The strategy knobs this deployment resolves to.
+
+    LIVE_STRATEGY_ROUTING_PLAN D2: `LiveConfig` no longer holds a copy of them --
+    the deployment's `strategy/<session>/` package does, and live builds from
+    there. These assertions kept their meaning; only where they read moved.
+    """
+    from forecast_eval.strategy import wiring as _wiring
+    return _wiring.params(cfg.strategy_package)
 
 
 def _deployment_bars(ticks: pd.DataFrame, policy):
@@ -140,10 +175,10 @@ def test_single_session_deployment_matches_its_backtest(name, mixed_tape):
         f"{name} deployment saw sessions {sorted({e.session for e in events})}"
     )
 
-    trader_kw = dict(aggression_ticks=cfg.aggression_ticks,
-                     max_position=cfg.max_position)
-    live = _run_live_over(events, emitter=cfg.build_emitter(), **trader_kw)
-    back = _run_backtest_over(frame, emitter=cfg.build_emitter(), **trader_kw)
+    trader_kw = dict(aggression_ticks=_params(cfg)["aggression_ticks"],
+                     max_position=_params(cfg)["max_position"])
+    live = _run_live_over(events, emitter=_emitter_for(cfg), **trader_kw)
+    back = _run_backtest_over(frame, emitter=_emitter_for(cfg), **trader_kw)
     _assert_identical(live, back)
 
     # PnL is booked to the deployment's own session and to no other. Both keys
@@ -231,8 +266,8 @@ def test_day_and_night_reach_different_decisions_on_the_same_tape(mixed_tape):
         cfg = config_named(name)
         frame, _agg, _ev = _deployment_bars(mixed_tape, cfg.policy)
         results[name] = _run_backtest_over(
-            frame, emitter=cfg.build_emitter(),
-            aggression_ticks=cfg.aggression_ticks, max_position=cfg.max_position,
+            frame, emitter=_emitter_for(cfg),
+            aggression_ticks=_params(cfg)["aggression_ticks"], max_position=_params(cfg)["max_position"],
         )
     assert results["day"].n_bars != results["night"].n_bars
     assert (results["day"].portfolio.net_pnl()
@@ -261,9 +296,9 @@ def test_parity_fails_when_the_session_filter_is_bypassed(mixed_tape):
                                             config_named("night").policy)
     unfiltered = sorted(day_events + night_events, key=lambda e: e.timestamp)
 
-    live = _run_live_over(unfiltered, emitter=day.build_emitter(),
+    live = _run_live_over(unfiltered, emitter=_emitter_for(day),
                           aggression_ticks=0, max_position=1)
-    back = _run_backtest_over(frame, emitter=day.build_emitter(),
+    back = _run_backtest_over(frame, emitter=_emitter_for(day),
                               aggression_ticks=0, max_position=1)
     with pytest.raises(AssertionError):
         _assert_identical(live, back)
@@ -278,9 +313,9 @@ def test_parity_fails_when_the_deployments_swap_emitters(mixed_tape):
     day, night = config_named("day"), config_named("night")
     frame, _agg, events = _deployment_bars(mixed_tape, day.policy)
 
-    live = _run_live_over(events, emitter=night.build_emitter(),
+    live = _run_live_over(events, emitter=_emitter_for(night),
                           aggression_ticks=0, max_position=1)
-    back = _run_backtest_over(frame, emitter=day.build_emitter(),
+    back = _run_backtest_over(frame, emitter=_emitter_for(day),
                               aggression_ticks=0, max_position=1)
     with pytest.raises(AssertionError):
         _assert_identical(live, back)
@@ -294,9 +329,9 @@ def test_each_deployment_trades_enough_for_parity_to_mean_something(mixed_tape):
     for name in sorted(CONFIGS):
         cfg = config_named(name)
         frame, agg, events = _deployment_bars(mixed_tape, cfg.policy)
-        back = _run_backtest_over(frame, emitter=cfg.build_emitter(),
-                                  aggression_ticks=cfg.aggression_ticks,
-                                  max_position=cfg.max_position)
+        back = _run_backtest_over(frame, emitter=_emitter_for(cfg),
+                                  aggression_ticks=_params(cfg)["aggression_ticks"],
+                                  max_position=_params(cfg)["max_position"])
         seen[name] = (len(events), agg.n_bars_dropped_off_session,
                       back.n_forecasts, len(back.fills))
         assert back.n_forecasts >= 100, f"{name}: only {back.n_forecasts} forecasts"
@@ -306,3 +341,97 @@ def test_each_deployment_trades_enough_for_parity_to_mean_something(mixed_tape):
 
     # DAY is the shorter session, so it must see strictly fewer bars.
     assert seen["day"][0] < seen["night"][0]
+
+
+# ---- the assertion the old suite structurally could not make ----------------
+
+@pytest.mark.parametrize("session", ["night", "day", "fullday"])
+def test_the_backtest_cli_and_live_resolve_the_same_strategy(session):
+    """`real_data.py --strategy X` and a live run of X must be the same strategy.
+
+    This is the defect LIVE_STRATEGY_ROUTING_PLAN was written for, stated as a
+    test. `live/config.py` used to import `.emitter.ThresholdEmitter` **by name**,
+    so a package whose `make_strategy` built anything else was invisible to live —
+    `strategy/fullday/combine.py` carried a whole research loop (Calmar 6.14 →
+    12.94) while being unreachable from a live run, and night/day have built an
+    RSI strategy since `a8ddd85` that live never saw.
+
+    The old parity tests could not catch it: they built **both** sides with
+    `cfg.build_emitter()`, comparing the copy against itself. This compares the
+    two *entry points* — the backtest CLI's knob resolution against the live
+    config's — which is where the two paths actually diverged.
+    """
+    import argparse
+
+    from forecast_eval.live.config import config_named
+    from forecast_eval.real_data import _resolve_strategy_knobs
+    from forecast_eval.strategy import wiring
+
+    # what `real_data.py --strategy <session>` resolves
+    args = argparse.Namespace(strategy=session, param=[])
+    origins = _resolve_strategy_knobs(args)
+    backtest_knobs = {knob: getattr(args, knob) for knob in origins}
+
+    # what a live run of the deployment whose policy maps to that package resolves
+    cfg = next(config_named(n) for n in ("night", "day", "fullday")
+               if config_named(n).strategy_package == session)
+    live_knobs = wiring.make_strategy(cfg.strategy_package, warmup_bars=0,
+                                      tick_size=cfg.tick_size)["params"]
+
+    assert backtest_knobs == live_knobs, (
+        f"{session}: the backtest CLI and a live run disagree about the strategy")
+
+
+@pytest.mark.parametrize("session", ["night", "day", "fullday"])
+def test_live_takes_its_components_from_the_seam_and_nowhere_else(session):
+    """The structural pin. Comparing `make_strategy` against `make_strategy`
+    would be a tautology — it cannot catch a live path that bypasses the seam,
+    which is precisely what the old `build_emitter` did.
+
+    So this asserts the *route*: replace `make_strategy` with a sentinel stack
+    and check that is what a `LiveRuntime` ends up holding. Against the old code
+    it fails — `build_emitter` imported `.emitter.ThresholdEmitter` by name and
+    would have returned a real emitter, not the sentinel.
+    """
+    from forecast_eval.live import runtime as runtime_mod
+    from forecast_eval.live.config import config_named
+    from forecast_eval.live.runtime import LiveRuntime
+    from forecast_eval.strategy import wiring
+
+    cfg = next(config_named(n) for n in ("night", "day", "fullday")
+               if config_named(n).strategy_package == session)
+
+    # Sentinels carry the attributes `LiveRuntime.__init__` reads and nothing
+    # else — identity is what is being asserted, not behaviour.
+    import types as _types
+    sentinel = {
+        "forecaster": _types.SimpleNamespace(
+            forecast_stride_bars=30, forecast_horizon_bars=30,
+            context_length=40, warmup_bars=0, checkpoint="sentinel",
+            bar_freq=None, signal_step="last"),
+        "emitter": _types.SimpleNamespace(trend_filter=False, path_momentum=False),
+        "make_trader": lambda execution: _types.SimpleNamespace(
+            position=0, max_position=1),
+        "exit_rule": None,
+        "forced_close": False,
+        "params": {**wiring.params(session), "context_length": 40},
+    }
+    seen = {}
+
+    def fake_make_strategy(pkg, **kwargs):
+        seen["package"], seen["kwargs"] = pkg, kwargs
+        return sentinel
+
+    original = runtime_mod.strategy_wiring.make_strategy
+    runtime_mod.strategy_wiring.make_strategy = fake_make_strategy
+    try:
+        rt = LiveRuntime(cfg)
+    finally:
+        runtime_mod.strategy_wiring.make_strategy = original
+
+    assert seen["package"] == session, "live must ask for its own package"
+    assert seen["kwargs"]["warmup_bars"] == 0, (
+        "live seeds context via seed_history; a split would delay trading")
+    assert rt.emitter is sentinel["emitter"]
+    assert rt.forecaster is sentinel["forecaster"]
+    assert rt.strategy_params is sentinel["params"]

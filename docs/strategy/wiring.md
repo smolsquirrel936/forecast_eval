@@ -29,6 +29,24 @@ asked for. The old return contract (a flat dict of emitter + trader kwargs) is
 gone; the per-session `make_strategy()` returns objects, including the Trader as
 a **factory** over `Execution`.
 
+**It is now the only construction site — 2026-09-09.** The sentence above about
+an entrypoint nothing called is history twice over: LIVE_STRATEGY_ROUTING_PLAN D2
+pointed [live/runtime.py](../live/runtime.md) at this dispatcher and deleted
+`LiveConfig`'s strategy fields and its three `build_*` factories. So **live and
+the backtest resolve the same knobs through the same function**, and the class of
+defect this page opens by describing — a seam that disagrees with the tuned
+configuration while nothing raises — is no longer expressible, because there is
+only one declaration left.
+
+Two things follow that are worth stating plainly:
+
+- **A package edit is a live change.** Whatever `make_strategy` returns is what a
+  live simtrade of that session trades. `strategy/night` and `strategy/day` build
+  RSI, so that is what they trade live (plan D9).
+- **`**overrides` is a real interface, not a test hook.** `--param KEY=VALUE` on
+  either CLI arrives here, is merged over `PARAMS`, and is rejected by name if the
+  package does not declare it. See [param_override.md](../param_override.md).
+
 ## `forecaster_sha` — the bookkeeping the split owes
 Making the forecaster per-session mutable (STRATEGY_SPLIT_PLAN D3) gives up the
 guarantee the autoresearch loop rested on: that forecasts are a fixed stream, so

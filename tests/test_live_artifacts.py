@@ -24,6 +24,7 @@ from forecast_eval.execution import Execution
 from forecast_eval.live.artifacts import ArtifactWriter, live_params
 from forecast_eval.live.broker.sim import SimBroker
 from forecast_eval.live.config import PINNED
+from forecast_eval.strategy import wiring as strategy_wiring
 from forecast_eval.live.loop import LiveLoop
 from forecast_eval.logging_io import write_all
 from forecast_eval.portfolio import Portfolio
@@ -36,6 +37,15 @@ from forecast_eval.tests.test_live_parity import (
 )
 
 ARTIFACTS = ("fills", "orders", "forecasts", "signals", "trades")
+
+
+def _pinned_params():
+    """The strategy knobs `PINNED` resolves to.
+
+    `live_params` reads them from the run's resolved strategy rather than from
+    `LiveConfig`, which no longer carries a copy (LIVE_STRATEGY_ROUTING_PLAN D2).
+    """
+    return strategy_wiring.params(PINNED.strategy_package)
 
 
 def _emitter():
@@ -75,7 +85,7 @@ def live_dir(tmp_path_factory):
     d = tmp_path_factory.mktemp("live")
     loop = _live_loop(_ticks(n=12_000))
     writer = ArtifactWriter(d)
-    writer.write_params(live_params(PINNED, out_dir=d, broker="dryrun",
+    writer.write_params(live_params(PINNED, strategy_params=_pinned_params(), out_dir=d, broker="dryrun",
                                     warmup_days=30, soak_id="soak_test"))
     assert writer.write(_runtime(loop), force=True) is not None
     return d, loop
@@ -292,7 +302,7 @@ def test_params_json_carries_the_backtests_strategy_keys():
     """`params.json` is what a report reads for its Settings block, and what
     someone diffs when a live run disagrees with the backtest it came from. The
     shared keys have to be spelled the same on both sides."""
-    p = live_params(PINNED, out_dir="outputs/x", broker="shioaji",
+    p = live_params(PINNED, strategy_params=_pinned_params(), out_dir="outputs/x", broker="shioaji",
                     warmup_days=90, soak_id="soak_1")
     for key in ("checkpoint", "context_length", "horizon_bars", "stride_bars",
                 "buy_threshold", "sell_threshold", "aggression_ticks",

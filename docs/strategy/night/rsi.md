@@ -24,10 +24,15 @@ threshold strategy on the backtest path.
   boundaries — one price every 30 minutes here, which cannot produce a 5-minute
   RSI. The Forecaster is the one seam that receives the history-through-*t* frame.
   `RsiForecaster` forecasts nothing; it reports a state of the tape at *t*.
-- **RSI's knobs are module constants, not `PARAMS`.** `real_data.py`'s
-  `_resolve_strategy_knobs` raises unless a package's `PARAMS` keys are *exactly*
-  the CLI's knob set, and `real_data.py` is frozen. Same convention
-  `short_window` / `min_trend_ticks` already follow: edit this file.
+- **RSI's knobs are module constants, not `PARAMS`** — but that is now a choice,
+  not a constraint. `_resolve_strategy_knobs` used to raise unless a package's
+  `PARAMS` keys were *exactly* the CLI's knob set; since 2026-09-09 it requires
+  only that every CLI knob **exists** in `PARAMS`
+  (LIVE_STRATEGY_ROUTING_PLAN D6), so a package may declare extra ones. Moving
+  these into `PARAMS` would make them addressable as `--param <knob>=<value>` at
+  either CLI, and print them in the run banner and `params.json`. Left as module
+  constants for now, the same convention `short_window` / `min_trend_ticks`
+  follow: edit this file.
 - **Wilder smoothing, not a rolling mean** — `ewm(alpha=1/period, adjust=False)`.
   The simple moving average is a different indicator sharing the name and would
   not match any chart this is compared against.
@@ -41,10 +46,13 @@ threshold strategy on the backtest path.
 - **Empty 5-minute bars are dropped**, mirroring
   `Toto2Forecaster._prepare_context`. A NaN close would propagate through `diff()`
   and void the average gain/loss for `period` bars after a thin stretch.
-- **Backtest and live diverge for this session.** `live/config.py` imports
-  `.emitter` and `.forecaster` as *modules* and never calls `make_strategy`, so
-  `--config night` still trades the pinned Toto2 threshold strategy. See
-  [wiring.py](wiring.md).
+- **This is what `--config night` trades live, as of 2026-09-09.** The note here
+  used to say the opposite: that `live/config.py` reached `.emitter`/`.forecaster`
+  as *modules*, never called `make_strategy`, and so live still ran the pinned
+  Toto2 threshold strategy. LIVE_STRATEGY_ROUTING_PLAN D2 ended that — live builds
+  through `make_strategy` now, so **this RSI strategy is the live one**. Accepted
+  knowingly as D9 of that plan; putting night back on Toto2 is an edit to
+  [wiring.py](wiring.md), and it moves live and the backtest together.
 
 ## Related
 [strategy/night/wiring.md](wiring.md) · [strategy/night/emitter.md](emitter.md) · [strategy/night/forecaster.md](forecaster.md) · [tests/test_rsi_strategy.py](../../tests.md)

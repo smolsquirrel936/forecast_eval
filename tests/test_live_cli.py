@@ -18,6 +18,19 @@ from forecast_eval.live.sessions import SessionPolicy
 from forecast_eval.live.state import HaltAction, RailsConfig, SafetyRails
 
 
+def _params(cfg):
+    """The strategy knobs this deployment resolves to.
+
+    LIVE_STRATEGY_ROUTING_PLAN D2: `LiveConfig` no longer holds a copy of them --
+    the deployment's `strategy/<session>/` package does, and live builds from
+    there. These assertions kept their meaning; only where they read moved.
+    """
+    from forecast_eval.strategy import wiring as _wiring
+    return _wiring.params(cfg.strategy_package)
+
+
+
+
 # ---- reaching the live broker takes two deliberate flags (V4) ---------------
 #
 # Through V3 the protection here was structural: `shioaji` was absent from
@@ -249,19 +262,28 @@ def _night_bars(n, policy):
                          "volume": [1] * len(keep)})
 
 
+# `_runtime` below builds a real `LiveRuntime`, which assembles from the
+# session package; the shared fixture stands a cheap banded strategy in its
+# place so a short synthetic frame is a valid context and `trend_filter` --
+# which `PARAMS` does not declare -- stays overridable (see conftest).
+pytestmark = pytest.mark.usefixtures("cheap_strategy")
+
+
 def _runtime(tmp_path, **kw):
     # A *copy* of PINNED, never PINNED itself — it is a module-level frozen
     # singleton, and patching it in place would leak into test_live_config.py.
     # trend_filter is off because these tests are about shutdown reporting, not
     # priming; with it on, a constant-forecast fixture yields only HOLDs and the
-    # priming guard (rightly) refuses to start.
+    # priming guard (rightly) refuses to start. It, the short context and the
+    # stride are strategy knobs now, so they arrive through the override seam
+    # (LIVE_STRATEGY_ROUTING_PLAN D2/D7) rather than as `LiveConfig` fields.
     import dataclasses
-    cfg = dataclasses.replace(PINNED, trend_filter=False, context_length=60,
-                              forecast_stride_bars=5)
-    object.__setattr__(cfg, "build_forecaster", lambda **k: _Cheap(**k))
+    cfg = dataclasses.replace(PINNED)
+    overrides = {"trend_filter": False}
     rt = LiveRuntime(cfg, recorder=Recorder(tmp_path / "r.jsonl",
-                                            simulation=True), **kw)
-    rt.warm_up(_night_bars(cfg.context_length + 20, rt.policy))
+                                            simulation=True),
+                     strategy_overrides=overrides, **kw)
+    rt.warm_up(_night_bars(rt.strategy_params["context_length"] + 20, rt.policy))
     return rt
 
 
@@ -360,8 +382,8 @@ def test_config_flag_selects_the_whole_deployment_not_just_a_policy():
     # the policy moved *and* so did the parameters tuned for it
     assert sorted(night.policy.sessions) == ["NIGHT"]
     assert sorted(day.policy.sessions) == ["DAY"]
-    assert day.buy_threshold != night.buy_threshold
-    assert day.min_prob != night.min_prob
+    assert _params(day)["buy_threshold"] != _params(night)["buy_threshold"]
+    assert _params(day)["min_prob"] != _params(night)["min_prob"]
 
 
 def test_the_run_directory_names_the_deployment():
@@ -510,18 +532,52 @@ def test_every_TUNED_config_trades_exactly_one_session():
         assert len(cfg.policy.sessions) == 1, f"{name} trades {cfg.policy.sessions}"
 
 
-def test_an_untuned_config_is_refused_before_anything_else_runs(capsys):
-    """STRATEGY_SPLIT_PLAN §5/D5 — `fullday`'s band is DAY's by inheritance and
-    was never measured on the full-day tape, so it must not reach a broker.
+def test_an_untuned_config_is_no_longer_refused():
+    """LIVE_STRATEGY_ROUTING_PLAN D1 — the gate that stood here is gone.
 
-    The refusal is checked on `is_tuned`, not on the name, and it happens before
-    the credentials check — so this passes with no environment at all, which is
-    the point: nothing downstream should have to cope with a null provenance."""
-    assert cli.main(["--config", "fullday"]) == 5   # "refused before the first bar"
-    err = capsys.readouterr().err
-    assert "UNTUNED" in err
-    assert "results.tsv" in err, "the refusal should name what is missing"
-    assert "--strategy fullday" in err, "the refusal should name the way to run it"
+    `main` used to return 5 for any config whose `is_tuned` was False, before the
+    alerter or the credentials check. It was removed because the broker it
+    protected is hardcoded `simulation=True` (not a flag), so it guarded an
+    account that cannot lose money while blocking the one workflow simtrade is
+    for: running what the research loop just produced.
+
+    Not asserted by calling `main()` — past this point it makes a run directory
+    and reaches for credentials. What is asserted is that the property survives
+    and still marks the run, which is what replaced the refusal: enforcement
+    became a record.
+    """
+    cfg = config_named("fullday")
+    assert cfg.is_tuned is False
+    assert "UNTUNED" in cfg.describe()
+    assert "calmar=nan" in cfg.describe(), (
+        "tools/session_artifacts.py calls float() on this group; 'None' would raise")
+    # The parser accepts it — there is nothing left to refuse it at.
+    assert cli.build_parser().parse_args(["--strategy", "fullday"]).config == "fullday"
+
+
+def test_strategy_and_config_are_two_spellings_of_one_flag():
+    """D5. They have always selected the same thing; `--config` stays an alias so
+    recorded soak commands keep running."""
+    for spelling in ("--strategy", "--config"):
+        assert cli.build_parser().parse_args([spelling, "day"]).config == "day"
+    assert cli.build_parser().parse_args([]).config == "night"
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["--strategy", "weekend"])
+
+
+def test_param_is_repeatable_and_defaults_empty():
+    """D7. The live CLI carries the same `--param` the backtest does; the values
+    are coerced against the deployment package's PARAMS and merged by
+    `make_strategy`."""
+    assert cli.build_parser().parse_args([]).param == []
+    args = cli.build_parser().parse_args(
+        ["--param", "min_prob=0.6", "--param", "aggression_ticks=1"])
+    assert args.param == ["min_prob=0.6", "aggression_ticks=1"]
+
+    from forecast_eval.param_override import parse_overrides
+    from forecast_eval.strategy import wiring
+    got = parse_overrides(args.param, wiring.params("night"))
+    assert got == {"min_prob": 0.6, "aggression_ticks": 1}
 
 
 def test_the_banner_carries_the_selected_deployments_provenance():

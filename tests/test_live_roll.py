@@ -35,6 +35,11 @@ from forecast_eval.live.roll import (
 )
 from forecast_eval.live.sessions import SessionPolicy
 
+# These build a `LiveRuntime`, which now assembles its components from the
+# session package; the fixture stands a cheap deterministic strategy in its
+# place so a short synthetic frame is still a valid context (see conftest).
+pytestmark = pytest.mark.usefixtures("cheap_strategy")
+
 # The splice rule bound to NIGHT's policy, for the cases whose subject is the
 # rule rather than the deployment. `front_month_at` has required a policy since
 # TAPE_REBUILD_PLAN 5.3 -- an unbound one is what let a DAY run splice its

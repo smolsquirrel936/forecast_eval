@@ -19,6 +19,19 @@ from forecast_eval.strategy.night.emitter import (ThresholdEmitter
                                                   as NightEmitter)
 from forecast_eval.strategy.threshold import ThresholdEmitter
 
+
+def _params(cfg):
+    """The strategy knobs this deployment resolves to.
+
+    LIVE_STRATEGY_ROUTING_PLAN D2: `LiveConfig` no longer holds a copy of them --
+    the deployment's `strategy/<session>/` package does, and live builds from
+    there. These assertions kept their meaning; only where they read moved.
+    """
+    from forecast_eval.strategy import wiring as _wiring
+    return _wiring.params(cfg.strategy_package)
+
+
+
 RESULTS = Path(__file__).resolve().parent.parent / "results.tsv"
 
 
@@ -150,16 +163,16 @@ def test_the_pin_names_the_tape_vintage_it_was_measured_on():
 def test_thresholds_and_min_prob_match_the_recorded_command():
     row = _pinned_row()
     cmd = row["description"]
-    assert _flag(cmd, "--buy-threshold") == pytest.approx(PINNED.buy_threshold)
-    assert _flag(cmd, "--sell-threshold") == pytest.approx(PINNED.sell_threshold)
-    assert _flag(cmd, "--min-prob") == pytest.approx(PINNED.min_prob)
+    assert _flag(cmd, "--buy-threshold") == pytest.approx(_params(PINNED)["buy_threshold"])
+    assert _flag(cmd, "--sell-threshold") == pytest.approx(_params(PINNED)["sell_threshold"])
+    assert _flag(cmd, "--min-prob") == pytest.approx(_params(PINNED)["min_prob"])
 
 
 def test_checkpoint_is_the_tuned_model_not_a_default():
     """Every tuning run used the 1B checkpoint. `Toto2Forecaster` defaults to
     2.5B and `real_data.py` to 313m — either would be a *different model*, not a
     different setting, and neither would raise."""
-    assert PINNED.checkpoint == "Datadog/Toto-2.0-1B"
+    assert _params(PINNED)["checkpoint"] == "Datadog/Toto-2.0-1B"
 
 
 def test_session_is_night_matching_the_tuned_dataset():
@@ -169,65 +182,103 @@ def test_session_is_night_matching_the_tuned_dataset():
 
 def test_risk_shape_matches_the_backtest():
     """These four are what the drawdown figure was measured under."""
-    assert PINNED.aggression_ticks == 0
-    assert PINNED.max_position == 1
-    assert PINNED.max_aggression_ticks is None
-    assert PINNED.forced_close_on_session_end is False
+    assert _params(PINNED)["aggression_ticks"] == 0
+    assert _params(PINNED)["max_position"] == 1
+    assert _params(PINNED)["max_aggression_ticks"] is None
+    assert _params(PINNED)["forced_close"] is False
 
 
 def test_cadence_and_context_match_the_tuned_run():
-    assert PINNED.context_length == 3008
-    assert PINNED.forecast_stride_bars == 30
-    assert PINNED.forecast_horizon_bars == 30
-    assert PINNED.bar_freq is None, "tuning fed raw 1-min bars, no re-aggregation"
+    assert _params(PINNED)["context_length"] == 3008
+    assert _params(PINNED)["stride_bars"] == 30
+    assert _params(PINNED)["horizon_bars"] == 30
 
 
-# ---- the factories can't disagree with the declaration ---------------------
-
-def test_build_emitter_reproduces_every_declared_field():
-    em = PINNED.build_emitter()
-    # The emitter is NIGHT's own copy since the split, not the shared class --
-    # that is what makes retuning DAY's emitter unable to move a NIGHT live run
-    # (STRATEGY_SPLIT_PLAN S1/S4).
-    assert type(em) is NightEmitter
-    assert type(em) is not ThresholdEmitter
-    assert em.buy_threshold == PINNED.buy_threshold
-    assert em.sell_threshold == PINNED.sell_threshold
-    assert em.min_prob == PINNED.min_prob
-    assert em.min_trend_ticks == PINNED.min_trend_ticks
-    assert em.path_momentum == PINNED.path_momentum
-    assert em.trend_filter == PINNED.trend_filter
-    assert em.short_window == PINNED.short_window
+# ---- live and the backtest build the SAME objects --------------------------
+#
+# This replaces the old "the factories can't disagree with the declaration"
+# block. There is no declaration left to disagree with: `LiveConfig` holds no
+# strategy fields, and both paths reach `strategy.wiring.make_strategy`
+# (LIVE_STRATEGY_ROUTING_PLAN D2). What is worth pinning now is that they reach
+# the *same* one -- which is the assertion the old suite could not make, and the
+# reason `strategy/fullday/combine.py` was unreachable from live for a whole
+# research loop while every test passed.
 
 
-def test_build_emitter_returns_a_fresh_stateful_instance_each_call():
-    """ThresholdEmitter carries rolling deques; sharing one across runs silently
-    produces wrong numbers."""
-    a, b = PINNED.build_emitter(), PINNED.build_emitter()
+def _live_stack(cfg, **overrides):
+    """Build a deployment's stack the way `LiveRuntime.__init__` does."""
+    from forecast_eval.strategy import wiring as _wiring
+    return _wiring.make_strategy(cfg.strategy_package, warmup_bars=0,
+                                 tick_size=cfg.tick_size, **overrides)
+
+
+@pytest.mark.parametrize("name", sorted(CONFIGS))
+def test_live_builds_the_package_the_backtest_would_run(name):
+    """The defect this plan closes, stated as a test.
+
+    `live/config.py` used to import `.emitter.ThresholdEmitter` by name, so a
+    package whose `make_strategy` built something else -- a consensus emitter, an
+    RSI strategy -- was invisible to live. Now the same factory serves both, so
+    the classes cannot diverge.
+    """
+    from forecast_eval.strategy import wiring as _wiring
+    cfg = config_named(name)
+    live = _live_stack(cfg)
+    backtest = _wiring.make_strategy(cfg.strategy_package, warmup_bars=0,
+                                     tick_size=cfg.tick_size)
+    assert type(live["emitter"]) is type(backtest["emitter"])
+    assert type(live["forecaster"]) is type(backtest["forecaster"])
+    assert live["params"] == backtest["params"]
+
+
+@pytest.mark.parametrize("name", sorted(CONFIGS))
+def test_the_cli_params_mirror_matches_the_runtimes_resolution(name):
+    """`live/cli.py` writes `params.json` BEFORE login, so a run that never
+    reaches the venue still records what it meant to trade. That means it
+    resolves the knob set itself rather than asking the runtime, and this pins
+    the two resolutions together so the mirror cannot drift from the real one.
+    """
+    cfg = config_named(name)
+    cli_mirror = dict(_params(cfg))
+    assert cli_mirror == _live_stack(cfg)["params"]
+
+
+def test_each_deployment_gets_its_own_packages_emitter():
+    """STRATEGY_SPLIT_PLAN S1/S4 -- retuning DAY's emitter must not be able to
+    move a NIGHT live run, which is only true while the classes are distinct."""
+    night = type(_live_stack(PINNED)["emitter"])
+    day = type(_live_stack(PINNED_DAY)["emitter"])
+    assert night.__module__.startswith("forecast_eval.strategy.night")
+    assert day.__module__.startswith("forecast_eval.strategy.day")
+    assert night is not ThresholdEmitter
+
+
+def test_the_stack_is_a_fresh_stateful_instance_each_call():
+    """Emitters carry rolling deques; sharing one across runs silently produces
+    wrong numbers."""
+    a, b = _live_stack(PINNED)["emitter"], _live_stack(PINNED)["emitter"]
     assert a is not b
-    assert a._short_prices is not b._short_prices
 
 
-def test_build_forecaster_passes_the_pinned_values_through():
-    """Constructing a Toto2Forecaster is cheap and needs no torch — the model
-    loads lazily on the first forecast."""
-    pytest.importorskip("forecast_eval.forecaster.toto2")
-    fc = PINNED.build_forecaster(warmup_bars=3008)
-    assert fc.checkpoint == PINNED.checkpoint
-    assert fc.context_length == PINNED.context_length
-    assert fc.forecast_stride_bars == PINNED.forecast_stride_bars
-    assert fc.forecast_horizon_bars == PINNED.forecast_horizon_bars
-    assert fc.bar_freq == PINNED.bar_freq
-    assert fc.signal_step == PINNED.signal_step
+def test_a_param_override_reaches_the_built_components():
+    """D7 -- `--param` is the only route to a knob with no flag, so it has to
+    survive all the way into the object live trades with."""
+    stack = _live_stack(PINNED, max_position=1, aggression_ticks=3)
+    assert stack["params"]["aggression_ticks"] == 3
+    assert stack["make_trader"](execution=None).aggression_ticks == 3
 
 
 def test_warmup_is_not_pinned_because_it_is_not_a_strategy_property():
     """In the backtest `warmup_bars` is the train/eval split — an experiment
     property. Live it comes from the backfill, so the entry point decides."""
     assert not hasattr(PINNED, "warmup_bars")
-    a = PINNED.build_forecaster(warmup_bars=100)
-    b = PINNED.build_forecaster(warmup_bars=3008)
-    assert a.warmup_bars == 100 and b.warmup_bars == 3008
+    a = _live_stack(PINNED)["forecaster"]
+    from forecast_eval.strategy import wiring as _wiring
+    b = _wiring.make_strategy(PINNED.strategy_package, warmup_bars=3008,
+                              tick_size=PINNED.tick_size)["forecaster"]
+    # `LiveRuntime` passes 0 because the context arrives via `seed_history`; the
+    # backtest passes its train/eval split. Same factory, different run property.
+    assert a.warmup_bars == 0 and b.warmup_bars == 3008
 
 
 def test_warmup_days_default_is_policy_derived_not_a_flat_constant():
@@ -236,22 +287,25 @@ def test_warmup_days_default_is_policy_derived_not_a_flat_constant():
     expected ~4 non-HOLD samples against the 3-sample floor `_check_primed`
     refuses below. Reproduces the pinned run's own numbers exactly."""
     assert PINNED.warmup_days_default() == 30   # unchanged from the old default
+    # The cadence now comes from the DAY package, which declares the same 3008 /
+    # 30 as NIGHT -- so this still isolates the policy's bars-per-session as the
+    # only thing that moved.
     day_cfg = LiveConfig(
         source_commit=PINNED.source_commit, source_calmar=PINNED.source_calmar,
         source_dataset=PINNED.source_dataset, source_note=PINNED.source_note,
-        policy=SessionPolicy.day(), checkpoint=PINNED.checkpoint,
-        context_length=PINNED.context_length,
-        forecast_horizon_bars=PINNED.forecast_horizon_bars,
-        forecast_stride_bars=PINNED.forecast_stride_bars,
+        policy=SessionPolicy.day(),
     )
+    assert (_params(day_cfg)["context_length"], _params(day_cfg)["stride_bars"])         == (_params(PINNED)["context_length"], _params(PINNED)["stride_bars"])
     assert day_cfg.warmup_days_default() == 84   # DAY_SESSION_PLAN quoted ~85
 
 
 # ---- misc -------------------------------------------------------------------
 
 def test_config_is_frozen():
+    # Asserted on a field the config still owns. `wiring.params()` deliberately
+    # returns a fresh copy, so mutating *that* proves nothing about the config.
     with pytest.raises(Exception):
-        PINNED.buy_threshold = 0.1
+        PINNED.tick_size = 0.5
 
 
 def test_describe_carries_provenance_for_the_log_banner():
@@ -267,6 +321,22 @@ def test_describe_carries_provenance_for_the_log_banner():
     assert "Toto-2.0-1B" in text
     assert "NIGHT" in text
 
+
+# ---- why the drift guards below SURVIVED the routing plan --------------------
+#
+# LIVE_STRATEGY_ROUTING_PLAN Phase 6 planned to retire them: they were written
+# when `LiveConfig` held a copy of the strategy, and the plan assumed provenance
+# would go the way the strategy values went.
+#
+# It did not. `source_commit`/`source_calmar` stayed — D1 removed the *gate*, not
+# the record — so these still guard something real and unrelated to the copy:
+# that a pin's CLAIMED research row is the best `keep` row for its session and
+# tape vintage, and that its policy and dataset agree with that row. A pin can
+# still drift from its provenance; what it can no longer do is drift from the
+# strategy, because it no longer states one.
+#
+# Retiring them would have removed the only thing that fails when research finds
+# a better configuration and nobody re-pins.
 
 # ---- results.tsv schema (DAY_SESSION_PLAN W0) --------------------------------
 #
@@ -437,23 +507,23 @@ def test_the_two_deployments_do_not_share_a_tuned_band():
     """W5a, MEASURED. Running NIGHT's band on the day tape is Calmar
     16.3122 -> 0.2671; the two deployments having equal parameters would mean
     one of them is untuned."""
-    assert PINNED_DAY.buy_threshold != PINNED.buy_threshold
-    assert PINNED_DAY.min_prob != PINNED.min_prob
+    assert _params(PINNED_DAY)["buy_threshold"] != _params(PINNED)["buy_threshold"]
+    assert _params(PINNED_DAY)["min_prob"] != _params(PINNED)["min_prob"]
     # ...but the model itself was never re-tuned, so these must still agree
-    assert PINNED_DAY.checkpoint == PINNED.checkpoint
-    assert PINNED_DAY.context_length == PINNED.context_length
-    assert PINNED_DAY.forecast_stride_bars == PINNED.forecast_stride_bars
-    assert PINNED_DAY.forecast_horizon_bars == PINNED.forecast_horizon_bars
+    assert _params(PINNED_DAY)["checkpoint"] == _params(PINNED)["checkpoint"]
+    assert _params(PINNED_DAY)["context_length"] == _params(PINNED)["context_length"]
+    assert _params(PINNED_DAY)["stride_bars"] == _params(PINNED)["stride_bars"]
+    assert _params(PINNED_DAY)["horizon_bars"] == _params(PINNED)["horizon_bars"]
 
 
 def test_day_inherits_the_risk_shape_the_backtest_measured():
     """C8 is open, not silently answered. `forced_close=False` here is the same
     deliberate choice as NIGHT's: median hold is ~4 days on the day tape too, so
     closing at every session end would be a different strategy."""
-    assert PINNED_DAY.aggression_ticks == 0
-    assert PINNED_DAY.max_position == 1
-    assert PINNED_DAY.max_aggression_ticks is None
-    assert PINNED_DAY.forced_close_on_session_end is False
+    assert _params(PINNED_DAY)["aggression_ticks"] == 0
+    assert _params(PINNED_DAY)["max_position"] == 1
+    assert _params(PINNED_DAY)["max_aggression_ticks"] is None
+    assert _params(PINNED_DAY)["forced_close"] is False
 
 
 def test_day_provenance_records_that_it_has_not_earned_a_deployment():
@@ -468,3 +538,76 @@ def test_day_provenance_records_that_it_has_not_earned_a_deployment():
     note = PINNED_DAY.source_note.lower()
     assert "never traded" in note
     assert "buy-and-hold" in note or "buy and hold" in note
+
+
+# ---- Phase 5: provenance is a record, not a gate ----------------------------
+
+def test_describe_renders_the_runs_resolved_knobs_not_the_packages():
+    """The `--param` lie this closes.
+
+    `describe()` goes on the banner AND into the recorder's `meta` header, and it
+    used to read `wiring.params(package)` unconditionally — so an overridden run
+    printed the *declared* band while trading the typed one. Given the resolved
+    knobs it renders those instead; given nothing it still describes the
+    deployment, which is right for every caller that has no run.
+    """
+    declared = _params(PINNED)
+    assert f"min_prob={declared['min_prob']}" in PINNED.describe()
+
+    resolved = {**declared, "min_prob": 0.77, "buy_threshold": 0.002}
+    line = PINNED.describe(resolved)
+    assert "min_prob=0.77" in line and "band=±0.002" in line
+    assert f"min_prob={declared['min_prob']}" not in line
+
+
+def test_describe_keeps_the_format_the_session_parser_depends_on():
+    """`tools/session_artifacts.py:_DESCRIBE_RE` reads this line back out of
+    recorded `meta` headers. Rendering different *values* is fine; a different
+    *shape* would silently stop every rebuilt report from having a Settings
+    block."""
+    from forecast_eval.tools.session_artifacts import _DESCRIBE_RE
+
+    for line in (PINNED.describe(), PINNED.describe(_params(PINNED))):
+        assert _DESCRIBE_RE.match(line), line
+
+
+@pytest.mark.parametrize("name", sorted(CONFIGS))
+def test_the_strategy_sha_identifies_the_package_not_the_checkout(name):
+    """It hashes the package's `.py` files with newlines normalised.
+
+    Deliberately unlike `test_strategy_isolation.py`, which pins raw bytes and
+    fails on this Windows checkout purely because `autocrlf=true` rewrites line
+    endings. A provenance hash that changes with the checkout records the
+    checkout, not the strategy.
+    """
+    from forecast_eval.live.artifacts import strategy_sha
+
+    cfg = config_named(name)
+    sha = strategy_sha(cfg.strategy_package)
+    assert len(sha) == 12 and sha == strategy_sha(cfg.strategy_package)
+    others = {strategy_sha(config_named(n).strategy_package)
+              for n in CONFIGS if n != name}
+    assert sha not in others, "three distinct packages must hash distinctly"
+
+
+def test_params_json_marks_an_overridden_run_as_not_comparable():
+    """Removing the provenance gate (D1) is only defensible if the record is
+    complete. `strategy_overridden` is the one question asked of this file
+    later: is this row comparable to a `results.tsv` row?"""
+    from forecast_eval.live.artifacts import live_params
+
+    pkg = PINNED.strategy_package
+    resolved = {**_params(PINNED), "min_prob": 0.77}
+    origins = {k: (("param" if k == "min_prob" else pkg)) for k in resolved}
+
+    p = live_params(PINNED, strategy_params=resolved, strategy_origins=origins,
+                    out_dir="outputs/x", broker="dryrun")
+    assert p["strategy_overridden"] is True
+    assert p["strategy_origins"]["min_prob"] == "param"
+    assert p["strategy_package"] == pkg and p["strategy_sha"]
+    assert p["min_prob"] == 0.77
+
+    clean = live_params(PINNED, strategy_params=_params(PINNED),
+                        strategy_origins={k: pkg for k in _params(PINNED)},
+                        out_dir="outputs/x", broker="dryrun")
+    assert clean["strategy_overridden"] is False

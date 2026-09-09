@@ -1,12 +1,14 @@
 # [live/config.py](../../live/config.py)
 
-**Role:** The one declared, provenanced configuration a live run trades.
-**Pipeline:** `PINNED` → forecaster · emitter · trader · rails (V3 entry point).
-**Depends on:** [live/sessions.py](sessions.md), [strategy/threshold.py](../strategy/threshold.md)   **Used by:** the live entry point (V3), [tests/test_live_config.py](../tests.md)
+**Role:** A live deployment's identity — which sessions it trades, its provenance, and the run-level values that are not strategy.
+**Pipeline:** `PINNED` → [runtime.py](runtime.md) → `strategy.wiring.make_strategy` → forecaster · emitter · trader · rails.
+**Depends on:** [live/sessions.py](sessions.md), [strategy/wiring.py](../strategy/wiring.md)   **Used by:** the live entry point (V3), [tests/test_live_config.py](../tests.md)
 
 ## Responsibility
-Holds the tuned configuration as **importable code with a source attached**, so a
-live run cannot inherit a default that was never measured.
+Names a deployment and carries its provenance. It **no longer holds strategy
+values** — LIVE_STRATEGY_ROUTING_PLAN D2 moved those to
+`strategy/<session>/wiring.py:PARAMS`, which is now the single source for live
+and the backtest alike.
 
 ## Why it exists
 Before this module the tuned configuration existed only as a *command string* in
@@ -20,42 +22,58 @@ contradicted it, and none of the mismatches raises:
 | `min_prob` | — | `None` | `None` | **0.5** |
 
 The checkpoint is the sharpest: `313m` versus `1B` is a *different model*, not a
-different setting. `wiring.py` is the **autoresearch** seam — its entrypoint no
-longer exists, and the winning run came from `real_data.py` CLI flags — so it is
-not a source of truth for live and is deliberately left untouched.
+different setting.
+
+**That table is history — corrected 2026-09-09.** It described `wiring.py` as an
+autoresearch seam whose entrypoint no longer existed, and concluded it was "not a
+source of truth for live". The opposite now holds: `make_strategy` **is** the
+entrypoint, and it is the *only* source of truth for live. The column can no
+longer disagree with the tuned value, because there is nothing left here for it
+to disagree with. The lesson the table teaches — that a second declaration of a
+strategy value is a defect waiting to happen — is why the fields were deleted.
 
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
-| `LiveConfig(...)` | frozen dataclass | every knob a live run needs, plus provenance |
+| `LiveConfig(...)` | frozen dataclass | provenance, `policy`, and the run-level values that are not strategy (`tick_size`, `fee_rate`, `contract_multiplier`) |
 | `PINNED` / `PINNED_DAY` / `PINNED_FULLDAY` | constants | the three deployments |
 | `CONFIGS` / `config_named(name)` | dict / function | the registry `--config` selects from |
 | `is_tuned` | property | False when `source_commit`/`source_calmar` are None — what `cli.py` refuses on |
 | `strategy_package` | property | `"day"`/`"night"`/`"fullday"`, **derived from the policy** |
-| `build_emitter()` | method | a **fresh** emitter per call, from this deployment's own package |
-| `build_forecaster(*, warmup_bars)` | method | via the package's `make_forecaster`; imports torch lazily |
-| `build_trader(*, execution)` | method | a **fresh** Trader per call, from this deployment's own package |
-| `describe()` | method | one-line banner, provenance first |
+| `describe(params=None)` | method | one-line banner, provenance first. Pass the run's **resolved** knobs and it renders those; omit them and it describes the deployment. Format is fixed — `tools/session_artifacts.py:_DESCRIBE_RE` parses it back out of recorded `meta` headers |
 | `warmup_days_default(*, emitter_prime_boundaries=500)` | method | calendar-day `--warmup-days` default, derived from `policy.bars_per_session()` — NIGHT 30, DAY 84 — DAY_SESSION_PLAN C6 |
 
-## The three-way split (STRATEGY_SPLIT_PLAN S4)
+## No factories here any more (LIVE_STRATEGY_ROUTING_PLAN D2)
 
-The three factories no longer build the shared classes — each returns the class
-its own [strategy package](../strategy/wiring.md) owns, selected by
-`strategy_package`. So retuning DAY's emitter changes what a DAY live run trades
-and touches nothing else.
+`build_emitter`, `build_forecaster` and `build_trader` were **removed on
+2026-09-09**, along with the ~19 strategy fields they read. [runtime.py](runtime.md)
+calls `strategy.wiring.make_strategy(cfg.strategy_package, warmup_bars=0,
+tick_size=cfg.tick_size, **overrides)` once in `__init__` and keeps the resolved
+knobs as `strategy_params`.
 
-`strategy_package` is a **property derived from `policy.sessions`**, not a stored
-field. A stored one could disagree with the policy, and a deployment running one
-session's policy against another session's tuned components is the C2 defect
-`--config` exists to prevent, re-entering one level down.
+**Why they had to go.** `build_emitter` imported `.emitter.ThresholdEmitter` *by
+name*. A package whose `make_strategy` built something else was therefore
+invisible to live — which is not hypothetical: `strategy/fullday/combine.py`'s
+consensus emitter carried an entire research loop (Calmar 6.14 → 12.94) while
+being unreachable from a live run, and `strategy/night` and `strategy/day` have
+built an RSI strategy since `a8ddd85` that live never saw. Worse,
+`build_trader` *did* route through the package, so a live fullday run would have
+been one package's emitter on another's trader.
 
-`build_trader` is new. The Trader used to be constructed inline in
-[runtime.py](runtime.md), which made it the one component a live deployment could
-not swap — so a per-session Trader could exist in the backtest and not live, and
-the two paths would then disagree about what the deployment *is*. `execution` is
-a parameter rather than a field for the same reason `warmup_bars` is: it belongs
-to the run (it is the broker), not to the strategy.
+`tests/test_live_parity_sessions.py` could not catch it: it built **both** sides
+with `cfg.build_emitter()`, comparing the copy against itself. The replacement
+assertion is
+`test_live_config.py::test_live_builds_the_package_the_backtest_would_run`.
+
+`strategy_package` survives, and is still a **property derived from
+`policy.sessions`** rather than a stored field. A stored one could disagree with
+the policy, and a deployment running one session's policy against another
+session's components is the C2 defect `--config` exists to prevent, re-entering
+one level down.
+
+> **Consequence, live today:** night and day deployments now trade RSI, because
+> that is what their packages build. Accepted deliberately as D9 of the routing
+> plan; restoring Toto2 is an edit to `strategy/<session>/wiring.py`.
 
 ## `PINNED_FULLDAY` is registered and UNTUNED
 
@@ -103,9 +121,9 @@ explicitly rather than by default.
 ## Key points / gotchas
 - **`warmup_bars` is *not* pinned**, and that is intentional. In the backtest it
   is the train/eval split — a property of that experiment. Live, warm-up comes
-  from the [backfill](backfill.md), so the entry point decides. `build_forecaster`
+  from the [backfill](backfill.md), so the entry point decides. `make_strategy`
   takes it as an argument.
-- **`build_emitter()` returns a fresh instance every call.** `ThresholdEmitter`
+- **`make_strategy()` returns a fresh instance every call.** `ThresholdEmitter`
   carries rolling deques; sharing one across runs silently produces wrong numbers.
 - **The drift guard is the point.** [tests/test_live_config.py](../tests.md)
   re-parses `results.tsv` and asserts the pinned thresholds, `min_prob` and Calmar

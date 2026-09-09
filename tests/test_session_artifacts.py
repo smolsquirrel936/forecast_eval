@@ -18,6 +18,8 @@ import json
 import pandas as pd
 import pytest
 
+from forecast_eval.strategy import wiring
+
 from forecast_eval.tools.session_artifacts import (VENUE_UTC_OFFSET, check_alignment,
                                                    main, read_records, rebuild)
 
@@ -192,9 +194,24 @@ def test_day_and_night_ledgers_stay_separate_when_seeding(tmp_path):
 
 
 def _meta(cfg, **kw):
+    """A `meta` header shaped the way `live/cli.py` writes one.
+
+    Since LIVE_STRATEGY_ROUTING_PLAN Phase 5 that is the `config` summary *plus*
+    the provenance fields the summary line cannot carry — the package, its
+    content sha, the repo commit and the per-knob origins. They live beside the
+    line rather than inside it so `_DESCRIBE_RE` keeps parsing sessions recorded
+    before they existed.
+    """
+    from forecast_eval.live import artifacts
     from forecast_eval.tools.session_artifacts import params_from_meta
     from pathlib import Path
-    rec = {"event": "meta", "config": cfg.describe(), "broker": "shioaji"}
+    pkg = cfg.strategy_package
+    rec = {"event": "meta", "config": cfg.describe(), "broker": "shioaji",
+           "strategy_package": pkg,
+           "strategy_sha": artifacts.strategy_sha(pkg),
+           "git_commit": artifacts.git_commit(),
+           "git_dirty": artifacts.git_dirty(),
+           "strategy_origins": {k: pkg for k in wiring.params(pkg)}}
     rec.update(kw)
     return params_from_meta([rec], Path("outputs/live_x"))
 
@@ -210,7 +227,10 @@ def test_the_rebuilt_params_are_the_live_ones_key_for_key(name):
     from pathlib import Path
 
     cfg = config_named(name)
-    live = live_params(cfg, out_dir=Path("outputs/live_x"), broker="shioaji",
+    pkg = cfg.strategy_package
+    live = live_params(cfg, strategy_params=wiring.params(pkg),
+                       strategy_origins={k: pkg for k in wiring.params(pkg)},
+                       out_dir=Path("outputs/live_x"), broker="shioaji",
                        warmup_days=30, soak_id="soak_test")
     got = _meta(cfg, soak_id="soak_test")
 

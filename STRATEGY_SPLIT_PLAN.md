@@ -1,5 +1,27 @@
 # STRATEGY_SPLIT_PLAN.md — three independent strategy pipelines (day / night / full-day)
 
+> ### ⚠ PARTLY SUPERSEDED 2026-09-09 — `LIVE_STRATEGY_ROUTING_PLAN.md`
+>
+> **§2.3's three `LiveConfig` factories no longer exist.** `build_emitter`,
+> `build_forecaster` and `build_trader` were removed, together with the ~19
+> strategy fields they read: `live/runtime.py` now builds the whole stack through
+> `strategy.wiring.make_strategy`, the same function `real_data.py --strategy`
+> uses. The reason is in that plan's §2 — `build_emitter` imported
+> `.emitter.ThresholdEmitter` *by name*, so a package whose `make_strategy` built
+> anything else was invisible to live, while `build_trader` *did* route through
+> the package. §2.3 achieved what it set out to do; it is kept as the record of
+> how the seam got here.
+>
+> **Still true:** `strategy_package` as a derived property, per-session component
+> ownership, and `PINNED_FULLDAY` registered-and-untuned.
+>
+> **No longer true:** §5/D5's `is_tuned` **refusal**. Removed 2026-09-09 (routing
+> plan D1) because the broker it guarded is hardcoded to simulation. The property
+> survives and still marks the run in the banner and the recorder's `meta` header;
+> only the refusal is gone.
+>
+> **Read §2.3, §11's file table and §5 with this note in hand.**
+
 **G6 LIVE PASSED — §23 (2026-09-07, run 4).** §15 lifts for the shape it tested:
 two opposed one-lot positions, ten minutes, no halt, ledgers matching the book.
 **NEXT: §23.7** — the teardown is INTERMITTENT, not fixed. Booking latency was
@@ -117,6 +139,11 @@ prints which knob came from where.
 ~40 lines.
 
 ### 2.3 `live/config.py` + `live/runtime.py` — `build_trader()`
+
+> **Superseded 2026-09-09** — all three factories described below were removed;
+> `runtime.py` calls `strategy.wiring.make_strategy` once instead. See the note
+> at the top of this file. What follows is the record of the step, not of the
+> current code.
 
 `LiveConfig` already has `build_emitter()` (config.py:75) and `build_forecaster()`
 (config.py:92) — the live half is two-thirds done. Add:
@@ -510,8 +537,8 @@ A bare run (no `--strategy`) resolves to exactly the old defaults — asserted b
 
 | file | what |
 |---|---|
-| `live/config.py` | `is_tuned` + `strategy_package` properties; `build_trader`; `build_emitter`/`build_forecaster` now route through the deployment's package; `source_commit`/`source_calmar` became `Optional`; `describe()` renders an untuned config; **`PINNED_FULLDAY`** + `CONFIGS["fullday"]` |
-| `live/runtime.py` | `self.trader = config.build_trader(execution=self.broker)` replaces the inline construction |
+| `live/config.py` | *(the three `build_*` factories here were removed 2026-09-09 — see the top-of-file note)* `is_tuned` + `strategy_package` properties; `source_commit`/`source_calmar` became `Optional`; `describe()` renders an untuned config; **`PINNED_FULLDAY`** + `CONFIGS["fullday"]` |
+| `live/runtime.py` | `self.trader = config.build_trader(execution=self.broker)` replaces the inline construction *(since 2026-09-09: `self.strategy["make_trader"](execution=self.broker)`, from the one `make_strategy` call)* |
 | `live/cli.py` | refuses an untuned `--config` before the run directory or the alerter exists |
 
 **`strategy_package` is derived, not stored.** A stored field could disagree with

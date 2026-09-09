@@ -58,25 +58,43 @@ PARAMS: Dict[str, Any] = {
 #       `tests/test_strategy_isolation.py` constructs `wiring.ThresholdEmitter`
 #       by name to prove the three packages hold distinct classes (G3), so
 #       dropping the import would fail the isolation gate for a reason unrelated
-#       to isolation. Second, `live/config.py` imports `.emitter` and
-#       `.forecaster` as MODULES, not through this file -- so live still trades
-#       the pinned Toto2 threshold strategy, and the pin stays recoverable by
-#       pointing `make_strategy` back at it. See the divergence warning below.
+#       to isolation. Second, they are the way BACK: pointing `make_strategy` at
+#       them is all it now takes to put this deployment on Toto2 again -- and
+#       since 2026-09-09 that single edit moves the backtest AND live together.
+#       See the note below.
 #
-# WARNING -- backtest and live now disagree for this session.
-#       `--strategy <session>` (backtest) runs RSI. `--config <session>` (live)
-#       runs the pinned Toto2 threshold strategy, because `live/config.py`
-#       reaches `.emitter`/`.forecaster` directly and never calls `make_strategy`.
-#       That is deliberate: a strategy change must not reach a live deployment as
-#       a side effect of a backtest edit. To make live match, `live/config.py`
-#       must be changed too -- and it is FROZEN by the freeze line.
+# UPDATED 2026-09-09 -- backtest and live no longer disagree, and this session is
+#       LIVE ON RSI.
+#       The warning that stood here said `--config <session>` still ran the pinned
+#       Toto2 threshold strategy, because `live/config.py` reached `.emitter` and
+#       `.forecaster` as modules and never called `make_strategy`. **That is no
+#       longer true, in both halves.** LIVE_STRATEGY_ROUTING_PLAN D2 routed
+#       `LiveRuntime` through `strategy.wiring.make_strategy`, and `LiveConfig`
+#       now holds no strategy fields at all -- so whatever `make_strategy` returns
+#       below IS what a live simtrade of this session trades. Today that is RSI.
+#
+#       It is also no longer true that `live/config.py` is frozen and would have
+#       to change: it has already changed, and restoring Toto2 here is now an edit
+#       to THIS file alone.
+#
+#       The switch was accepted deliberately, not stumbled into -- the plan's D9
+#       took it for day and night so that `fullday` could reach live from its own
+#       package. Putting this session back on Toto2 is the recorded follow-up.
+#
+#       The old rule it protected still holds, but the seam moved: a strategy
+#       change reaches live the moment it lands here, so this file is now a live
+#       deployment's definition and not just a backtest's.
 #
 # The Toto2 knobs in PARAMS above (`checkpoint`, `context_length`, and the
 # `buy_threshold`/`sell_threshold`/`min_prob`/`full_confidence_prob` band) are
-# now INERT on the RSI path. They cannot be removed: `real_data.py`
-# `_resolve_strategy_knobs` raises unless a package's PARAMS keys are exactly the
-# CLI's knob set, and `real_data.py` is frozen. `stride_bars` and the trader
-# knobs are still live.
+# INERT on the RSI path, though still resolved, banner-printed and recorded in
+# `params.json`. They cannot be dropped: `real_data.py:_resolve_strategy_knobs`
+# requires every knob the CLI resolves to exist in a package's PARAMS. That check
+# was relaxed on 2026-09-09 from set EQUALITY to that one-directional subset
+# (LIVE_STRATEGY_ROUTING_PLAN D6), so a package may now declare EXTRA knobs --
+# `rsi.py`'s own settings could move into PARAMS and become addressable as
+# `--param <knob>=<value>` at either CLI. `stride_bars` and the trader knobs are
+# still live.
 
 
 def make_strategy(

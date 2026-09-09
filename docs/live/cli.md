@@ -56,7 +56,8 @@ live half and V3's shadow parity are both read back from.
 | `--fresh-start` | off | Start a new [soak epoch](soak_epoch.md). **Required with an order-placing broker** (with `--resume`, exactly one). Refuses at start-up unless *this deployment* is flat — never flattens itself |
 | `--resume` | off | Continue the current [soak epoch](soak_epoch.md). **Required with an order-placing broker** (with `--fresh-start`, exactly one). Bootstraps the first epoch if none exists yet |
 | `--flatten-aggression-ticks` | `5` | how far through the touch a FLATTEN close is priced before going IOC (`shioaji` only) |
-| `--config {night,day,fullday}` | `night` | selects the WHOLE deployment — policy, band, probability gate and provenance together (C2). **`fullday` is UNTUNED and is refused** (exit 5); backtest it with `real_data.py --strategy fullday` |
+| `--strategy {night,day,fullday}` | `night` | the deployment: its session policy and its `strategy/<session>/` package, which is where every strategy value now lives (D2). **`--config` is an accepted alias** for the same argument (D5). Since 2026-09-09 an **UNTUNED deployment is no longer refused** — see below |
+| `--param KEY=VALUE` | — | override one strategy knob, repeatable, coerced against the package's `PARAMS` (D7). A run carrying one is not comparable to any `results.tsv` row; `params.json` records the resolved set |
 | `--contract` | `TXFR1` | resolved by attribute, falling back to key lookup |
 | `--duration-minutes` | none | stop after this long; otherwise runs until Ctrl-C |
 | `--warmup-days` | `30` | calendar days requested for context + emitter priming (~21 night sessions) |
@@ -68,6 +69,27 @@ live half and V3's shadow parity are both read back from.
 | `--staleness-seconds` | `900.0` | **backstop** — halt after this long unhealed. Detection is [FeedWatch](feedwatch.md)'s job (§2.22) |
 | `--feed-check-seconds` | `60.0` | silence before asking the venue whether it traded without us. A polling interval, not a threshold |
 
+
+## The untuned refusal is gone (LIVE_STRATEGY_ROUTING_PLAN D1)
+
+`main` used to return **5** for any config whose `is_tuned` was False, before the
+alerter, the credentials check or the run directory. It was removed on
+2026-09-09.
+
+The reason is narrow and worth stating so it is not read as a general loosening:
+`api = sj.Shioaji(simulation=True)` in this file is **hardcoded, not a flag** — by
+design, so this entry point has no reachable path to a production account. The
+gate therefore protected an account that cannot lose money, while blocking the one
+workflow simtrade exists for: running what the research loop just produced.
+
+**Enforcement became a record.** `is_tuned` still exists, `describe()` still
+renders `UNTUNED` and `calmar=nan`, and that line goes into the banner *and* the
+recorder's `meta` header — so an unprovenanced run is self-identifying in its own
+artifacts. What no longer happens is a refusal.
+
+> **The gate's home is the eventual simulation→production boundary**, which does
+> not exist yet. Whoever builds that boundary builds the gate with it.
+
 ## Exit codes
 | Code | Meaning |
 |---|---|
@@ -76,7 +98,7 @@ live half and V3's shadow parity are both read back from.
 | `2` | credentials not in the environment |
 | `3` | [RestartGuard](startup.md) refused to start (backoff, backfill cap, or quota headroom) |
 | `4` | **flatten incomplete** — a position was still open after a `FLATTEN` halt |
-| `5` | refused before the first bar — no acknowledgement flag, neither/both of `--fresh-start`/`--resume`, `--fresh-start` against a non-flat account, or a held position that cannot be adopted (above `max_position`, or an `ExitRule` is configured), or **`--config` names an untuned deployment** (`is_tuned` False — no `source_commit`/`source_calmar`; checked first of all, before the run directory or the alerter exists, so nothing is left behind) |
+| `5` | refused before the first bar — no acknowledgement flag, neither/both of `--fresh-start`/`--resume`, `--fresh-start` against a non-flat account, or a held position that cannot be adopted (above `max_position`, or an `ExitRule` is configured), *(the untuned-deployment refusal was removed 2026-09-09 — see below)* |
 
 ## Start-up order (each step gates the next)
 1. **`RestartGuard.begin`** — *before* login, before any query. Every start

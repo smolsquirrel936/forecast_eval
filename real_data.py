@@ -39,6 +39,7 @@ from forecast_eval.metrics import (
     compute_metrics,
 )
 from forecast_eval.run import run_backtest
+from forecast_eval.param_override import parse_overrides
 from forecast_eval.strategy import wiring as strategy_wiring
 from forecast_eval.strategy.threshold import ThresholdEmitter
 
@@ -83,16 +84,23 @@ def _resolve_strategy_knobs(args) -> dict:
         base, source = dict(CLI_STRATEGY_DEFAULTS), "cli-default"
     else:
         base, source = strategy_wiring.params(args.strategy), args.strategy
-        # Tech: the package's knob set must be exactly this CLI's knob set.
-        # Why:  a package that adds a knob this CLI cannot pass would be tuned in
-        #       research and silently dropped at evaluation; one that drops a knob
-        #       would fall back to a stale literal. Either way the recorded row
-        #       and the run disagree, which is the failure `live/config.py` exists
-        #       to prevent -- so it fails here instead, at import-time cost zero.
-        if set(base) != set(CLI_STRATEGY_DEFAULTS):
+        # Tech: every knob this CLI resolves must exist in the package. The
+        #       package may declare MORE, and the loop below resolves those from
+        #       `PARAMS` exactly as it resolves the twelve.
+        # Why:  LIVE_STRATEGY_ROUTING_PLAN D6. This guard used to require set
+        #       equality, which made a knob a search *invented* inexpressible:
+        #       `strategy/fullday/combine.py`'s RET_K/PROB_K say in their own
+        #       comment that they are module constants because of this check, so
+        #       the parameter that carried iter03 and iter05 is invisible to the
+        #       banner, to `params.json` and to `results.tsv`. Only the subset
+        #       direction ever carried the safety -- a package that DROPS a knob
+        #       falls back to a stale literal and still fails here. One that ADDS
+        #       a knob is now resolved and recorded instead of refused.
+        missing = set(CLI_STRATEGY_DEFAULTS) - set(base)
+        if missing:
             raise ValueError(
-                f"strategy {args.strategy!r} declares knobs "
-                f"{sorted(base)}, but this CLI resolves "
+                f"strategy {args.strategy!r} declares knobs {sorted(base)}, "
+                f"which is missing {sorted(missing)}; this CLI resolves "
                 f"{sorted(CLI_STRATEGY_DEFAULTS)}"
             )
     origins = {}
@@ -102,6 +110,23 @@ def _resolve_strategy_knobs(args) -> dict:
         else:
             origins[knob] = source
             setattr(args, knob, value)
+
+    # Tech: apply `--param KEY=VALUE` last, over everything resolved above, and
+    #       attribute those knobs to "param".
+    # Why:  D7. `--param` is the only way to reach a knob this CLI has no flag
+    #       for, so it must win over the package's default -- that is its whole
+    #       purpose. It is applied after the loop rather than merged into `base`
+    #       so the banner can distinguish a value the package declared from one
+    #       that was typed: a run carrying any "param" origin is not comparable
+    #       to a `results.tsv` row, and the origin is how a reader knows.
+    if args.param and args.strategy is None:
+        raise ValueError(
+            "--param needs --strategy: it is coerced against the named "
+            "package's PARAMS, and the bare path has no package"
+        )
+    for knob, value in parse_overrides(args.param, base).items():
+        origins[knob] = "param"
+        setattr(args, knob, value)
     return origins
 
 
@@ -235,6 +260,16 @@ def main(argv=None) -> int:
                     default=None,
                     help="Session strategy package to run; supplies defaults for "
                          "the knobs below. Omit for this CLI's own defaults.")
+    # Tech: repeatable KEY=VALUE, coerced against the named package's PARAMS.
+    # Why:  D7 -- the twelve flags below cover the knobs this CLI has always had,
+    #       but a package may declare more (D6) and there is no flag for those.
+    #       One generic flag reaches any knob a search invents without this
+    #       parser ever learning its name; `make_strategy` rejects a name the
+    #       package does not declare, which is the typo check argparse would
+    #       otherwise have given.
+    ap.add_argument("--param", action="append", default=[], metavar="KEY=VALUE",
+                    help="Override one strategy knob, e.g. --param ret_k=4. "
+                         "Repeatable. Requires --strategy.")
     # Tech: every knob a strategy package also declares uses SUPPRESS rather than
     #       a literal default, and the resolved value is written back onto `args`
     #       immediately after parsing (see _resolve_strategy_knobs).
@@ -447,11 +482,18 @@ def main(argv=None) -> int:
         make_trader = None
         exit_rule = None
     else:
+        # Tech: pass back every knob the resolver resolved -- `origins`' key set
+        #       is the package's own `PARAMS` key set, not this CLI's twelve.
+        # Why:  D6 lets a package declare knobs the CLI has no flag for. Iterating
+        #       `CLI_STRATEGY_DEFAULTS` here would resolve such a knob onto `args`,
+        #       print it in the banner and record it in `params.json` -- and then
+        #       not pass it, so the recorded set and the passed set could differ.
+        #       Keying both off `origins` makes them the same set by construction.
         stack = strategy_wiring.make_strategy(
             args.strategy,
             warmup_bars=warmup,
             tick_size=1.0,
-            **{knob: getattr(args, knob) for knob in CLI_STRATEGY_DEFAULTS},
+            **{knob: getattr(args, knob) for knob in origins},
         )
         fc = stack["forecaster"]
         em = stack["emitter"]

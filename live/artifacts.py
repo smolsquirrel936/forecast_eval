@@ -20,6 +20,9 @@ rewritten once a second for the ten hours a day the market is shut.
 from __future__ import annotations
 
 import time as _time
+import hashlib
+import subprocess
+
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -43,13 +46,82 @@ MIN_INTERVAL_SECONDS = 60.0
 ARTIFACT_EXT = ".csv"
 
 
-def live_params(config: Any, *, out_dir: Any, broker: str,
+def strategy_sha(package: str) -> str:
+    # Tech: sha256 over every `.py` in `strategy/<package>/`, in sorted path
+    #       order, with newlines normalised to LF; first 12 hex.
+    # Why:  LIVE_STRATEGY_ROUTING_PLAN Phase 5. The package IS the strategy now,
+    #       so "which strategy traded" is answered by the package's content, and
+    #       the git commit alone does not answer it -- an uncommitted edit is
+    #       exactly the state a research loop spends most of its time in.
+    #
+    #       Newlines are normalised deliberately. `tests/test_strategy_isolation.py`
+    #       pins raw bytes and fails on this Windows checkout purely because
+    #       `autocrlf=true` rewrites line endings; a provenance hash that changes
+    #       when a file is checked out on a different platform records the
+    #       checkout, not the strategy.
+    root = Path(__file__).resolve().parent.parent / "strategy" / package
+    h = hashlib.sha256()
+    for path in sorted(root.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        h.update(path.relative_to(root).as_posix().encode())
+        # `read_text` opens in universal-newline mode, so CRLF arrives as LF and
+        # the hash is the same on every checkout. Reading bytes would not be.
+        h.update(path.read_text(encoding="utf-8").encode("utf-8"))
+    return h.hexdigest()[:12]
+
+
+def git_commit() -> Optional[str]:
+    # Tech: `git rev-parse --short=12 HEAD`, or None when it cannot be read.
+    # Why:  the other half of "what ran". None rather than a raise because a live
+    #       run must not die for want of a provenance string -- a deployment from
+    #       an exported tree with no `.git` is unusual but not an error, and the
+    #       `strategy_sha` above still identifies the strategy in that case.
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            cwd=Path(__file__).resolve().parent.parent,
+            capture_output=True, text=True, timeout=5, check=True)
+        return out.stdout.strip() or None
+    except Exception:                                  # noqa: BLE001 -- see Why
+        return None
+
+
+def git_dirty() -> Optional[bool]:
+    # Tech: True when the working tree has uncommitted changes, None when git
+    #       cannot be read.
+    # Why:  `git_commit` alone MISDESCRIBES a run made from a dirty tree, which
+    #       is most of them during development -- the first live run to carry
+    #       these fields reported commit `af4be0b` while every live module it
+    #       executed was modified and unstaged. `strategy_sha` covers
+    #       `strategy/`; this covers everything else. A boolean rather than a
+    #       diff: the question a reader asks later is "can I trust the commit?",
+    #       and one bit answers it.
+    try:
+        out = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=Path(__file__).resolve().parent.parent,
+            capture_output=True, text=True, timeout=10, check=True)
+        return bool(out.stdout.strip())
+    except Exception:                                  # noqa: BLE001 -- see git_commit
+        return None
+
+
+def live_params(config: Any, *, strategy_params: Mapping[str, Any],
+                out_dir: Any, broker: str,
+                strategy_origins: Optional[Mapping[str, str]] = None,
                 warmup_days: Optional[int] = None,
                 soak_id: Optional[str] = None,
                 extra: Optional[Mapping[str, Any]] = None) -> dict:
     """The `params.json` payload for a live run, in the backtest's key order."""
-    # Tech: read the strategy fields off the `LiveConfig` and add the four that
-    #       only a live run has (broker, warm-up window, deployment name, soak).
+    # Tech: read the strategy fields from the run's RESOLVED strategy params and
+    #       add the four that only a live run has (broker, warm-up window,
+    #       deployment name, soak).
+    # Why:  LIVE_STRATEGY_ROUTING_PLAN D2 -- these used to come off `LiveConfig`,
+    #       which held a copy of the package's values. `strategy_params` is the
+    #       resolution the run's components were actually built from, `--param`
+    #       overrides included, so `params.json` records what ran rather than what
+    #       a second declaration said would run.
     # Why:  a backtest's `params.json` answers "what produced these numbers", and
     #       for a live run that question has two halves — the pinned strategy,
     #       which must be written in the *same keys* so the two files can be
@@ -62,20 +134,37 @@ def live_params(config: Any, *, out_dir: Any, broker: str,
         "source_commit": config.source_commit,
         "source_calmar": config.source_calmar,
         "source_dataset": config.source_dataset,
-        "checkpoint": config.checkpoint,
-        "context_length": config.context_length,
-        "horizon_bars": config.forecast_horizon_bars,
-        "stride_bars": config.forecast_stride_bars,
-        "buy_threshold": config.buy_threshold,
-        "sell_threshold": config.sell_threshold,
-        "aggression_ticks": config.aggression_ticks,
-        "min_prob": config.min_prob,
-        "max_aggression_ticks": config.max_aggression_ticks,
-        "max_position": config.max_position,
-        "forced_close": config.forced_close_on_session_end,
+        "checkpoint": strategy_params["checkpoint"],
+        "context_length": strategy_params["context_length"],
+        "horizon_bars": strategy_params["horizon_bars"],
+        "stride_bars": strategy_params["stride_bars"],
+        "buy_threshold": strategy_params["buy_threshold"],
+        "sell_threshold": strategy_params["sell_threshold"],
+        "aggression_ticks": strategy_params["aggression_ticks"],
+        "min_prob": strategy_params["min_prob"],
+        "max_aggression_ticks": strategy_params["max_aggression_ticks"],
+        "max_position": strategy_params["max_position"],
+        "forced_close": strategy_params["forced_close"],
         "sessions": sorted(config.policy.sessions),
         "roll_at": str(config.policy.roll_at_time()),
         "broker": broker,
+        # Tech: what produced this strategy -- the package, its content hash, the
+        #       repo commit, where each knob came from, and one boolean.
+        # Why:  LIVE_STRATEGY_ROUTING_PLAN Phase 5. Removing the provenance GATE
+        #       (D1) is only defensible if the provenance RECORD is complete, and
+        #       "complete" now means the package, because that is where the
+        #       strategy lives. `strategy_overridden` is a boolean rather than
+        #       something a reader must derive from `strategy_origins`, because
+        #       the one question asked of this file later is "is this row
+        #       comparable to a `results.tsv` row?" -- and if anything was typed,
+        #       it is not.
+        "strategy_package": config.strategy_package,
+        "strategy_sha": strategy_sha(config.strategy_package),
+        "git_commit": git_commit(),
+        "git_dirty": git_dirty(),
+        "strategy_origins": dict(strategy_origins or {}),
+        "strategy_overridden": any(v == "param"
+                                   for v in (strategy_origins or {}).values()),
         "warmup_days": warmup_days,
         "soak_id": soak_id,
         "output_dir": str(out_dir),

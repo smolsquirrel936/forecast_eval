@@ -16,9 +16,11 @@ from forecast_eval.events import Forecast
 from forecast_eval.forecaster.base import Forecaster
 from forecast_eval.live.config import LiveConfig
 from forecast_eval.live.recorder import Recorder
+from forecast_eval.live import runtime as runtime_mod
 from forecast_eval.live.runtime import LiveRuntime
 from forecast_eval.live.sessions import SessionPolicy
 from forecast_eval.live.state import RailsConfig
+from forecast_eval.strategy import wiring as strategy_wiring
 
 CTX = 40
 STRIDE = 5
@@ -58,15 +60,14 @@ class _Cheap(Forecaster):
         )
 
 
+pytestmark = pytest.mark.usefixtures("cheap_strategy")
+
+
 def _config(policy=None, **kw):
-    cfg = LiveConfig(
+    return LiveConfig(
         source_commit="test", source_calmar=0.0, source_dataset="test",
-        source_note="test", policy=policy or SessionPolicy.night(),
-        checkpoint="cheap", context_length=CTX,
-        forecast_horizon_bars=5, forecast_stride_bars=STRIDE, **kw,
+        source_note="test", policy=policy or SessionPolicy.night(), **kw,
     )
-    object.__setattr__(cfg, "build_forecaster", lambda **k: _Cheap(**k))
-    return cfg
 
 
 def _bars(n, start="2026-05-14 16:00", price=17500.0, step=3.0):
@@ -251,9 +252,7 @@ def test_the_prime_cap_is_deliberately_wider_than_the_fetch_it_is_sized_against(
 
 def test_priming_check_is_skipped_when_the_filter_is_off():
     """Nothing to leave open if the trend filter is disabled."""
-    cfg = _config()
-    object.__setattr__(cfg, "trend_filter", False)
-    rt = LiveRuntime(cfg)
+    rt = LiveRuntime(_config(), strategy_overrides={"trend_filter": False})
     rt.warm_up(_bars(CTX + 60, step=0.0))
     assert rt.warm
 
@@ -416,7 +415,7 @@ def test_the_live_runtime_opts_into_the_flush_grace():
 
 def test_max_position_above_one_is_refused_at_startup():
     with pytest.raises(ValueError, match="average-entry"):
-        LiveRuntime(_config(max_position=2))
+        LiveRuntime(_config(), strategy_overrides={"max_position": 2})
 
 
 def test_summary_reports_config_and_ingest_counters(tmp_path):
@@ -428,5 +427,7 @@ def test_summary_reports_config_and_ingest_counters(tmp_path):
     rec.close()
     assert s["simulation"] is True
     assert s["bars"] > 0 and s["ticks"] > 0
-    assert "cheap" in s["config"]
+    # `describe()` reports the deployment's package, not the fake stack this
+    # test injects, so assert the line's identity rather than the checkpoint.
+    assert s["config"].startswith("LiveConfig[test calmar=0.0 ['NIGHT']]")
     assert s["halted"] is False

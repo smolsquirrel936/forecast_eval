@@ -236,6 +236,22 @@ def params_from_meta(records: List[dict], run_dir: Path) -> Optional[dict]:
         "sessions": sessions,
         "roll_at": str(SessionPolicy.of(sessions).roll_at_time()),
         "broker": meta.get("broker"),
+        # Tech: the five provenance keys, read from the `meta` header rather than
+        #       from the `config` summary line, with None/{} when a session
+        #       predates them.
+        # Why:  LIVE_STRATEGY_ROUTING_PLAN Phase 5 added them to `live_params`,
+        #       and `test_the_rebuilt_params_are_the_live_ones_key_for_key` holds
+        #       the two key sets identical. They are recorded as their own `meta`
+        #       fields precisely so they survive this round trip -- packing them
+        #       into `describe()` would have meant extending `_DESCRIBE_RE` and
+        #       breaking every session file already on disk.
+        "strategy_package": meta.get("strategy_package"),
+        "strategy_sha": meta.get("strategy_sha"),
+        "git_commit": meta.get("git_commit"),
+        "git_dirty": meta.get("git_dirty"),
+        "strategy_origins": meta.get("strategy_origins") or {},
+        "strategy_overridden": any(
+            v == "param" for v in (meta.get("strategy_origins") or {}).values()),
         "warmup_days": None,
         "soak_id": meta.get("soak_id"),
         "output_dir": str(run_dir),

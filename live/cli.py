@@ -75,9 +75,13 @@ from forecast_eval.live.broker.shadow import ShadowBroker         # noqa: E402
 from forecast_eval.live.broker.shioaji import ShioajiBroker       # noqa: E402
 from forecast_eval.live.broker.sim import SimBroker               # noqa: E402
 from forecast_eval.live.artifacts import (ArtifactWriter,        # noqa: E402
-                                          live_params)
+                                          git_commit, git_dirty,
+                                          live_params,
+                                          strategy_sha)
 from forecast_eval.live.capture import TickCapture                # noqa: E402
 from forecast_eval.live.config import CONFIGS, PINNED, config_named  # noqa: E402
+from forecast_eval.param_override import parse_overrides       # noqa: E402
+from forecast_eval.strategy import wiring as strategy_wiring   # noqa: E402
 from forecast_eval.live import credentials                       # noqa: E402
 from forecast_eval.live.ledger import (FillLedger, ledger_path,     # noqa: E402
                                        net_position, open_position)
@@ -283,7 +287,16 @@ def _rails_config(args: Any, cfg: Any) -> RailsConfig:
     #       never received, §2.19), so the wiring gets a seam and a test rather
     #       than a careful reading.
     return RailsConfig(
-        max_position=cfg.max_position,
+        # Tech: the rails keep their OWN max_position; it is not read from the
+        #       strategy.
+        # Why:  LIVE_STRATEGY_ROUTING_PLAN D3. `RailsConfig` says 1 is a
+        #       soundness bound, not a preference -- `Trader.on_fill` has no
+        #       average-entry branch for a second partial fill (§2.10). Now that
+        #       a search owns `max_position` in `PARAMS`, reading it here would
+        #       let that search raise the very rail meant to catch it.
+        #       `LiveRuntime` still calls `rails.check_startup(...)` with the
+        #       strategy's value, so a package asking for more is REFUSED at
+        #       start-up rather than silently clamped.
         max_daily_loss_points=args.max_daily_loss_points,
         kill_file=args.kill_file,
         quote_staleness_seconds=args.staleness_seconds,
@@ -349,12 +362,29 @@ def build_parser() -> argparse.ArgumentParser:
     #       band and probability gate in place, which is a night strategy on a
     #       day tape and raises nothing. W5a measured that mistake at Calmar
     #       16.3122 -> 0.2671. Selecting the config makes the pairing unbreakable.
-    ap.add_argument("--config", choices=sorted(CONFIGS), default="night",
-                    help="Which pinned deployment to run. Selects the WHOLE "
-                         "config -- policy, band, probability gate and "
-                         "provenance together. Default night (the deployment "
-                         "that has soaked); day is DAY_SESSION_PLAN's port and "
-                         "has never traded.")
+    # Tech: one argument, two spellings, `dest="config"` so nothing downstream
+    #       changes. `--strategy` matches `real_data.py`; `--config` is the old
+    #       name and still works.
+    # Why:  D5. They have always meant the same thing -- `LiveConfig.strategy_package`
+    #       derives the package name from the policy, 1:1 -- and having two names
+    #       for one choice invites the belief that they select different things.
+    #       An alias rather than a rename because recorded soak commands and the
+    #       test suite spell it `--config`, and breaking them buys nothing.
+    ap.add_argument("--strategy", "--config", dest="config",
+                    choices=sorted(CONFIGS), default="night",
+                    help="Which deployment to run: its session policy and its "
+                         "strategy/<session>/ package. Default night. "
+                         "`--config` is an accepted alias.")
+    # Tech: repeatable KEY=VALUE, coerced against the deployment package's PARAMS
+    #       and merged over it by `make_strategy`.
+    # Why:  D7, and the same flag `real_data.py` carries. It is the only way to
+    #       reach a knob a search invented, and the only way to run a variant
+    #       without editing the package. A run carrying one is NOT comparable to
+    #       any `results.tsv` row -- `params.json` records the resolved set, so
+    #       the artifact says what was typed.
+    ap.add_argument("--param", action="append", default=[], metavar="KEY=VALUE",
+                    help="Override one strategy knob, e.g. --param min_prob=0.6. "
+                         "Repeatable.")
     ap.add_argument("--contract", default="TXFR1")
     ap.add_argument("--duration-minutes", type=float, default=None,
                     help="Stop after this long. Default: run until the session "
@@ -498,35 +528,58 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     cfg = config_named(args.config)
 
-    # Tech: refuse an unprovenanced deployment before anything else — before the
-    #       alerter, the credentials check and the restart guard.
-    # Why:  STRATEGY_SPLIT_PLAN §5/D5. `fullday` exists as a value so it can be
-    #       backtested and parity-checked, and its band is DAY's by inheritance,
-    #       never measured on the full-day tape. Everything downstream of here
-    #       treats a config as a justified decision — the banner prints its
-    #       provenance, the recorder stamps it into `meta`, the drift guards
-    #       assert it against `results.tsv` — and none of that is true of this
-    #       one. Refusing at the top is cheaper than making every one of those
-    #       handle a null provenance, and it fails on the *property* rather than
-    #       on the name, so a fourth untuned deployment is covered for free.
-    if not cfg.is_tuned:
-        print(f"ERROR: --config {args.config} is UNTUNED and must not trade.\n"
-              f"  {cfg.source_note}\n"
-              f"  Backtest it instead: python -m forecast_eval.real_data "
-              f"--strategy {cfg.strategy_package} --data <fullday tape>\n"
-              f"  To lift this: produce a results.tsv row for the "
-              f"{'/'.join(sorted(cfg.policy.sessions))} session, then set "
-              f"source_commit and source_calmar in live/config.py.",
-              file=sys.stderr)
-        # Tech: exit 5 — "refused before the first bar" — not 2, which means
-        #       credentials are missing, and not via the alerter.
-        # Why:  this is argument-only validation with no environmental cause, the
-        #       same class as `_preflight_orders`, which is why it shares 5. It
-        #       runs before `out.mkdir` and before the alerter is built precisely
-        #       so a refused config leaves nothing behind: no run directory, no
-        #       fatal-journal entry. A mistyped `--config` is an operator slip,
-        #       not a soak incident.
+    # Tech: resolve and validate the strategy knobs HERE -- before the restart
+    #       guard, before credentials, before login. Pure argument work.
+    # Why:  three reasons it sits this early. `params.json` is written from it
+    #       further down, before login, so a run that never reaches the venue
+    #       still records what it meant to trade. `make_strategy` would reject an
+    #       unknown knob eventually -- but not until `LiveRuntime` constructs,
+    #       which is after `guard.start()` has marked a run in flight and after a
+    #       login has been spent; a typo would then cost a phantom restart
+    #       failure and a venue round trip. And it matches the file's existing
+    #       rule that pure argument checks run before the guard (§2.8b).
+    #
+    #       The unknown-name check duplicates one `make_strategy` also makes.
+    #       That is deliberate here and only here: this is the CLI's argument
+    #       validation, and the message names the package's real knob set exactly
+    #       as the deeper one would.
+    declared = strategy_wiring.params(cfg.strategy_package)
+    try:
+        strategy_overrides = parse_overrides(args.param, declared)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
         return 5
+    unknown = sorted(set(strategy_overrides) - set(declared))
+    if unknown:
+        print(f"ERROR: --param names unknown knob(s) {unknown}; "
+              f"strategy {cfg.strategy_package!r} declares {sorted(declared)}",
+              file=sys.stderr)
+        return 5
+    strategy_params = {**declared, **strategy_overrides}
+    # Tech: where each knob came from -- the package, or a typed `--param`.
+    # Why:  Phase 5, the same `{knob: origin}` idea `real_data.py` banners. Live
+    #       has only two sources, so a comprehension beats a shared helper.
+    strategy_origins = {k: ("param" if k in strategy_overrides
+                            else cfg.strategy_package) for k in strategy_params}
+
+    # Tech: no provenance gate. An unprovenanced deployment runs; its lack of a
+    #       `results.tsv` row is recorded, not enforced.
+    # Why:  LIVE_STRATEGY_ROUTING_PLAN D1. The refusal that stood here rejected
+    #       any config whose `is_tuned` was False, so `--strategy fullday` could
+    #       not reach a broker. But the broker it was protecting is hardcoded to
+    #       `simulation=True` a few dozen lines below and is not a flag, so the
+    #       gate guarded an account that cannot lose money while blocking exactly
+    #       the workflow simtrade exists for: running a strategy the research loop
+    #       just produced.
+    #
+    #       This is NOT a decision that a strategy needs no provenance to trade
+    #       real money. It is that the gate's home is the eventual
+    #       simulation->production boundary, which does not exist yet. Whoever
+    #       builds that boundary builds the gate with it -- `is_tuned` is still on
+    #       `LiveConfig`, and `describe()` still renders "UNTUNED"/"nan" into the
+    #       banner and the recorder's `meta` header, so an unprovenanced run is
+    #       self-identifying in its own artifacts.
+
     # Tech: resolve the warm-up default now that the config is known.
     # Why:  see --warmup-days above; None means "whatever this deployment needs".
     if args.warmup_days is None:
@@ -626,8 +679,15 @@ def main(argv=None) -> int:
                                    fresh_start=args.fresh_start,
                                    now=datetime.now())
 
+
     recorder = Recorder(out / "session.jsonl", simulation=True,
-                        meta={"config": cfg.describe(), "broker": args.broker,
+                        meta={"config": cfg.describe(strategy_params),
+                              "strategy_package": cfg.strategy_package,
+                              "strategy_sha": strategy_sha(cfg.strategy_package),
+                              "git_commit": git_commit(),
+                              "git_dirty": git_dirty(),
+                              "strategy_origins": strategy_origins,
+                              "broker": args.broker,
                               "contract": args.contract,
                               "soak_id": epoch.soak_id if epoch else None})
     alerter.recorder = recorder
@@ -656,7 +716,8 @@ def main(argv=None) -> int:
     ledger = FillLedger(ledger_path(out.parent, cfg.policy),
                         soak_id=epoch.soak_id if epoch else None)
     artifacts.write_params(live_params(
-        cfg, out_dir=out, broker=args.broker, warmup_days=args.warmup_days,
+        cfg, strategy_params=strategy_params, strategy_origins=strategy_origins,
+        out_dir=out, broker=args.broker, warmup_days=args.warmup_days,
         soak_id=epoch.soak_id if epoch else None))
 
     execution = Execution(fee_rate=cfg.fee_rate)
@@ -788,11 +849,23 @@ def main(argv=None) -> int:
         #       differ the moment a second deployment holds anything, and the
         #       rail halts both for a disagreement that is not a desync (§14).
         rt = LiveRuntime(cfg, broker=broker, recorder=recorder, rails=rails,
+                         strategy_overrides=strategy_overrides,
                          simulation=True, tick_capture=capture, alerter=alerter,
                          ledger_dir=out.parent)
         print(rt.rails.banner())
         print(_broker_banner(args, contract_note))
-        print(cfg.describe())
+        print(cfg.describe(strategy_params))
+        # Tech: one extra line, printed only when `--param` was used.
+        # Why:  Phase 5. `describe()` renders the resolved values, so an
+        #       overridden run looks exactly like a tuned one on the banner --
+        #       correct, but it hides that the numbers were typed. A run carrying
+        #       any typed knob is NOT comparable to a `results.tsv` row, and that
+        #       has to be visible to whoever reads the console, not only to
+        #       whoever opens `params.json`.
+        if strategy_overrides:
+            print(f"  !! --param OVERRIDES: "
+                  f"{', '.join(f'{k}={v!r}' for k, v in sorted(strategy_overrides.items()))}"
+                  f"  -- this run is NOT comparable to any results.tsv row")
 
         # Tech: --fresh-start refuses a non-flat account, before adopt_position
         #       ever runs. It only checks — it never places an order.

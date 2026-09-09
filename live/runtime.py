@@ -37,6 +37,7 @@ import pandas as pd
 from ..events import FillEvent
 from ..execution import Execution
 from ..portfolio import Portfolio
+from ..strategy import wiring as strategy_wiring
 from ..trader import Trader
 from .backfill import fetch_bars, fetch_bars_continuous
 from .broker.base import Broker
@@ -100,6 +101,7 @@ class LiveRuntime:
         tick_capture: Any = None,
         alerter: Any = None,
         ledger_dir: Any = None,
+        strategy_overrides: Optional[dict] = None,
     ):
         # Tech: build the whole stack from `config`, deriving the session policy
         #       from it rather than accepting one separately.
@@ -108,6 +110,27 @@ class LiveRuntime:
         #       in a live session and it comes from the pinned config.
         self.config = config
         self.policy = config.policy
+        # Tech: build this deployment's whole strategy stack once, from its own
+        #       `strategy/<session>/` package, and keep the resolved knobs.
+        # Why:  LIVE_STRATEGY_ROUTING_PLAN D2 -- one construction site for live
+        #       and backtest alike, so what a live run trades IS what
+        #       `real_data.py --strategy <session>` backtests, by construction
+        #       rather than by two declarations agreeing. `warmup_bars=0` because
+        #       the context arrives via `seed_history`; live it would only delay
+        #       trading behind bars already held.
+        self.strategy = strategy_wiring.make_strategy(
+            config.strategy_package,
+            warmup_bars=0,
+            tick_size=config.tick_size,
+            **(strategy_overrides or {}),
+        )
+        # Tech: the fully resolved knob set -- package defaults with any
+        #       `--param` override merged in.
+        # Why:  several things below are strategy values that are not components
+        #       (`context_length` sizes the history window, `max_position` is
+        #       checked against the rails). They must read the same resolution the
+        #       components were built from, not a second copy.
+        self.strategy_params = self.strategy["params"]
         self.recorder = recorder
         self.simulation = simulation
         # Tech: how many stride boundaries `_prime_emitter` replays; the slice
@@ -158,7 +181,7 @@ class LiveRuntime:
         # Why:  §2.10 — `Trader.on_fill` has no average-entry branch for a second
         #       partial fill, so anything above 1 is unsound rather than merely
         #       risky.
-        self.rails.check_startup(max_position=config.max_position)
+        self.rails.check_startup(max_position=self.strategy_params["max_position"])
 
         self.execution = Execution(fee_rate=config.fee_rate)
         self.broker: Broker = broker or DryRunBroker(self.execution,
@@ -172,7 +195,7 @@ class LiveRuntime:
         #       is what `tests/test_live_parity*.py` exist to prevent. The
         #       factory reads the same declared fields the inline construction
         #       did, so behaviour is unchanged for both tuned deployments.
-        self.trader = config.build_trader(execution=self.broker)
+        self.trader = self.strategy["make_trader"](execution=self.broker)
         self.portfolio = Portfolio(contract_multiplier=config.contract_multiplier)
         # Tech: signed size waiting to be re-established on a newly rolled
         #       contract; 0 when nothing is pending.
@@ -204,11 +227,11 @@ class LiveRuntime:
         self._ladder_attempt = 0
         self._ladder_last = None
         self._ladder_market = None
-        self.emitter = config.build_emitter()
+        self.emitter = self.strategy["emitter"]
         # Tech: warmup_bars=0 because the context arrives via `seed_history`.
         # Why:  in the backtest `warmup_bars` is the train/eval split; live it
         #       would only delay trading behind bars we already hold.
-        self.forecaster = config.build_forecaster(warmup_bars=0)
+        self.forecaster = self.strategy["forecaster"]
 
         # Tech: the aggregator is built with *this* policy, from `TickAggregator`
         #       rather than by the caller.
@@ -224,9 +247,9 @@ class LiveRuntime:
             broker=self.broker,
             trader=self.trader,
             portfolio=self.portfolio,
-            exit_rule=None,
-            forced_close_on_session_end=config.forced_close_on_session_end,
-            history_window=config.context_length,
+            exit_rule=self.strategy["exit_rule"],
+            forced_close_on_session_end=self.strategy["forced_close"],
+            history_window=self.strategy_params["context_length"],
             recorder=recorder,
             rails=self.rails,
             alerter=alerter,
@@ -300,10 +323,10 @@ class LiveRuntime:
         #       would measure from a sentinel. Live runs configure no exit rule
         #       today; the day one is added, this must fail loudly rather than
         #       silently time a stop from the wrong origin.
-        if abs(held.signed_qty) > self.config.max_position:
+        if abs(held.signed_qty) > self.strategy_params["max_position"]:
             raise ValueError(
                 f"the account holds {held.signed_qty} lot(s), above "
-                f"max_position={self.config.max_position}. Trader.on_fill cannot "
+                f"max_position={self.strategy_params['max_position']}. Trader.on_fill cannot "
                 f"average a second lot's entry (§2.10), so this cannot be adopted "
                 f"— flatten with `python -m forecast_eval.live.flatten`, then "
                 f"restart.")
@@ -680,7 +703,7 @@ class LiveRuntime:
                 f"from two regimes."
             )
 
-        ctx = self.config.context_length
+        ctx = self.strategy_params["context_length"]
         if len(bars) < ctx:
             raise ValueError(
                 f"warm_up needs at least context_length={ctx} bars, got {len(bars)}. "
@@ -710,8 +733,8 @@ class LiveRuntime:
         #       while `VolMultiTfEmitter` appends on every forecast, and replay
         #       reproduces either faithfully. The results must be discarded: these
         #       are historical bars and acting on them would be trading the past.
-        ctx = self.config.context_length
-        stride = self.config.forecast_stride_bars
+        ctx = self.strategy_params["context_length"]
+        stride = self.strategy_params["stride_bars"]
         n = len(bars)
         boundaries = sorted(
             b for b in range(n - 1, ctx - 2, -stride)

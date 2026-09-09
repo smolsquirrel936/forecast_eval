@@ -10,15 +10,30 @@ held it, and three separate defaults contradicted it:
 | buy / sell threshold | — | ±0.0005 | **±0.00045** |
 | `min_prob` | `None` | `None` | **0.5** |
 
-`strategy/wiring.py` disagrees on all three as well; it is the *autoresearch*
-seam, whose entrypoint no longer exists, and the winning run was produced through
+`strategy/wiring.py` disagreed on all three as well; it was the *autoresearch*
+seam, whose entrypoint no longer existed, and the winning run was produced through
 `real_data.py` CLI flags instead. So a live run wired from any of those sources
 would have traded an untuned configuration — silently, since none of the
 mismatches raises.
 
-`PINNED` below is that configuration, and `tests/test_live_config.py` asserts it
-against the `results.tsv` row it claims to come from. If either drifts, the test
-fails — which is the point.
+**That is the history, and it is why this module no longer holds any strategy
+values (LIVE_STRATEGY_ROUTING_PLAN D2, 2026-09-09).** The table above is a list of
+declarations that could contradict each other; the fix was not to add a fourth
+but to delete this one. `strategy/<session>/wiring.py:PARAMS` is now the single
+source, `strategy.wiring.make_strategy` the single construction site, and
+[live/runtime.py] builds from it — so what a live run trades IS what
+`real_data.py --strategy <session>` backtests.
+
+The copy that was here caused the failure twice: the 2026-08-11 policy/band
+defect, and then `build_emitter` importing `.emitter.ThresholdEmitter` *by name*,
+which made `strategy/fullday/combine.py` unreachable from live for a whole
+research loop while `build_trader` *did* route through the package.
+
+What remains is a deployment's identity: which sessions it trades, where its
+provenance came from, and the run-level values that are not strategy
+(`tick_size`, `fee_rate`, `contract_multiplier`). `tests/test_live_config.py`
+still asserts each pin against the `results.tsv` row it claims — provenance can
+drift; the strategy no longer can.
 """
 from __future__ import annotations
 
@@ -26,6 +41,25 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from .sessions import SessionPolicy
+
+
+def _emitter_signature_defaults(package: str) -> dict:
+    # Tech: the declared defaults of the two emitter knobs `PARAMS` omits, read
+    #       from the package's own emitter class signature.
+    # Why:  `strategy/<session>/wiring.py` states that `short_window`,
+    #       `min_trend_ticks`, `path_momentum` and `trend_filter` are left to the
+    #       emitter's class defaults so recorded runs reproduce exactly -- so the
+    #       class *is* where those values live, and `describe()` has nowhere else
+    #       truthful to read them from. Constructing an emitter would be the
+    #       alternative, but only `make_strategy` builds one and it builds the
+    #       forecaster too, which is far too much work for a log line.
+    import inspect
+    from importlib import import_module
+    cls = import_module(f"..strategy.{package}.emitter", __package__).ThresholdEmitter
+    sig = inspect.signature(cls.__init__).parameters
+    return {name: sig[name].default
+            for name in ("short_window", "min_trend_ticks",
+                         "path_momentum", "trend_filter")}
 
 
 @dataclass(frozen=True)
@@ -51,33 +85,22 @@ class LiveConfig:
 
     policy: SessionPolicy
 
-    # --- forecaster ---
-    checkpoint: str
-    context_length: int
-    forecast_horizon_bars: int
-    forecast_stride_bars: int
-    device: str = "auto"
-    bar_freq: Optional[str] = None
-    signal_step: str = "last"
+    # Tech: no strategy fields. The band, the probability gate, the checkpoint,
+    #       the cadence, the filter knobs and the trader's risk shape all live in
+    #       `strategy/<session>/wiring.py:PARAMS` and are read from there.
+    # Why:  LIVE_STRATEGY_ROUTING_PLAN D2. This dataclass used to re-declare ~19
+    #       values the package already owned, and a copy that can disagree
+    #       eventually does: it produced the 2026-08-11 policy/band defect this
+    #       module's docstring describes, and then `build_emitter` hard-coding
+    #       `.emitter.ThresholdEmitter` made `strategy/fullday/combine.py`
+    #       unreachable from live while the package's Trader *was* picked up --
+    #       a live run that was one package's emitter on another's trader. The
+    #       copy is gone, so neither is expressible.
 
-    # --- emitter ---
-    buy_threshold: float = 0.00045
-    sell_threshold: float = -0.00045
-    min_prob: Optional[float] = 0.5
-    full_confidence_prob: float = 0.9
-    short_window: int = 3
-    min_trend_ticks: float = 3.0
-    path_momentum: bool = True
-    trend_filter: bool = True
-
-    # --- trader / execution ---
-    tick_size: float = 1.0
-    aggression_ticks: int = 0
-    max_position: int = 1
-    max_aggression_ticks: Optional[int] = None
-    fee_rate: float = 0.0002
-    contract_multiplier: float = 200.0
-    forced_close_on_session_end: bool = False
+    # --- deployment, not strategy ---
+    tick_size: float = 1.0            # the contract's tick grid
+    fee_rate: float = 0.0002          # what the broker charges, not what to trade
+    contract_multiplier: float = 200.0  # TXF point value
 
     @property
     def is_tuned(self) -> bool:
@@ -108,82 +131,6 @@ class LiveConfig:
             return "fullday"
         raise ValueError(f"no strategy package for sessions {sorted(sessions)}")
 
-    def build_emitter(self):
-        # Tech: construct this deployment's emitter — the class its own strategy
-        #       package owns, from the declared fields.
-        # Why:  a factory rather than a separately-written construction site, so
-        #       the declaration and the object can never disagree. The emitter is
-        #       stateful (rolling deques), so this returns a FRESH instance every
-        #       call — reusing one across runs silently produces wrong numbers.
-        #       Since the split it is the *package's* copy, so a search that
-        #       retunes DAY's emitter changes what a DAY live run trades and
-        #       nothing else.
-        from importlib import import_module
-        ThresholdEmitter = import_module(
-            f"..strategy.{self.strategy_package}.emitter", __package__
-        ).ThresholdEmitter
-        return ThresholdEmitter(
-            buy_threshold=self.buy_threshold,
-            sell_threshold=self.sell_threshold,
-            min_prob=self.min_prob,
-            full_confidence_prob=self.full_confidence_prob,
-            short_window=self.short_window,
-            min_trend_ticks=self.min_trend_ticks,
-            path_momentum=self.path_momentum,
-            trend_filter=self.trend_filter,
-        )
-
-    def build_forecaster(self, *, warmup_bars: int) -> Any:
-        # Tech: construct the Toto2 forecaster; `warmup_bars` is passed in rather
-        #       than stored on the config.
-        # Why:  in the backtest `warmup_bars` is the *train/eval split* — a
-        #       property of that experiment, not of the strategy. Live, warm-up
-        #       comes from the `kbars` backfill instead, so how many bars must
-        #       elapse before the first live forecast is a decision for the entry
-        #       point (V3), not something to pin from a research run. Imported
-        #       here so this module stays importable without torch installed.
-        #
-        #       Since the split it routes through the deployment's own package,
-        #       which is what makes a per-session forecaster reachable live
-        #       (STRATEGY_SPLIT_PLAN D3). The package defers the torch import for
-        #       the same reason this method does.
-        from importlib import import_module
-        make_forecaster = import_module(
-            f"..strategy.{self.strategy_package}.forecaster", __package__
-        ).make_forecaster
-        return make_forecaster(
-            warmup_bars=warmup_bars,
-            stride_bars=self.forecast_stride_bars,
-            horizon_bars=self.forecast_horizon_bars,
-            context_length=self.context_length,
-            checkpoint=self.checkpoint,
-            device=self.device,
-            bar_freq=self.bar_freq,
-            signal_step=self.signal_step,
-        )
-
-    def build_trader(self, *, execution: Any):
-        # Tech: construct this deployment's Trader — its own package's copy —
-        #       over the execution handle the caller owns.
-        # Why:  STRATEGY_SPLIT_PLAN §2.3. The Trader was built inline in
-        #       `runtime.py`, which made it the one component a live deployment
-        #       could not swap; live and backtest now reach the same per-session
-        #       class by the same route. `execution` is a parameter rather than a
-        #       field for the reason `warmup_bars` is: it belongs to the run (it
-        #       is the broker), not to the strategy. Fresh instance per call, for
-        #       the same statefulness reason as `build_emitter`.
-        from importlib import import_module
-        Trader = import_module(
-            f"..strategy.{self.strategy_package}.trader", __package__
-        ).Trader
-        return Trader(
-            execution=execution,
-            tick_size=self.tick_size,
-            aggression_ticks=self.aggression_ticks,
-            max_position=self.max_position,
-            max_aggression_ticks=self.max_aggression_ticks,
-        )
-
     def warmup_days_default(self, *, emitter_prime_boundaries: int = 500) -> int:
         # Tech: calendar days of history needed to fully prime the emitter for
         #       *this* policy, derived from its bars-per-session rather than a
@@ -202,12 +149,20 @@ class LiveConfig:
         #       existing default (30) exactly rather than drifting to 31; DAY
         #       comes out to 84, one under the ~85 the hand-measured table
         #       quoted, which the derivation's own tilde already allows for.
-        target_bars = self.context_length + (self.forecast_stride_bars
-                                             * emitter_prime_boundaries)
+        # Tech: the cadence comes from this deployment's strategy package, not
+        #       from a field on this config.
+        # Why:  D2 -- `context_length` and `stride_bars` are strategy values, and
+        #       a search that changes either changes how much history a live run
+        #       must replay before it can trade. Reading them here means that
+        #       stays true automatically instead of needing a second edit.
+        from ..strategy import wiring as strategy_wiring
+        params = strategy_wiring.params(self.strategy_package)
+        target_bars = params["context_length"] + (params["stride_bars"]
+                                                  * emitter_prime_boundaries)
         trading_days = target_bars / self.policy.bars_per_session()
         return round(trading_days * 7 / 5)
 
-    def describe(self) -> str:
+    def describe(self, params: Optional[dict] = None) -> str:
         # Tech: one-line human summary, provenance first.
         # Why:  goes on the console banner and into the Recorder's `meta` header,
         #       so any artifact can be traced back to the research row that
@@ -222,15 +177,39 @@ class LiveConfig:
         #       module can produce is a landmine, not a safeguard.
         commit = self.source_commit if self.is_tuned else "UNTUNED"
         calmar = self.source_calmar if self.is_tuned else "nan"
+        # Tech: every strategy value on this line is read from the deployment's
+        #       package -- `PARAMS` for the declared knobs, and the emitter
+        #       class's own signature defaults for `min_trend_ticks` and
+        #       `path_momentum`, which `PARAMS` deliberately does not declare.
+        # Why:  D2. The format is unchanged on purpose: `tools/session_artifacts.py`
+        #       parses this exact line back out of a recorded `meta` header with
+        #       `_DESCRIBE_RE`, so only the *source* of the values moves. Reading
+        #       the two undeclared knobs from the signature rather than printing
+        #       3.0/True as literals keeps the line truthful if a search edits the
+        #       package's `emitter.py` -- which is precisely what that file is for.
+        # Tech: render the RUN's resolved knobs when the caller has them; fall
+        #       back to the package's declared ones when it does not.
+        # Why:  LIVE_STRATEGY_ROUTING_PLAN Phase 5. Reading the package
+        #       unconditionally made this line lie under `--param`: it printed the
+        #       declared band while the run traded the typed one, on the banner
+        #       AND in the recorder's `meta` header. The caller that knows is the
+        #       one that resolved the overrides. The fallback keeps every existing
+        #       call site working, and is right for them -- they describe a
+        #       deployment, not a run.
+        from ..strategy import wiring as strategy_wiring
+        p = params if params is not None else strategy_wiring.params(
+            self.strategy_package)
+        emitter_defaults = _emitter_signature_defaults(self.strategy_package)
         return (
             f"LiveConfig[{commit} calmar={calmar} "
             f"{sorted(self.policy.sessions)}] "
-            f"ckpt={self.checkpoint} ctx={self.context_length} "
-            f"stride={self.forecast_stride_bars} horizon={self.forecast_horizon_bars} "
-            f"band=±{self.buy_threshold} min_prob={self.min_prob} "
-            f"trend={self.min_trend_ticks} path={self.path_momentum} "
-            f"aggr={self.aggression_ticks} maxpos={self.max_position} "
-            f"forced_close={self.forced_close_on_session_end}"
+            f"ckpt={p['checkpoint']} ctx={p['context_length']} "
+            f"stride={p['stride_bars']} horizon={p['horizon_bars']} "
+            f"band=±{p['buy_threshold']} min_prob={p['min_prob']} "
+            f"trend={emitter_defaults['min_trend_ticks']} "
+            f"path={emitter_defaults['path_momentum']} "
+            f"aggr={p['aggression_ticks']} maxpos={p['max_position']} "
+            f"forced_close={p['forced_close']}"
         )
 
 
@@ -284,10 +263,6 @@ PINNED = LiveConfig(
         "235 trades; net +24135.60 pts; max dd -6703.24"
     ),
     policy=SessionPolicy.night(),
-    checkpoint="Datadog/Toto-2.0-1B",
-    context_length=3008,
-    forecast_horizon_bars=30,
-    forecast_stride_bars=30,
 )
 
 
@@ -354,13 +329,6 @@ PINNED_DAY = LiveConfig(
         "traded (W8 unrun); trails eval-window buy-and-hold by -24418.57"
     ),
     policy=SessionPolicy.day(),
-    checkpoint="Datadog/Toto-2.0-1B",
-    context_length=3008,
-    forecast_horizon_bars=30,
-    forecast_stride_bars=30,
-    buy_threshold=0.001,
-    sell_threshold=-0.001,
-    min_prob=0.65,
 )
 
 
@@ -417,13 +385,6 @@ PINNED_FULLDAY = LiveConfig(
         "`real_data.py --strategy fullday`."
     ),
     policy=SessionPolicy.both(),
-    checkpoint="Datadog/Toto-2.0-1B",
-    context_length=3008,
-    forecast_horizon_bars=30,
-    forecast_stride_bars=30,
-    buy_threshold=0.001,
-    sell_threshold=-0.001,
-    min_prob=0.65,
 )
 
 
