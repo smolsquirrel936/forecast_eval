@@ -70,6 +70,7 @@ else. That is what was measured (§3 Phase 3).
 | D7 | **`--param KEY=VALUE`, repeatable, on both CLIs**, passed straight into `make_strategy(**overrides)`. Not generated argparse flags: the parser would have to import the package before parsing, and the package is chosen by a flag. |
 | D8 | **`strategy/*` is not edited by this plan.** Verified: `make_strategy` already returns `forecaster`, `emitter`, `make_trader`, `exit_rule`, `forced_close`, and already validates overrides against `PARAMS`. The seam exists; only live fails to use it. |
 | D9 | **Route all three packages, accepting that night and day live switch to RSI.** Added mid-execution, after §0's no-op premise was found false — `strategy/night/` and `strategy/day/` have built an RSI strategy since `a8ddd85`, so routing live through their packages changes what those two deployments trade. The user's words: *"Route all three, and I'll make strategy of day and night use Toto2 later."* So the switch is accepted as a known, temporary state, and putting day and night back on Toto2 is **the user's follow-up in those packages**, not this plan's work. Only `fullday` is unaffected by the routing. |
+| D10 | **NIGHT cannot restart into an open position, and that is accepted as temporary.** Surfaced by merging `night` into `main` (2026-09-09): night's package returns a `TimeStop`, and since D2 live *honours* the package's `exit_rule` instead of the hardcoded `None` it used to pass — so `LiveRuntime.adopt_position` refuses, because the previous process's entry bar index is not recoverable and a bars-held rule would measure from a sentinel. Three fixes were offered (persist the entry index; flatten before every restart; drop the rule live). **The user chose none of them:** day and night are being re-developed on a Toto2 signal emitter, which declares no exit rule, so `exit_rule` returns to `None` and adoption works again on its own. DAY and FULLDAY are unaffected today. |
 
 ## 2. The defect this closes
 
@@ -569,7 +570,21 @@ Tests: **1537 passed, 1 failed, 2 skipped** (CRLF artifact).
   **unrun**. It affects the backtest ledger, not this plan's phases — Phase 3's
   acceptance test is a before/after diff taken inside one environment.
 
-## 5. After this lands
+## 5. Known state after the merges
+
+- **NIGHT live cannot adopt a position on restart** until day/night move to a
+  Toto2 emitter (D10). A night soak restarted while holding must be flattened
+  first. DAY and FULLDAY are unaffected.
+- **NIGHT and DAY trade RSI live** (D9), by way of their packages.
+- **FULLDAY trades iter05** — `combine.ConsensusThresholdEmitter` at
+  RET_K=PROB_K=3, long-only trader, band ±0.00075 / min_prob 0.5 — reached live
+  by merging `fullday_0909` with **no live-side edit**, which was the goal.
+- `PINNED_FULLDAY` still carries no `source_commit`, so every fullday run records
+  itself `UNTUNED`. Correct: `results.tsv` has no FULLDAY row, and iter05 lives in
+  `results_fullday.tsv`, a different schema. Re-pinning it is a deliberate,
+  separate decision.
+
+## 6. After this lands
 
 Merge `fullday_0909` → `main` (fast-forward) to put iter05's stride consensus and
 long-only trader into simtrade. No live-side change will be required — that is the
