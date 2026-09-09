@@ -19,14 +19,17 @@ factory. This is the file a search for this session edits first.
 | key | type | meaning |
 |---|---|---|
 | `forecaster` | `Forecaster` | built by [forecaster.py](forecaster.md) |
-| `emitter` | `SignalEmitter` | a fresh [emitter.py](emitter.md) instance |
+| `emitter` | `SignalEmitter` | a fresh [combine.py](combine.md) consensus instance (iter03) |
 | `make_trader` | `callable(Execution) -> Trader` | factory, not an instance — see [trader.py](trader.md) |
 | `exit_rule` | `Optional[ExitRule]` | `None` — this session declares no risk exit |
 | `forced_close` | `bool` | force close at session boundaries |
 | `params` | dict | the resolved knobs, for the run banner and `params.json` |
 
 ## Provenance
-**UNTUNED** — DAY's numbers, inherited and never measured here, band ±0.001 / `min_prob` 0.65 (inherited from DAY).
+Band ±0.00075 / `min_prob` 0.5 — the **worse-half winner** of the Step-0 band sweep on
+`TXF_RPT_minute_fullday.csv` (`outputs/fullday_band_sweep.csv`: worst half 1.7818,
+full-window 6.2573, 206 trades). Committed as `iter00: seed band from sweep`; replaces
+DAY's inherited ±0.001 / 0.65, which were never measured on this tape.
 
 ## Key points / gotchas
 - **Starting at the pinned config is what makes the split checkable.**
@@ -42,11 +45,10 @@ factory. This is the file a search for this session edits first.
   exposed them, so every recorded run used the emitter's class defaults; leaving
   them there is what reproduces those runs.
 
-> **This session is UNTUNED.** The values in `PARAMS` are DAY's, inherited so the
-> package is runnable and parity-checkable. They were never measured on
-> `TXF_RPT_minute_fullday.csv`, there is no `results.tsv` row for full-day, and
-> this configuration has never traded. `live/cli.py` refuses `--config fullday`
-> until a tuned row exists (STRATEGY_SPLIT_PLAN §5).
+> **The band is seeded, not tuned.** The values in `PARAMS` come from the Step-0
+> sweep alone; the loop's first `results_fullday.tsv` row is still to come, and
+> until a tuned row exists `live/cli.py` refuses `--config fullday`
+> (STRATEGY_SPLIT_PLAN §5).
 
 ## Related
 [strategy/fullday/wiring.md](wiring.md) · [strategy/wiring.py](../wiring.md) · [strategy/base.py](../base.md) · [STRATEGY_SPLIT_PLAN.md](../../../STRATEGY_SPLIT_PLAN.md)
