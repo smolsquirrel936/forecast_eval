@@ -224,8 +224,10 @@ run per session. Output dirs: `outputs/reset_g3_{night,day}_<ts>/` (not `iterNN`
 ## 6. Open questions
 
 1. **Live:** accept that DAY/NIGHT live switch back to Toto2 when this merges (D6)?
-   **Open. Blocks the Phase 8 merge.**
-2. **Archive tags:** push them to `origin`, or keep local? **Open.** Created local.
+   **Answered 2026-09-14: no live trading is running**, so the merge has no immediate
+   live effect. The next DAY or NIGHT live start will trade Toto2 and needs the GPU.
+2. **Archive tags:** push them to `origin`, or keep local? **Answered 2026-09-14: keep
+   local for now.**
 3. **Push:** push `main` after merge? *Answered 2026-09-14 for the docs commit*
    (`main` pushed at `f2b3251`); ask again for the reset merge.
 4. **Day's starting knobs:** restore W5b unchanged, or loosen before `iter01`?
