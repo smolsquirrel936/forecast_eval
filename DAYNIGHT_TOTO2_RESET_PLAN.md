@@ -231,7 +231,11 @@ run per session. Output dirs: `outputs/reset_g3_{night,day}_<ts>/` (not `iterNN`
 3. **Push:** push `main` after merge? *Answered 2026-09-14 for the docs commit*
    (`main` pushed at `f2b3251`); ask again for the reset merge.
 4. **Day's starting knobs:** restore W5b unchanged, or loosen before `iter01`?
-   **Open.** Restored unchanged (G3 needs it); loosening belongs to the loop as `iter02+`.
+   **Answered 2026-09-14: unchanged. The reset returns to the initial state, and the
+   best Calmar is decided by the first run.** No recorded Calmar (the pinned rows, the G3
+   parity runs, the archived RSI loops) carries into either loop as a bar to beat, because
+   an inherited high Calmar would block the loop's progress. Both session plans and the
+   index were edited to say so, and their Calmar figures were removed.
 
 ## 7. Execution record (2026-09-14)
 
