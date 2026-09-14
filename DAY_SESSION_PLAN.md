@@ -252,6 +252,17 @@ cherry-pick too. `7fd3fa6` and `ed0a1ba` remain on `autoresearch_result_1` in
 `day/forecast_eval` as the record. If night ever wants day's `reports.py` or
 `threshold.py` work, it is rewritten there, not moved.
 
+> **Updated 2026-09-14 — the record is no longer reachable from night.** Night's
+> own copies of `0f80b80`, `e405adf` and `2716f49` were held by nothing but two
+> stashes on `autoresearch_result_1` (2026-07-08 `real_data.py --emitter`
+> wiring; 2026-08-05 metrics/reporting work plus an uncommitted quantile-gate
+> `ThresholdEmitter` experiment). The user judged both obsolete and dropped
+> them; no branch, tag or remote in this repo contains those commits, so the
+> next `git gc` may prune them. `7fd3fa6` and `ed0a1ba` were never in this
+> repo, and no `day/forecast_eval` tree was found beside `night/` or under
+> `backup/` on 2026-09-14. Treat the July day work as gone unless that tree
+> turns up elsewhere; the "rewrite, don't move" rule above is unaffected.
+
 ---
 
 ## 1. The consequence — two shapes, and the migration is only one of them
@@ -1742,7 +1753,8 @@ and **W4b is a prerequisite for trusting W5b's acceptance test at all** (§2.2).
   cross-tree transport — no push to GitHub, and no local remote between the two
   folders — which closes the cherry-pick option too. Day's July work therefore
   remains commits `7fd3fa6` and `ed0a1ba` on `autoresearch_result_1` in
-  `day/forecast_eval`, as the record.
+  `day/forecast_eval`, as the record. *(2026-09-14: that record is no longer
+  reachable from night — see the 2026-09-14 update at the end of §0.2.)*
 
   **Consequences, so they are not rediscovered later:**
 

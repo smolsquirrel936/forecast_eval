@@ -2,7 +2,11 @@
 
 **Role:** Validation of every invariant the harness depends on (SPEC §6 Phase 5, §9).
 **Run:** `uv run python -m pytest forecast_eval/tests/ -v` (use the local `uv` venv — see [CLAUDE.md](../CLAUDE.md)).
-**960 passed, ~46 s** (2026-09-02).
+**Last measured: 1537 passed, 1 failed, 2 skipped** at `bfd4338` (2026-09-09; the
+one failure is the known `volmultitf` CRLF artifact — LIVE_STRATEGY_ROUTING_PLAN).
+The `night` and `fullday_0909` merges added test files after that run, so the current
+count is **unmeasured** — re-measure once `.venv/` is rebuilt (it was reduced to
+`shioaji` alone on 2026-09-14; see UV_SETUP.md). Before that: 960 passed, ~46 s (2026-09-02).
 
 > Per-file docs are intentionally consolidated here: each test already carries a
 > docstring explaining its case, so this page is a coverage map rather than one
