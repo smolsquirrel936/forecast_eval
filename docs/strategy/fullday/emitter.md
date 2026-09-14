@@ -2,7 +2,7 @@
 
 **Role:** FULL-DAY's SignalEmitter — a per-session copy of the banded threshold emitter.
 **Pipeline:** a concrete [SignalEmitter](../base.md), owned by the FULL-DAY package.
-**Depends on:** [events.py](../../events.md), [strategy/base.py](../base.md)   **Used by:** [combine.py](combine.md) (subclassed; wiring constructs the subclass)
+**Depends on:** [events.py](../../events.md), [strategy/base.py](../base.md)   **Used by:** [strategy/fullday/wiring.py](wiring.md)
 
 ## Responsibility
 FULL-DAY's own copy of the banded `ThresholdEmitter`. It turns

@@ -82,13 +82,15 @@ one level down.
 It carries `source_commit=None` and `source_calmar=None`, which is the declared
 meaning of unprovenanced, and `is_tuned` is False. Its band (±0.001, `min_prob`
 0.65) is **DAY's, inherited because full-day shares DAY's 12:45 roll instant —
-never measured on the full-day tape**. There is no `results.tsv` row for it and
-it has never traded.
+not chosen for the full-day tape**. There is no `results.tsv` row for it and it
+has never traded. (The fullday loop ran iter00–05 on a swept band and a consensus
+emitter; DAYNIGHT_TOTO2_RESET_PLAN §8 restored the package to these inherited
+values on 2026-09-14.)
 
-[live/cli.py](cli.md) refuses `--config fullday` before the credentials check.
-The refusal keys on `is_tuned`, not on the name, so a fourth untuned deployment
-is covered for free. Backtesting it is the supported path:
-`real_data.py --strategy fullday`.
+*Updated 2026-09-14:* [live/cli.py](cli.md) **no longer** refuses `--config
+fullday`. LIVE_STRATEGY_ROUTING_PLAN D1 removed the `is_tuned` refusal because
+`simulation=True` is hardcoded; `is_tuned` survives as a record. Backtesting
+remains the supported path: `real_data.py --strategy fullday`.
 
 W5a is why the inheritance is not evidence: NIGHT's band on the day tape scores
 Calmar 0.4129 against 3.6006. There is no reason to expect DAY's band to transfer

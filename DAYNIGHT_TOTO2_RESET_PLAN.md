@@ -276,6 +276,63 @@ run per session. Output dirs: `outputs/reset_g3_{night,day}_<ts>/` (not `iterNN`
   section. The index plan was updated. None of the plan files are under git; their
   pre-reset copies are in the archive folder.
 
+## 8. Extension: FULLDAY reset (requested and executed 2026-09-14)
+
+**Request:** apply the same strategy to the fullday session and reset it too. **Decision
+F-D1:** the target is `20767bb`, the same commit as day/night. At that commit
+`strategy/fullday/` is day's code verbatim, with day's inherited band (±0.001 / 0.65,
+UNTUNED). Restoring it gives fullday the same strategy and the same starting settings, and
+drops the fullday loop's Step-0 sweep seed (±0.00075 / 0.5) along with iter03–05. That matches
+Q4's principle: the first run decides; no tuned starting point or Calmar carries in.
+
+**What the fullday loop had changed** (`4823e6a` … `30f70d7`, merged in `1900714`): `wiring.py`
+(swept band, `ConsensusThresholdEmitter`), new `combine.py`, a long-only `trader.py`, docs for
+all of these, two new test files, and **one shared test**: `e773c23` rewrote
+`tests/test_strategy_selector.py`'s fullday band test to assert the swept band.
+`tools/band_sweep.py`'s fee default change belongs to `af4be0b` (infrastructure) and stays.
+
+**Execution record**
+
+- **F1 archive.** Tags `archive/fullday-toto2-iter05` → `30f70d7` (the loop's tip) and
+  `archive/pre-fullday-reset` → `90bff4c`, both local. `iter0{1..5}_fullday_*` (10 entries) and
+  the four `fullday_band_sweep*` files moved to `outputs/archive_fullday_2026-09/`. Copies of
+  `autoresearch_trading_plan_fullday.md` and the index went under `plans/`.
+- **F2–F4.** Branch `fullday_toto2_reset` from `main@90bff4c`. `strategy/fullday` and
+  `docs/strategy/fullday` restored to `20767bb` (index diff empty). `combine.py`, `combine.md`,
+  `test_fullday_combine.py` and `test_fullday_trader.py` deleted. The fullday band test was
+  put back to its `20767bb` form (`test_fullday_is_days_band_and_is_marked_untuned`,
+  byte-identical); `bfd4338`'s edits elsewhere in that file were kept.
+- **F5 wording.** The restored `20767bb` text claimed two things that are no longer true: that
+  the configuration was "never measured" on the tape (the sweep measured it), and that
+  `live/cli.py` refuses `--config fullday` (removed by routing D1 in `bfd4338`). Reworded in
+  `strategy/fullday/wiring.py`'s docstring (keeping "UNTUNED", which the test asserts),
+  `docs/strategy/fullday/wiring.md`, and `docs/live/config.md`'s PINNED_FULLDAY section. That
+  last one had been stale since `bfd4338`. A second follow-up was appended to
+  LIVE_STRATEGY_ROUTING_PLAN §5.
+- **G1.** **1448 passed, 1 failed (the same `volmultitf` CRLF pin), 2 skipped**, against
+  `main`'s 1467. Node-ID diff accounts for the 19: 11 tests in `test_fullday_combine.py`, 5 in
+  `test_fullday_trader.py`, 3 `combine.py` module parametrizations (docs coverage + two
+  undefined-globals checks), and the sweep band test replaced one-for-one by the restored
+  test.
+- **G2.** fullday builds `strategy.fullday.emitter.ThresholdEmitter` + `Toto2Forecaster`,
+  `exit_rule=None`, ±0.001 / 0.65. `params("fullday") == params("day")`. `emitter.py`,
+  `trader.py` and `forecaster.py` are identical to day's apart from the docstring's first line.
+- **G3F.** There is no `results.tsv` row for fullday, so the target is the 2026-09-09 sweep's
+  ±0.001 / 0.65 cell. Its trustworthiness was checked first: the sweep's ±0.00075 / 0.5 cell
+  reproduces the loop's recorded iter01 row exactly (206 trades, +32 319.88295, Calmar
+  6.2573).
+
+  | | trades | net PnL | max DD | Calmar | forecasts / time |
+  |---|---|---|---|---|---|
+  | sweep cell (fee 0.00015, warmup 5000) | 97 | +9 835.18935 | — | 1.3975137 | — |
+  | restored package, same invocation | **97** | **+9 835.189350** | −7 037.6335 | **1.3975137** | 78 648 / 470.9 s |
+
+  Output in `outputs/reset_g3_fullday_20260914_*/`; banner `forecaster_sha b3629e2074f0`.
+- **F7.** `results_fullday.tsv` reset to its header. `autoresearch_trading_plan_fullday.md`
+  rewritten in the day/night Toto2 format: the Step-0 sweep is no longer a precondition,
+  `--warmup-bars 5000` (eval from 2018-01-09 02:50), no inherited Calmar, and the selector test
+  is flagged as the one test a band change must update. Index row updated.
+
 ## Related
 
 `STRATEGY_SPLIT_PLAN.md` (§1 defaults, G1) · `LIVE_STRATEGY_ROUTING_PLAN.md` (D9, D10) ·

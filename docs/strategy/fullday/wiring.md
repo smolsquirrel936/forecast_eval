@@ -19,17 +19,14 @@ factory. This is the file a search for this session edits first.
 | key | type | meaning |
 |---|---|---|
 | `forecaster` | `Forecaster` | built by [forecaster.py](forecaster.md) |
-| `emitter` | `SignalEmitter` | a fresh [combine.py](combine.md) consensus instance (iter03) |
+| `emitter` | `SignalEmitter` | a fresh [emitter.py](emitter.md) instance |
 | `make_trader` | `callable(Execution) -> Trader` | factory, not an instance — see [trader.py](trader.md) |
 | `exit_rule` | `Optional[ExitRule]` | `None` — this session declares no risk exit |
 | `forced_close` | `bool` | force close at session boundaries |
 | `params` | dict | the resolved knobs, for the run banner and `params.json` |
 
 ## Provenance
-Band ±0.00075 / `min_prob` 0.5 — the **worse-half winner** of the Step-0 band sweep on
-`TXF_RPT_minute_fullday.csv` (`outputs/fullday_band_sweep.csv`: worst half 1.7818,
-full-window 6.2573, 206 trades). Committed as `iter00: seed band from sweep`; replaces
-DAY's inherited ±0.001 / 0.65, which were never measured on this tape.
+**UNTUNED** — DAY's numbers, inherited and not chosen here, band ±0.001 / `min_prob` 0.65 (inherited from DAY).
 
 ## Key points / gotchas
 - **Starting at the pinned config is what makes the split checkable.**
@@ -45,10 +42,15 @@ DAY's inherited ±0.001 / 0.65, which were never measured on this tape.
   exposed them, so every recorded run used the emitter's class defaults; leaving
   them there is what reproduces those runs.
 
-> **The band is seeded, not tuned.** The values in `PARAMS` come from the Step-0
-> sweep alone; the loop's first `results_fullday.tsv` row is still to come, and
-> until a tuned row exists `live/cli.py` refuses `--config fullday`
-> (STRATEGY_SPLIT_PLAN §5).
+> **This session is UNTUNED.** The values in `PARAMS` are DAY's, inherited so the
+> package is runnable and parity-checkable. They were not chosen for
+> `TXF_RPT_minute_fullday.csv`, and there is no `results.tsv` row for full-day.
+> The 2026-09-09 band sweep did measure this exact cell (97 trades, Calmar 1.3975
+> at fee 0.00015, warmup 5000). DAYNIGHT_TOTO2_RESET_PLAN §8 used it as the restore
+> check, not as a target. Live no longer refuses `--config fullday`
+> (LIVE_STRATEGY_ROUTING_PLAN D1). The package was restored to this state on
+> 2026-09-14 after the fullday loop (iter00–05, archived at
+> `archive/fullday-toto2-iter05`).
 
 ## Related
 [strategy/fullday/wiring.md](wiring.md) · [strategy/wiring.py](../wiring.md) · [strategy/base.py](../base.md) · [STRATEGY_SPLIT_PLAN.md](../../../STRATEGY_SPLIT_PLAN.md)

@@ -105,36 +105,24 @@ class Trader:
         cur = market.price
         base_offset = self.aggression_ticks * self.tick_size
 
-        # Tech: the §4.2 state machine — from flat, only a BUY opens; a SELL
-        #       from flat submits no order at all (it still cancelled any
-        #       resting one above); while long, only a SELL acts (closes,
-        #       never flips).
+        # Tech: the §4.2 state machine — from flat, open in the signal's direction;
+        #       while long, only a SELL acts (closes, never flips); while short,
+        #       only a BUY acts (closes, never flips).
         # Why:  no pyramiding / no flipping in v1 — a flip would be two economic
         #       actions (close + open) collapsed into one tick, which muddies PnL
         #       attribution, so same-direction-while-in-position is deliberately a
         #       no-op and an opposing signal closes only.
         order: Optional[OrderEvent] = None
         if self.position == 0:
-            # Tech: long-only — BUY opens from flat; a SELL from flat is a
-            #       no-op (it still cancelled any resting order above).
-            # Why:  fullday-loop iter04. The iter03 consensus run split by
-            #       side into 95 longs at +30,220 pts net and 59 shorts at
-            #       only +4,203 (avg +318 vs +71 per trade) on a tape that rose
-            #       5x across the eval window — and dropping the short entry
-            #       also frees BUY crossings that previously just closed
-            #       shorts (the no-flip machine needs two BUYs to get long
-            #       again), which is where most of the probed gain comes from
-            #       (probe: net +34,423 -> +37,066, dd -3,621 -> -3,379,
-            #       full-window Calmar 9.505 -> 10.971 at n 154 -> 100).
-            #       A SELL while long still closes (branch below), so the
-            #       consensus exit path is untouched; only the short ENTRY is
-            #       gone. The shared trader and the day/night copies still
-            #       open shorts — this divergence is the split's purpose.
+            offset = self._entry_offset(strength)
+            qty = self._entry_qty(strength)
             if direction == "BUY":
-                offset = self._entry_offset(strength)
-                qty = self._entry_qty(strength)
                 order = OrderEvent(
                     market.timestamp, "BUY", cur + offset, "OPEN", quantity=qty
+                )
+            else:
+                order = OrderEvent(
+                    market.timestamp, "SELL", cur - offset, "OPEN", quantity=qty
                 )
         elif self.position > 0:
             if direction == "SELL":

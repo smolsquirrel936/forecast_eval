@@ -591,6 +591,14 @@ Tests: **1537 passed, 1 failed, 2 skipped** (CRLF artifact).
 > NIGHT and DAY trade Toto2 live again, by the same routing and with no live-side
 > edit; night's package returns `exit_rule=None`, so **D10's restart-adoption block
 > is gone**. FULLDAY is untouched.
+>
+> **Second follow-up, same day: FULLDAY reset too** (DAYNIGHT_TOTO2_RESET_PLAN §8).
+> The "FULLDAY trades iter05" bullet above is now history. `strategy/fullday/` is back
+> at `20767bb`, the same `ThresholdEmitter` + two-sided `Trader` + Toto2 code as day,
+> with day's inherited band (±0.001 / `min_prob` 0.65). `combine.py` and the long-only
+> trader are deleted; the loop is archived at `archive/fullday-toto2-iter05`. All three
+> deployments now trade the same strategy code, differing only in band, gate and
+> session policy.
 
 ## 6. After this lands
 
