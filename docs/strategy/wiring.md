@@ -42,7 +42,8 @@ Two things follow that are worth stating plainly:
 
 - **A package edit is a live change.** Whatever `make_strategy` returns is what a
   live simtrade of that session trades. `strategy/night` and `strategy/day` build
-  RSI, so that is what they trade live (plan D9).
+  their pinned Toto2 threshold strategies, so that is what they trade live. (They
+  built RSI from plan D9 until DAYNIGHT_TOTO2_RESET_PLAN restored them.)
 - **`**overrides` is a real interface, not a test hook.** `--param KEY=VALUE` on
   either CLI arrives here, is merged over `PARAMS`, and is rejected by name if the
   package does not declare it. See [param_override.md](../param_override.md).

@@ -18,10 +18,10 @@ factory. This is the file a search for this session edits first.
 ## Return contract
 | key | type | meaning |
 |---|---|---|
-| `forecaster` | `Forecaster` | built by [rsi.py](rsi.md) via `make_rsi_forecaster` |
-| `emitter` | `SignalEmitter` | a fresh [rsi.py](rsi.md) `RsiEmitter` |
+| `forecaster` | `Forecaster` | built by [forecaster.py](forecaster.md) |
+| `emitter` | `SignalEmitter` | a fresh [emitter.py](emitter.md) instance |
 | `make_trader` | `callable(Execution) -> Trader` | factory, not an instance — see [trader.py](trader.md) |
-| `exit_rule` | `Optional[ExitRule]` | `TimeStop(TIME_STOP_BARS)` — the one-week holding cap (iter05) |
+| `exit_rule` | `Optional[ExitRule]` | `None` — this session declares no risk exit |
 | `forced_close` | `bool` | force close at session boundaries |
 | `params` | dict | the resolved knobs, for the run banner and `params.json` |
 
@@ -41,16 +41,6 @@ factory. This is the file a search for this session edits first.
   `min_trend_ticks`, `path_momentum`, `trend_filter`. `real_data.py` never
   exposed them, so every recorded run used the emitter's class defaults; leaving
   them there is what reproduces those runs.
-- **The exit is a one-week `TimeStop` since iter05 (2026-09-08).** The RSI
-  strategy's only organic exit is SELL at RSI>=80, which never arrives in a
-  decline; iter03's four disaster longs (8–35 days, -4 074/-3 178/-1 495/-1 367
-  pts) carried the max drawdown precisely because nothing could close them.
-  `TIME_STOP_BARS = 4000` (~4.8 sessions) bounds that tail — measured on a
-  scratch replay validated bit-identical against iter03's harness numbers:
-  net +12 833 → +15 623, dd -4 799 → -2 791, with 2000–4000 a plateau (5.57 /
-  5.60) and 4000 the mid-band pick. The exit races the emitter per tick
-  (whichever fires first closes), so RSI>=80 winners are untouched; pinned by
-  [tests/test_night_wiring.py](../../../tests/test_night_wiring.py).
 
 ## Related
 [strategy/night/wiring.md](wiring.md) · [strategy/wiring.py](../wiring.md) · [strategy/base.py](../base.md) · [STRATEGY_SPLIT_PLAN.md](../../../STRATEGY_SPLIT_PLAN.md)

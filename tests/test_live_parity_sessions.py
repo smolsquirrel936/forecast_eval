@@ -56,9 +56,11 @@ def _emitter_for(cfg):
 
     Deliberately NOT `make_strategy(...)["emitter"]`. These cases are about the
     live loop's session filtering -- they feed a synthetic Toto2-shaped forecast
-    and assert the two loops reach identical decisions -- and day and night build
-    an RSI strategy from their packages now, which reads different payload keys
-    and would emit nothing at all ("no fills — parity would be trivially true").
+    and assert the two loops reach identical decisions -- and the packages'
+    `make_strategy` stack would bring a real Toto2 forecaster along with it. (It
+    was first written while day and night built RSI, whose emitter reads different
+    payload keys and would emit nothing: "no fills — parity would be trivially
+    true".)
 
     That live and the backtest reach the *same* factory is pinned by
     `test_live_config.py::test_live_builds_the_package_the_backtest_would_run`;

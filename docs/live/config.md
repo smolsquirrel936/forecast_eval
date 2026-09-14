@@ -55,8 +55,8 @@ knobs as `strategy_params`.
 name*. A package whose `make_strategy` built something else was therefore
 invisible to live — which is not hypothetical: `strategy/fullday/combine.py`'s
 consensus emitter carried an entire research loop (Calmar 6.14 → 12.94) while
-being unreachable from a live run, and `strategy/night` and `strategy/day` have
-built an RSI strategy since `a8ddd85` that live never saw. Worse,
+being unreachable from a live run, and `strategy/night` and `strategy/day` built
+an RSI strategy from `a8ddd85` until DAYNIGHT_TOTO2_RESET_PLAN that live never saw. Worse,
 `build_trader` *did* route through the package, so a live fullday run would have
 been one package's emitter on another's trader.
 
@@ -71,9 +71,11 @@ the policy, and a deployment running one session's policy against another
 session's components is the C2 defect `--config` exists to prevent, re-entering
 one level down.
 
-> **Consequence, live today:** night and day deployments now trade RSI, because
-> that is what their packages build. Accepted deliberately as D9 of the routing
-> plan; restoring Toto2 is an edit to `strategy/<session>/wiring.py`.
+> **Consequence, live today:** night and day deployments trade their pinned Toto2
+> threshold strategies again (`PINNED` / `PINNED_DAY` knobs, now declared only in
+> `strategy/<session>/wiring.py`), because that is what their packages build. They
+> traded RSI between the routing (D9) and DAYNIGHT_TOTO2_RESET_PLAN, which
+> restored both packages to `20767bb`.
 
 ## `PINNED_FULLDAY` is registered and UNTUNED
 

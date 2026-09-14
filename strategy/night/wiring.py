@@ -3,32 +3,20 @@
 Provenance: ``results.tsv`` commit ``4282d33``, re-measured on the rebuilt night
 tape (TAPE_REBUILD T5, 2026-09-01) — Calmar **3.6006**, 235 trades, net
 +24 135.60 points, max drawdown -6 703.24, on ``TXF_RPT_minute_night.csv``.
-These values must stay in step with ``live/config.py:PINNED``, which
-``tests/test_live_config.py`` asserts against the same row.
+The knobs live here and nowhere else: since LIVE_STRATEGY_ROUTING_PLAN D2 a
+live run builds from ``make_strategy`` below, so an edit to this package is a
+live change. ``live/config.py:PINNED`` keeps only the row's provenance
+(``source_commit``/``source_calmar``), which ``tests/test_live_config.py``
+asserts against ``results.tsv``.
 
 NOT a claim this beats the market: over the evaluated window it now trails
 buy-and-hold by 9 205 points. The Calmar is earned by a small drawdown.
 """
 from typing import Any, Dict
 
-from ...exits.time_stop import TimeStop
-from .emitter import ThresholdEmitter      # noqa: F401 -- see RSI note below
-from .forecaster import make_forecaster   # noqa: F401 -- see RSI note below
-from .rsi import RsiEmitter, make_rsi_forecaster
+from .emitter import ThresholdEmitter
+from .forecaster import make_forecaster
 from .trader import Trader
-
-# Tech: the holding cap, in bars (~840 per night session, so 4000 is ~4.8
-#       sessions ~ one calendar week).
-# Why:  night-loop iter05. iter03's drawdown anatomy: the only exits are RSI>=80
-#       or a later opposing signal, so in a decline the losers ride with no exit
-#       at all -- the four disaster longs held 8 to 35 days and carried the max
-#       drawdown (-4 074 / -3 178 / -1 495 / -1 367 points). A one-week cap
-#       bounds that tail; measured on a scratch replay of iter03's own
-#       invocation (validated bit-identical against the harness numbers first),
-#       tstop 4000 took net +12 833 -> +15 623 and dd -4 799 -> -2 791, with
-#       2000/4000/6000/8000 reading 5.57/5.60/5.03/3.50 -- 2000-4000 is a
-#       plateau, 4000 the mid-band cell, not the peak of a spike.
-TIME_STOP_BARS = 4000
 
 # Tech: this session's default knobs — the twelve values `real_data.py`'s
 #       `--strategy` resolves against, keyed by the CLI destination name.
@@ -62,53 +50,6 @@ PARAMS: Dict[str, Any] = {
 #       which is also what `LiveConfig` declares). Leaving them to the copied
 #       emitter's defaults reproduces those runs exactly; a search that wants to
 #       move them edits `emitter.py`, which this package owns.
-
-
-# Tech: this package now trades PLAIN RSI -- RSI(14) over 5-minute closes, BUY at
-#       20, SELL at 80 -- built in `rsi.py`. `ThresholdEmitter` and
-#       `make_forecaster` are still imported but no longer used by
-#       `make_strategy`.
-# Why:  they are kept reachable for two reasons that are not style. First,
-#       `tests/test_strategy_isolation.py` constructs `wiring.ThresholdEmitter`
-#       by name to prove the three packages hold distinct classes (G3), so
-#       dropping the import would fail the isolation gate for a reason unrelated
-#       to isolation. Second, they are the way BACK: pointing `make_strategy` at
-#       them is all it now takes to put this deployment on Toto2 again -- and
-#       since 2026-09-09 that single edit moves the backtest AND live together.
-#       See the note below.
-#
-# UPDATED 2026-09-09 -- backtest and live no longer disagree, and this session is
-#       LIVE ON RSI.
-#       The warning that stood here said `--config <session>` still ran the pinned
-#       Toto2 threshold strategy, because `live/config.py` reached `.emitter` and
-#       `.forecaster` as modules and never called `make_strategy`. **That is no
-#       longer true, in both halves.** LIVE_STRATEGY_ROUTING_PLAN D2 routed
-#       `LiveRuntime` through `strategy.wiring.make_strategy`, and `LiveConfig`
-#       now holds no strategy fields at all -- so whatever `make_strategy` returns
-#       below IS what a live simtrade of this session trades. Today that is RSI.
-#
-#       It is also no longer true that `live/config.py` is frozen and would have
-#       to change: it has already changed, and restoring Toto2 here is now an edit
-#       to THIS file alone.
-#
-#       The switch was accepted deliberately, not stumbled into -- the plan's D9
-#       took it for day and night so that `fullday` could reach live from its own
-#       package. Putting this session back on Toto2 is the recorded follow-up.
-#
-#       The old rule it protected still holds, but the seam moved: a strategy
-#       change reaches live the moment it lands here, so this file is now a live
-#       deployment's definition and not just a backtest's.
-#
-# The Toto2 knobs in PARAMS above (`checkpoint`, `context_length`, and the
-# `buy_threshold`/`sell_threshold`/`min_prob`/`full_confidence_prob` band) are
-# INERT on the RSI path, though still resolved, banner-printed and recorded in
-# `params.json`. They cannot be dropped: `real_data.py:_resolve_strategy_knobs`
-# requires every knob the CLI resolves to exist in a package's PARAMS. That check
-# was relaxed on 2026-09-09 from set EQUALITY to that one-directional subset
-# (LIVE_STRATEGY_ROUTING_PLAN D6), so a package may now declare EXTRA knobs --
-# `rsi.py`'s own settings could move into PARAMS and become addressable as
-# `--param <knob>=<value>` at either CLI. `stride_bars` and the trader knobs are
-# still live.
 
 
 def make_strategy(
@@ -147,19 +88,19 @@ def make_strategy(
     #       matches `run.fee_sensitivity_sweep`'s `make_emitter`/`make_forecaster`
     #       convention, which exists because these objects are stateful and
     #       reusing one across runs silently produces wrong numbers.
-    # Tech: the RSI pair. The forecaster reports the indicator; the emitter reads
-    #       it. RSI's own settings live in `rsi.py`, not in PARAMS -- see the note
-    #       at the top of this file for why they cannot go in PARAMS.
-    # Why:  the indicator needs price HISTORY and the emitter is only ever handed
-    #       a `Forecast`, at stride boundaries. The Forecaster is the one seam
-    #       that receives the history-through-t frame, so a 5-minute RSI has to be
-    #       computed there and travel in the payload.
-    forecaster = make_rsi_forecaster(
+    forecaster = make_forecaster(
         warmup_bars=warmup_bars,
         stride_bars=p["stride_bars"],
         horizon_bars=p["horizon_bars"],
+        context_length=p["context_length"],
+        checkpoint=p["checkpoint"],
     )
-    emitter = RsiEmitter()
+    emitter = ThresholdEmitter(
+        buy_threshold=p["buy_threshold"],
+        sell_threshold=p["sell_threshold"],
+        min_prob=p["min_prob"],
+        full_confidence_prob=p["full_confidence_prob"],
+    )
 
     def make_trader(execution: Any) -> Trader:
         return Trader(
@@ -174,14 +115,7 @@ def make_strategy(
         "forecaster": forecaster,
         "emitter": emitter,
         "make_trader": make_trader,
-        # Tech: the one-week holding cap (see TIME_STOP_BARS above), as a fresh
-        #       TimeStop instance per make_strategy call.
-        # Why:  ExitRule and emitter SELL race per tick — whichever fires first
-        #       closes — so the cap only ever bounds the RSI>=80 exit's blind
-        #       spot (declines where 80 never comes), it does not replace it. A
-        #       fresh instance per call keeps a stateful rule from leaking across
-        #       runs even though TimeStop happens to be stateless.
-        "exit_rule": TimeStop(TIME_STOP_BARS),
+        "exit_rule": None,
         "forced_close": p["forced_close"],
         "params": p,
     }

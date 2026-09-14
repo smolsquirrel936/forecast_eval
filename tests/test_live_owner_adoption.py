@@ -28,11 +28,12 @@ NOW = TS.to_pydatetime()
 
 
 # These build a `LiveRuntime`, which assembles from the session package since
-# LIVE_STRATEGY_ROUTING_PLAN D2. `_config()` is night-policy, and night's
-# package now returns a `TimeStop` — which `adopt_position` refuses to adopt
-# against (a bars-held rule cannot measure from a previous process's entry
-# index). These cases are about WHOSE lot is adopted, not about exit rules, so
-# they use the shared cheap strategy the other assembly tests use.
+# LIVE_STRATEGY_ROUTING_PLAN D2. `_config()` is night-policy, and night's real
+# package builds a Toto2 forecaster (a checkpoint load). These cases are about
+# WHOSE lot is adopted, not about the strategy, so they use the shared cheap
+# strategy the other assembly tests use. (Adopted when night's package still
+# returned a `TimeStop`, which `adopt_position` refuses — D10; that exit was
+# removed by DAYNIGHT_TOTO2_RESET_PLAN.)
 pytestmark = pytest.mark.usefixtures("cheap_strategy")
 
 

@@ -116,20 +116,13 @@ class Trader:
         if self.position == 0:
             offset = self._entry_offset(strength)
             qty = self._entry_qty(strength)
-            # Tech: long-only — BUY opens from flat; a SELL from flat submits
-            #       no order at all (it still cancelled any resting one above).
-            # Why:  night-loop iter02. The iter01 baseline's round trips split by
-            #       side into 236 longs at +6,000 pts net and 273 shorts at
-            #       -17,692 pts on a tape that 4.5x'd across the eval window —
-            #       selling overbought into a secular rise is trend bleed, not
-            #       mean reversion. A SELL while long still closes (branch
-            #       below), so the RSI>=80 exit path is untouched; only the
-            #       short ENTRY is gone. The shared trader and the day/fullday
-            #       copies still open shorts — this divergence is the split's
-            #       purpose.
             if direction == "BUY":
                 order = OrderEvent(
                     market.timestamp, "BUY", cur + offset, "OPEN", quantity=qty
+                )
+            else:
+                order = OrderEvent(
+                    market.timestamp, "SELL", cur - offset, "OPEN", quantity=qty
                 )
         elif self.position > 0:
             if direction == "SELL":

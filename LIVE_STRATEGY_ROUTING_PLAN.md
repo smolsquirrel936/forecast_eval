@@ -584,6 +584,14 @@ Tests: **1537 passed, 1 failed, 2 skipped** (CRLF artifact).
   `results_fullday.tsv`, a different schema. Re-pinning it is a deliberate,
   separate decision.
 
+> **Follow-up, 2026-09-14 — D9 and D10 superseded by DAYNIGHT_TOTO2_RESET_PLAN.**
+> The two bullets above about NIGHT and DAY describe the state this plan left, and
+> stay as that record. The reset restored `strategy/day/` and `strategy/night/` to
+> `20767bb` (the pinned Toto2 threshold strategies) and deleted RSI. Consequences:
+> NIGHT and DAY trade Toto2 live again, by the same routing and with no live-side
+> edit; night's package returns `exit_rule=None`, so **D10's restart-adoption block
+> is gone**. FULLDAY is untouched.
+
 ## 6. After this lands
 
 Merge `fullday_0909` → `main` (fast-forward) to put iter05's stride consensus and

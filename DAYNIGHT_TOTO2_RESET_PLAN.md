@@ -1,7 +1,8 @@
 # DAY/NIGHT reset to Toto2 — plan
 
-**Status: DRAFT, 2026-09-14. Nothing below has been executed.** Planning only;
-every git and file action waits for approval (§6).
+**Status: Phases 0–7 EXECUTED 2026-09-14 on branch `daynight_toto2_reset`; all
+three gates passed. Phase 8's merge into `main` waits for §6 Q1 (live).** What
+actually happened, including where it departed from the text below, is in §7.
 
 **Goal.** Return `strategy/day/` and `strategy/night/` to their pre-RSI state —
 the pinned Toto2 threshold strategy each package held at the split — so a fresh
@@ -220,15 +221,54 @@ run per session. Output dirs: `outputs/reset_g3_{night,day}_<ts>/` (not `iterNN`
 
 ---
 
-## 6. Open questions (answer before execution)
+## 6. Open questions
 
 1. **Live:** accept that DAY/NIGHT live switch back to Toto2 when this merges (D6)?
-2. **Archive tags:** push them to `origin`, or keep local?
-3. **Push:** push `main` after merge (currently ahead of `origin/main` by 5), or leave local?
-4. **Day's starting knobs:** restore W5b (band ±0.001, `min_prob` 0.65 — Calmar
-   1.69 on 67 trades, which barely clears the `n_trades >= 60` gate), or loosen
-   before `iter01`? This plan restores W5b unchanged so G3 has a target; any
-   loosening belongs to the loop as `iter02+`.
+   **Open. Blocks the Phase 8 merge.**
+2. **Archive tags:** push them to `origin`, or keep local? **Open.** Created local.
+3. **Push:** push `main` after merge? *Answered 2026-09-14 for the docs commit*
+   (`main` pushed at `f2b3251`); ask again for the reset merge.
+4. **Day's starting knobs:** restore W5b unchanged, or loosen before `iter01`?
+   **Open.** Restored unchanged (G3 needs it); loosening belongs to the loop as `iter02+`.
+
+## 7. Execution record (2026-09-14)
+
+- **Phase 0.** `.venv` rebuilt per UV_SETUP Steps 2–5: torch 2.14.0+cu130 (RTX 5090
+  detected), toto-2, pandas 2.3.3, pytest 9.1.1. `N_main` on `main@f2b3251` =
+  **1565 passed, 1 failed, 2 skipped** (the failure is the `volmultitf.py` CRLF pin).
+  Verification used `.venv/Scripts/python.exe` directly, not `uv run`, so uv could
+  not re-sync the venv.
+- **Phase 1.** Tags `archive/day-rsi-iter05` → `1c7901d`, `archive/night-rsi-iter09`
+  → `c70bb38`, **`archive/pre-toto2-reset` → `f2b3251`** (not `1c7901d` as written:
+  `main` had moved to the docs commit that added this plan). Local only. 31 entries
+  (`iter*_day_*`, `iter*_night_*` folders and logs) moved to
+  `outputs/archive_rsi_2026-09/`, plus the three plan files under `plans/`.
+- **Phases 2–4.** As written. Index diff against `20767bb` for the four restored paths:
+  empty.
+- **Phase 5.** As written, plus one item §2 missed: `strategy/night/wiring.py`'s docstring
+  said the knobs "must stay in step with `live/config.py:PINNED`". That has been false since
+  `bfd4338`, so the docstring was reworded. **That is the only departure from
+  `20767bb` in the restored packages, and it is docstring-only.**
+- **G1.** **1467 passed, 1 failed (same CRLF pin), 2 skipped.** The 98-test drop is fully
+  accounted for by diffing collected node IDs against `main`: 92 tests in the seven deleted
+  files, plus 6 per-module parametrizations of `rsi.py` (`test_docs_coverage` ×2,
+  `test_undefined_globals` ×4). No test was added or renamed.
+- **G2.** Pass. day: `strategy.day.emitter.ThresholdEmitter` + `Toto2Forecaster`,
+  `exit_rule=None`, band ±0.001 / 0.65. night: same types, ±0.00045 / 0.5. fullday
+  unchanged (`ConsensusThresholdEmitter`, ±0.00075 / 0.5).
+- **G3.** Pass, exact. Tapes dated 2026-09-01 18:11. Output in
+  `outputs/reset_g3_{night,day}_20260914_184243/`.
+
+  | | trades | net PnL | max DD | Calmar | forecasts / time |
+  |---|---|---|---|---|---|
+  | night (`4282d33`) | 235 | +24 135.596000 | −6 703.244050 | 3.6006 | 43 674 / 263.7 s |
+  | day (`3c3ae38`) | 67 | +9 748.011650 | −5 755.502200 | 1.6937 | 15 687 / 101.7 s |
+
+- **Phase 7.** Both results files reset to the 8-column header, LF, trailing newline (the day
+  file's BOM dropped). Plans rewritten for Toto2 with the window pinned to the G3 warmups
+  (night 538790 → 2020-03-05 18:02; day 676123 → 2020-03-11 08:49) and a "Carried lessons"
+  section. The index plan was updated. None of the plan files are under git; their
+  pre-reset copies are in the archive folder.
 
 ## Related
 

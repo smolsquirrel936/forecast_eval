@@ -21,8 +21,9 @@ def cheap_strategy(monkeypatch):
     Narrow on purpose: a deterministic forecaster and a short context/stride over
     the *real* `ThresholdEmitter` and `Trader`. These tests are about assembly —
     warm-up, policy filtering, priming, staleness, rolls — and need a strategy
-    that reacts predictably. Night and day build an RSI strategy from their own
-    packages now, which would not emit on the band those cases assert against.
+    that reacts predictably. The packages' real forecaster is Toto2 (a
+    checkpoint load), and each package's own band differs, so the real stack
+    is neither cheap nor predictable enough for those cases.
 
     Opt in with `pytestmark = pytest.mark.usefixtures("cheap_strategy")`.
     """

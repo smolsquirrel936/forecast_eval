@@ -64,8 +64,10 @@ K=3 (8000/16000/24000 → 8.85/8.63/9.56). K=3 is a hump peak (10.971 / 12.939 /
   (fewer than K samples); this matches the probed behavior.
 - `ret_k`/`prob_k` are **module constants, not PARAMS knobs** — `real_data.py`'s
   resolver requires a package's declared knob set to equal the CLI's twelve
-  exactly, so extra knobs must live in the module (same convention as night's
-  `rsi.py` constants).
+  exactly, so extra knobs must live in the module (the convention night's and
+  day's since-deleted `rsi.py` constants followed too). That resolver rule was
+  relaxed to CLI ⊆ PARAMS on 2026-09-09 (LIVE_STRATEGY_ROUTING_PLAN D6), so these
+  could now move into PARAMS.
 - Stateful: `_hist` is a rolling deque, so a fresh instance per run is required.
   `wiring.make_strategy()` builds one each call for that reason.
 

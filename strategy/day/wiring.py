@@ -21,9 +21,8 @@ It trails eval-window buy-and-hold by 24 419 points, and it has never traded.
 """
 from typing import Any, Dict
 
-from .emitter import ThresholdEmitter      # noqa: F401 -- see RSI note below
-from .forecaster import make_forecaster   # noqa: F401 -- see RSI note below
-from .rsi import RsiEmitter, make_rsi_forecaster
+from .emitter import ThresholdEmitter
+from .forecaster import make_forecaster
 from .trader import Trader
 
 # Tech: this session's default knobs — the twelve values `real_data.py`'s
@@ -58,53 +57,6 @@ PARAMS: Dict[str, Any] = {
 #       which is also what `LiveConfig` declares). Leaving them to the copied
 #       emitter's defaults reproduces those runs exactly; a search that wants to
 #       move them edits `emitter.py`, which this package owns.
-
-
-# Tech: this package now trades PLAIN RSI -- RSI(14) over 5-minute closes, BUY at
-#       20, SELL at 80 -- built in `rsi.py`. `ThresholdEmitter` and
-#       `make_forecaster` are still imported but no longer used by
-#       `make_strategy`.
-# Why:  they are kept reachable for two reasons that are not style. First,
-#       `tests/test_strategy_isolation.py` constructs `wiring.ThresholdEmitter`
-#       by name to prove the three packages hold distinct classes (G3), so
-#       dropping the import would fail the isolation gate for a reason unrelated
-#       to isolation. Second, they are the way BACK: pointing `make_strategy` at
-#       them is all it now takes to put this deployment on Toto2 again -- and
-#       since 2026-09-09 that single edit moves the backtest AND live together.
-#       See the note below.
-#
-# UPDATED 2026-09-09 -- backtest and live no longer disagree, and this session is
-#       LIVE ON RSI.
-#       The warning that stood here said `--config <session>` still ran the pinned
-#       Toto2 threshold strategy, because `live/config.py` reached `.emitter` and
-#       `.forecaster` as modules and never called `make_strategy`. **That is no
-#       longer true, in both halves.** LIVE_STRATEGY_ROUTING_PLAN D2 routed
-#       `LiveRuntime` through `strategy.wiring.make_strategy`, and `LiveConfig`
-#       now holds no strategy fields at all -- so whatever `make_strategy` returns
-#       below IS what a live simtrade of this session trades. Today that is RSI.
-#
-#       It is also no longer true that `live/config.py` is frozen and would have
-#       to change: it has already changed, and restoring Toto2 here is now an edit
-#       to THIS file alone.
-#
-#       The switch was accepted deliberately, not stumbled into -- the plan's D9
-#       took it for day and night so that `fullday` could reach live from its own
-#       package. Putting this session back on Toto2 is the recorded follow-up.
-#
-#       The old rule it protected still holds, but the seam moved: a strategy
-#       change reaches live the moment it lands here, so this file is now a live
-#       deployment's definition and not just a backtest's.
-#
-# The Toto2 knobs in PARAMS above (`checkpoint`, `context_length`, and the
-# `buy_threshold`/`sell_threshold`/`min_prob`/`full_confidence_prob` band) are
-# INERT on the RSI path, though still resolved, banner-printed and recorded in
-# `params.json`. They cannot be dropped: `real_data.py:_resolve_strategy_knobs`
-# requires every knob the CLI resolves to exist in a package's PARAMS. That check
-# was relaxed on 2026-09-09 from set EQUALITY to that one-directional subset
-# (LIVE_STRATEGY_ROUTING_PLAN D6), so a package may now declare EXTRA knobs --
-# `rsi.py`'s own settings could move into PARAMS and become addressable as
-# `--param <knob>=<value>` at either CLI. `stride_bars` and the trader knobs are
-# still live.
 
 
 def make_strategy(
@@ -143,19 +95,19 @@ def make_strategy(
     #       matches `run.fee_sensitivity_sweep`'s `make_emitter`/`make_forecaster`
     #       convention, which exists because these objects are stateful and
     #       reusing one across runs silently produces wrong numbers.
-    # Tech: the RSI pair. The forecaster reports the indicator; the emitter reads
-    #       it. RSI's own settings live in `rsi.py`, not in PARAMS -- see the note
-    #       at the top of this file for why they cannot go in PARAMS.
-    # Why:  the indicator needs price HISTORY and the emitter is only ever handed
-    #       a `Forecast`, at stride boundaries. The Forecaster is the one seam
-    #       that receives the history-through-t frame, so a 5-minute RSI has to be
-    #       computed there and travel in the payload.
-    forecaster = make_rsi_forecaster(
+    forecaster = make_forecaster(
         warmup_bars=warmup_bars,
         stride_bars=p["stride_bars"],
         horizon_bars=p["horizon_bars"],
+        context_length=p["context_length"],
+        checkpoint=p["checkpoint"],
     )
-    emitter = RsiEmitter()
+    emitter = ThresholdEmitter(
+        buy_threshold=p["buy_threshold"],
+        sell_threshold=p["sell_threshold"],
+        min_prob=p["min_prob"],
+        full_confidence_prob=p["full_confidence_prob"],
+    )
 
     def make_trader(execution: Any) -> Trader:
         return Trader(
