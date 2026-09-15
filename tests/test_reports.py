@@ -390,11 +390,11 @@ def test_summary_renders_settings_with_command_as_the_last_row():
     html = _summary_sections_html(
         {"point_value": 200.0,
          "data": r"\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_day.csv",
-         "command": "uv run python -m forecast_eval.real_data --n-bars 10"},
+         "command": "uv run --no-sync python -m forecast_eval.real_data --n-bars 10"},
         None, None,
     )
     assert "<h2>Settings</h2>" in html
-    assert "uv run python -m forecast_eval.real_data --n-bars 10" in html
+    assert "uv run --no-sync python -m forecast_eval.real_data --n-bars 10" in html
     assert html.rindex("<tr>") == html.rindex("<tr><td class='k'>command</td>")
     # Tech: the cells of the left-aligned fields (_LEFT_ALIGN_KEYS — command
     #       and the data path) are tagged with their own class and, like every
@@ -404,7 +404,7 @@ def test_summary_renders_settings_with_command_as_the_last_row():
     #       the column's numeric right-alignment), and the div is the box
     #       max-width actually binds to — a table cell in auto layout ignores
     #       it. Numeric settings stay plain `v` cells.
-    assert "<td class='v left'><div>uv run python -m" in html
+    assert "<td class='v left'><div>uv run --no-sync python -m" in html
     assert "<td class='v left'><div>\\\\DESKTOP-SQUIRRE" in html
     assert "<td class='v'><div>+200.000000</div>" in html
 
@@ -432,7 +432,7 @@ def test_command_string_quotes_a_flag_value_containing_spaces():
     from forecast_eval.real_data import _command_string
     cmd = _command_string(["--data", r"\\srv\share\my data.csv", "--precompute"])
     assert cmd == (
-        "uv run python -m forecast_eval.real_data "
+        "uv run --no-sync python -m forecast_eval.real_data "
         r"--data '\\srv\share\my data.csv' --precompute"
     )
 
@@ -444,7 +444,7 @@ def test_command_string_quotes_a_backslash_path():
     cmd = _command_string(
         ["--data", r"\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_night.csv"])
     assert cmd == (
-        "uv run python -m forecast_eval.real_data "
+        "uv run --no-sync python -m forecast_eval.real_data "
         r"--data '\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_night.csv'"
     )
 
@@ -452,7 +452,7 @@ def test_command_string_quotes_a_backslash_path():
 def test_command_string_leaves_plain_flags_untouched():
     from forecast_eval.real_data import _command_string
     cmd = _command_string(["--precompute", "--lookback-frac", "0.5"])
-    assert cmd == ("uv run python -m forecast_eval.real_data "
+    assert cmd == ("uv run --no-sync python -m forecast_eval.real_data "
                    "--precompute --lookback-frac 0.5")
 
 

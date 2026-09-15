@@ -195,17 +195,19 @@ def load_minute_bars(path: Path, n_bars: int | None) -> pd.DataFrame:
 
 def _command_string(flags) -> str:
     """The canonical re-invocation of this CLI with exactly these flags."""
-    # Tech: shlex-join the fixed `uv run python -m forecast_eval.real_data`
+    # Tech: shlex-join the fixed `uv run --no-sync python -m forecast_eval.real_data`
     #       prefix with the run's own flags.
     # Why:  a run dir is only reproducible if the command that produced it is
     #       recorded with it; sys.argv[0] under `python -m` is a bare file
     #       path, so the prefix is rebuilt instead of captured — what AGENTS.md
-    #       says to run is the module idiom, and shlex.join quotes any flag
+    #       says to run is the module idiom under `--no-sync` (plain `uv run`
+    #       can rebuild .venv without torch/toto-2, so a pasted-back command
+    #       must not reintroduce it), and shlex.join quotes any flag
     #       value containing spaces (a --data path) so the string pastes back
     #       as one command. A helper rather than inline code so the quoting
     #       rule is unit-testable without running a backtest.
     return shlex.join(
-        ["uv", "run", "python", "-m", "forecast_eval.real_data", *flags]
+        ["uv", "run", "--no-sync", "python", "-m", "forecast_eval.real_data", *flags]
     )
 
 
