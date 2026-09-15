@@ -11,10 +11,14 @@ each carries the freeze line in full:
 
 | session | plan |
 |---|---|
-| night | `../autoresearch_trading_plan_night.md` — the complete template |
+| night | `../autoresearch_trading_plan_night.md` |
 | day | `../autoresearch_trading_plan_day.md` |
-| fullday | `../autoresearch_trading_plan_fullday.md` — band sweep first; `iter01` earns the baseline |
+| fullday | `../autoresearch_trading_plan_fullday.md` — its freeze line adds one exception: the pinned values in fullday's band test |
 | index | `../autoresearch_trading_plan.md` |
+
+*Updated 2026-09-15:* all three plans now share one format. After the 2026-09-14 reset, no
+session has a band sweep or any other step before `iter01`: in each one, `iter01` runs the
+package unedited and sets the baseline.
 
 **The executable version of the freeze line is
 [tests/test_strategy_isolation.py](tests/test_strategy_isolation.py)**, and where prose and
