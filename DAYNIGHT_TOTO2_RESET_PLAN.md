@@ -1,14 +1,16 @@
 # DAY/NIGHT reset to Toto2 — plan
 
-**Status: Phases 0–7 EXECUTED 2026-09-14 on branch `daynight_toto2_reset`; all
-three gates passed. Phase 8's merge into `main` waits for §6 Q1 (live).** What
-actually happened, including where it departed from the text below, is in §7.
+**Status: COMPLETE.** Phases 0–8 were executed on 2026-09-14 for day and night (§7), and
+the same reset was applied to fullday (§8). All gates passed. Both resets are merged into
+`main` and were pushed on 2026-09-15 (`origin/main` at `7fb7e8f`). What actually happened,
+including where it departed from the text below, is in §7 and §8. Later edits to the session
+plans are noted where they apply.
 
 **Goal.** Return `strategy/day/` and `strategy/night/` to their pre-RSI state —
 the pinned Toto2 threshold strategy each package held at the split — so a fresh
 autoresearch loop can start from a clean, reproducible baseline in both sessions.
-Delete the RSI strategy outright rather than leaving it dormant. `fullday` is out of
-scope and must not move.
+Delete the RSI strategy outright rather than leaving it dormant. `fullday` was out of scope
+for this plan as written; §8 extended the reset to it on 2026-09-14, at the user's request.
 
 ---
 
@@ -167,8 +169,12 @@ Run G1 → G2 → G3 in order; stop at the first failure.
   - "What the package runs today" → Toto2 + `ThresholdEmitter` + two-sided `Trader`.
   - Locked decisions 6–8 → Toto2 knobs are **live**, forecasts need the GPU and
     `--precompute`, `forecaster_sha` is meaningful again.
+    *(Qualified 2026-09-15: the sha covers `forecaster.py` only, not `checkpoint`,
+    `context_length`, `horizon_bars` or `stride_bars`; each plan's decision 7 says so.)*
   - Evaluation command → add `--checkpoint`; warmup chosen for Toto2's
     `context_length`, pinned as a bar count with its calendar timestamp.
+    *(`--checkpoint` was not added: `--strategy` already supplies it from the package's
+    `PARAMS`, so the command does not pass it. The warmup was pinned as written.)*
   - Remove the RSI open item and its "Resolved 2026-09-09" note.
   - Add a short **"Carried lessons"** section (ideas, not code): long-only entries
     were the largest single gain in both sessions and in fullday; fullday's
@@ -187,6 +193,9 @@ Run G1 → G2 → G3 in order; stop at the first failure.
 2. Merge into `main`. Push only on explicit request (§6 Q3).
 3. Each new loop then runs in its **own worktree/branch** (index plan, "one loop
    at a time").
+   *(Changed 2026-09-15: no worktree. Each loop runs on its own branch
+   `autoresearch_<session>_<MMDD>`, forked from the latest `main` in the normal checkout, one
+   loop at a time. The session plans' "Before the loop" section has the commands.)*
 
 ---
 
@@ -232,8 +241,9 @@ run per session. Output dirs: `outputs/reset_g3_{night,day}_<ts>/` (not `iterNN`
    live effect. The next DAY or NIGHT live start will trade Toto2 and needs the GPU.
 2. **Archive tags:** push them to `origin`, or keep local? **Answered 2026-09-14: keep
    local for now.**
-3. **Push:** push `main` after merge? *Answered 2026-09-14 for the docs commit*
-   (`main` pushed at `f2b3251`); ask again for the reset merge.
+3. **Push:** push `main` after merge? **Answered:** the docs commit was pushed on 2026-09-14
+   (`f2b3251`), and the user pushed both reset merges on 2026-09-15 (`origin/main` at
+   `7fb7e8f`).
 4. **Day's starting knobs:** restore W5b unchanged, or loosen before `iter01`?
    **Answered 2026-09-14: unchanged. The reset returns to the initial state, and the
    best Calmar is decided by the first run.** No recorded Calmar (the pinned rows, the G3
@@ -279,6 +289,9 @@ run per session. Output dirs: `outputs/reset_g3_{night,day}_<ts>/` (not `iterNN`
   (night 538790 → 2020-03-05 18:02; day 676123 → 2020-03-11 08:49) and a "Carried lessons"
   section (removed again 2026-09-15, see Phase 7 above). The index plan was updated. None of the plan files are under git; their
   pre-reset copies are in the archive folder.
+- **Phase 8.** Committed on `daynight_toto2_reset` as `0297590` (Phases 3–5) and `a454173`
+  (tsv reset), plus `9b56410` and `90bff4c` recording the §6 answers. Fast-forwarded into
+  `main`. Pushed with §8's commits on 2026-09-15.
 
 ## 8. Extension: FULLDAY reset (requested and executed 2026-09-14)
 
@@ -336,6 +349,9 @@ all of these, two new test files, and **one shared test**: `e773c23` rewrote
   rewritten in the day/night Toto2 format: the Step-0 sweep is no longer a precondition,
   `--warmup-bars 5000` (eval from 2018-01-09 02:50), no inherited Calmar, and the selector test
   is flagged as the one test a band change must update. Index row updated.
+- **F8.** Committed on `fullday_toto2_reset` as `34afa06` (restore) and `7fb7e8f` (tsv reset),
+  fast-forwarded into `main`, and pushed by the user on 2026-09-15 (`origin/main` at
+  `7fb7e8f`).
 
 ## Related
 
