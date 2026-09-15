@@ -32,12 +32,12 @@ for reasons that have nothing to do with us. What is diagnostic is a **change
 across a simulated session**:
 
     # before the simulated run
-    uv run python -m forecast_eval.live.prod_audit --i-am-querying-production --baseline
+    uv run --no-sync python -m forecast_eval.live.prod_audit --i-am-querying-production --baseline
 
     # ... run the session with --broker shioaji ...
 
     # after
-    uv run python -m forecast_eval.live.prod_audit --i-am-querying-production
+    uv run --no-sync python -m forecast_eval.live.prod_audit --i-am-querying-production
 
 Positions alone are not enough either: an order that opened *and closed* leaves a
 net position of zero. Trades and settled P&L are therefore compared too, since

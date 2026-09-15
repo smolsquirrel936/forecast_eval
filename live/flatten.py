@@ -17,8 +17,8 @@ Read the position, close it, read it back. Retries a bounded number of times and
 **exits non-zero if the account is not flat at the end**, because "submitted a
 close" is not "flat" (§2.12).
 
-    uv run python -m forecast_eval.live.flatten --dry-run   # show, do nothing
-    uv run python -m forecast_eval.live.flatten
+    uv run --no-sync python -m forecast_eval.live.flatten --dry-run   # show, do nothing
+    uv run --no-sync python -m forecast_eval.live.flatten
 """
 from __future__ import annotations
 

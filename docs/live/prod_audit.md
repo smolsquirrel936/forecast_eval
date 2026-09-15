@@ -5,7 +5,7 @@
 **Depends on:** — (duck-typed against the SDK)   **Used by:** run by hand, when the API key changes
 
 ```powershell
-uv run python -m forecast_eval.live.prod_audit --i-am-querying-production
+uv run --no-sync python -m forecast_eval.live.prod_audit --i-am-querying-production
 ```
 
 > **The only module in the repo that passes `simulation=False`.** That exception
@@ -32,9 +32,9 @@ client-side `simulation=` argument is the only thing keeping orders out of it.
 Use the before/after pair:
 
 ```powershell
-uv run python -m forecast_eval.live.prod_audit --i-am-querying-production --baseline
+uv run --no-sync python -m forecast_eval.live.prod_audit --i-am-querying-production --baseline
 # ... run the simulated session ...
-uv run python -m forecast_eval.live.prod_audit --i-am-querying-production
+uv run --no-sync python -m forecast_eval.live.prod_audit --i-am-querying-production
 ```
 
 ## Public surface

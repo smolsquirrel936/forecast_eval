@@ -18,7 +18,7 @@ it goes; re-deriving them from the log would reintroduce exactly the drift the
 one-writer rule exists to prevent.
 
 ```powershell
-uv run python -m forecast_eval.tools.session_artifacts outputs\live_20260824_150112
+uv run --no-sync python -m forecast_eval.tools.session_artifacts outputs\live_20260824_150112
 ```
 """
 from __future__ import annotations

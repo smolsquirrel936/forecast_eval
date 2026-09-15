@@ -9,7 +9,7 @@
 > months `202604`–`202609`, **0 bars outside the DAY policy**.
 
 ```powershell
-uv run python -m forecast_eval.live.seed_cache `
+uv run --no-sync python -m forecast_eval.live.seed_cache `
   --data \DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_day.csv `
   --out outputs/bars_cache_day.csv --session day
 ```

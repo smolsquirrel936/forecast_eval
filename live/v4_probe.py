@@ -29,8 +29,8 @@ Safety is structural, matching `v72_probe`: quantity is fixed at 1, the passive
 limit floors (so the tick snap can only move it further away), the close runs in
 a `finally` with a second attempt, and the closing position is printed.
 
-    uv run python -m forecast_eval.live.v4_probe                # passive
-    uv run python -m forecast_eval.live.v4_probe --allow-fill   # round trip
+    uv run --no-sync python -m forecast_eval.live.v4_probe                # passive
+    uv run --no-sync python -m forecast_eval.live.v4_probe --allow-fill   # round trip
 """
 from __future__ import annotations
 

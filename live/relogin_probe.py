@@ -41,8 +41,8 @@ cancelled in a `finally`.
 Usage:
 
     $env:SHIOAJI_API_KEY="..."; $env:SHIOAJI_SECRET_KEY="..."
-    uv run python -m forecast_eval.live.relogin_probe --mode offhours
-    uv run python -m forecast_eval.live.relogin_probe --mode session
+    uv run --no-sync python -m forecast_eval.live.relogin_probe --mode offhours
+    uv run --no-sync python -m forecast_eval.live.relogin_probe --mode session
 """
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
 """The live entry point — one policy, one config.
 
-    uv run python -m forecast_eval.live.cli --duration-minutes 60
-    uv run python -m forecast_eval.live.cli --broker shioaji \
+    uv run --no-sync python -m forecast_eval.live.cli --duration-minutes 60
+    uv run --no-sync python -m forecast_eval.live.cli --broker shioaji \
         --i-understand-this-places-orders
 
 =============================================================================

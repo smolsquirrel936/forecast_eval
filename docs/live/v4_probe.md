@@ -5,8 +5,8 @@
 **Depends on:** [live/broker/shadow.py](broker/shadow.md), [live/broker/shioaji.py](broker/shioaji.md), [live/contracts.py](contracts.md), [live/config.py](config.md)   **Used by:** run by hand
 
 ```powershell
-uv run python -m forecast_eval.live.v4_probe                # passive, cannot fill
-uv run python -m forecast_eval.live.v4_probe --allow-fill   # round trip
+uv run --no-sync python -m forecast_eval.live.v4_probe                # passive, cannot fill
+uv run --no-sync python -m forecast_eval.live.v4_probe --allow-fill   # round trip
 ```
 
 ## Responsibility

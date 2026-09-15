@@ -6,11 +6,11 @@
 
 ```bash
 # 1. the owner FIRST
-uv run python -m forecast_eval.live.owner_cli --out outputs/live_soak \
+uv run --no-sync python -m forecast_eval.live.owner_cli --out outputs/live_soak \
     --i-understand-this-places-orders
 
 # 2. then each deployment, beside it
-uv run python -m forecast_eval.live.cli --config day --broker client \
+uv run --no-sync python -m forecast_eval.live.cli --config day --broker client \
     --out outputs/live_soak/day --resume --i-understand-this-places-orders
 ```
 

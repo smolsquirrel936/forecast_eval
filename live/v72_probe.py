@@ -26,8 +26,8 @@ are in the docs:
 Usage:
 
     $env:SHIOAJI_API_KEY="..."; $env:SHIOAJI_SECRET_KEY="..."
-    uv run python -m forecast_eval.live.v72_probe --dry-run     # no order at all
-    uv run python -m forecast_eval.live.v72_probe               # places + cancels
+    uv run --no-sync python -m forecast_eval.live.v72_probe --dry-run     # no order at all
+    uv run --no-sync python -m forecast_eval.live.v72_probe               # places + cancels
 
 Run it **during a trading session**. Outside one, a rejection is ambiguous — it
 could mean "futures unsupported in simulation" or merely "market closed", and

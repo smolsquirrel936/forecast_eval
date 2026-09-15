@@ -5,8 +5,8 @@
 **Depends on:** [live/contracts.py](contracts.md)   **Used by:** run by hand, after a failure
 
 ```powershell
-uv run python -m forecast_eval.live.flatten --dry-run   # show, do nothing
-uv run python -m forecast_eval.live.flatten
+uv run --no-sync python -m forecast_eval.live.flatten --dry-run   # show, do nothing
+uv run --no-sync python -m forecast_eval.live.flatten
 ```
 
 ## Responsibility

@@ -5,7 +5,7 @@
 **Depends on:** [live/owner_process.py](../live/owner_process.md), [live/broker/client.py](../live/broker/client.md), [live/ledger.py](../live/ledger.md)   **Used by:** the operator, once
 
 ```bash
-uv run python -m forecast_eval.tools.g6_live --out outputs/g6 \
+uv run --no-sync python -m forecast_eval.tools.g6_live --out outputs/g6 \
     --i-understand-this-places-orders --minutes 10
 ```
 

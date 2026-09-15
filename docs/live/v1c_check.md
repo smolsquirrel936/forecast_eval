@@ -1,7 +1,7 @@
 # [live/v1c_check.py](../../live/v1c_check.py)
 
 **Role:** One-shot read-only probe: does `api.kbars` match the bar convention the model was evaluated on?
-**Run:** `uv run python -m forecast_eval.live.v1c_check --date <past trading date>`
+**Run:** `uv run --no-sync python -m forecast_eval.live.v1c_check --date <past trading date>`
 **Depends on:** [live/backfill.py](backfill.md), [real_data.py](../real_data.md)   **Used by:** humans, before V3
 
 ## Responsibility

@@ -8,7 +8,7 @@
 > Full tables and reasoning in `DAY_SESSION_PLAN.md` §4 C4.
 
 ```powershell
-uv run python tools/roll_at_measure.py
+uv run --no-sync python tools/roll_at_measure.py
 ```
 
 Offline and read-only. Touches no venue and no live state.

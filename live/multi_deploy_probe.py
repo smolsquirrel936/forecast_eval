@@ -80,7 +80,7 @@ SAFETY: every line goes through `ioc_probe.redact`, and account ids are masked,
 because Shioaji puts a Taiwanese national ID (`person_id`) in account reprs and a
 probe's output is meant to be pasted into a conversation.
 
-    uv run python -m forecast_eval.live.multi_deploy_probe --mode accounts
+    uv run --no-sync python -m forecast_eval.live.multi_deploy_probe --mode accounts
 """
 from __future__ import annotations
 
@@ -719,7 +719,7 @@ def probe_crossing(api_key: str, secret_key: str, args) -> int:
     _say("position at start", f"{start:+d}")
     if start != 0:
         print("\n  REFUSED: the account is not flat. Flatten it first —")
-        print("    uv run python -m forecast_eval.live.flatten")
+        print("    uv run --no-sync python -m forecast_eval.live.flatten")
         _logout(api)
         return 3
 
@@ -945,7 +945,7 @@ def _flatten_probe(api: Any, account: Any, contract: Any, codes: set,
     if held:
         print(f"\n  *** THE ACCOUNT IS STILL HOLDING {held:+d} after "
               f"{FLATTEN_ATTEMPTS} attempts. Flatten it by hand: "
-              f"uv run python -m forecast_eval.live.flatten ***")
+              f"uv run --no-sync python -m forecast_eval.live.flatten ***")
     else:
         _say("account flat", True)
     return held
@@ -1016,7 +1016,7 @@ def probe_lag(api_key: str, secret_key: str, args) -> int:
     _say("position at start", f"{start:+d}")
     if start != 0:
         print("\n  REFUSED: the account is not flat. Flatten it first —")
-        print("    uv run python -m forecast_eval.live.flatten")
+        print("    uv run --no-sync python -m forecast_eval.live.flatten")
         _logout(api)
         return 3
 

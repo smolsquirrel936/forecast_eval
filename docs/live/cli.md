@@ -6,7 +6,7 @@
 
 ```powershell
 $env:SHIOAJI_API_KEY="..."; $env:SHIOAJI_SECRET_KEY="..."
-uv run python -m forecast_eval.live.cli --duration-minutes 60
+uv run --no-sync python -m forecast_eval.live.cli --duration-minutes 60
 ```
 
 > ## ⚠ ONE INSTANCE AT A TIME — WHATEVER THE SESSION

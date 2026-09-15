@@ -1,6 +1,6 @@
 """Run the owning process — the one thing that places orders (§18.2).
 
-    uv run python -m forecast_eval.live.owner --out outputs/live_soak \\
+    uv run --no-sync python -m forecast_eval.live.owner_cli --out outputs/live_soak \\
         --i-understand-this-places-orders
 
 Three deployments run `live/cli.py --broker client` beside this and submit

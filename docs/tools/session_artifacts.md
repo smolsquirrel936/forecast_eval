@@ -5,7 +5,7 @@
 **Depends on:** [events.py](../events.md), [logging_io.py](../logging_io.md), [reports.py](../reports.md)   **Used by:** run by hand, on historical run directories
 
 ```powershell
-uv run python -m forecast_eval.tools.session_artifacts outputs\live_20260824_150112
+uv run --no-sync python -m forecast_eval.tools.session_artifacts outputs\live_20260824_150112
 ```
 
 ## Why this exists and where it must not be used
@@ -99,7 +99,7 @@ without Settings, which is where it was before. And an existing `params.json` is
 [fill ledger](../live/ledger.md), so a later `--resume` replays them:
 
 ```powershell
-uv run python -m forecast_eval.tools.session_artifacts `
+uv run --no-sync python -m forecast_eval.tools.session_artifacts `
   outputs\live_20260824_150112 --seed-ledger --config night
 ```
 

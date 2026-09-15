@@ -5,7 +5,7 @@
 **Depends on:** [environment.py](../environment.md) (pandas/numpy otherwise)   **Used by:** run by hand — `TAPE_REBUILD_PLAN.md` T4
 
 ```powershell
-uv run python -m forecast_eval.tools.diff_tapes `
+uv run --no-sync python -m forecast_eval.tools.diff_tapes `
   --bycontract \\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_bycontract.csv `
   --old-dir    \\DESKTOP-SQUIRRE\dataset\RPT\_prerebuild_backup_20260901 `
   --new-dir    \\DESKTOP-SQUIRRE\dataset\RPT

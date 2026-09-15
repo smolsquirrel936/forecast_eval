@@ -9,7 +9,7 @@
 
 ```powershell
 $env:SHIOAJI_API_KEY="..."; $env:SHIOAJI_SECRET_KEY="..."
-uv run python -m forecast_eval.live.v1_check --capture outputs/live_<ts>/ticks.csv
+uv run --no-sync python -m forecast_eval.live.v1_check --capture outputs/live_<ts>/ticks.csv
 ```
 
 Read-only: logs in, fetches history, prints a verdict. **Places no orders and

@@ -5,8 +5,8 @@
 **Depends on:** [live/backfill.py](../live/backfill.md), [live/roll.py](../live/roll.md), [live/sessions.py](../live/sessions.md), [tools/build_session_tapes.py](build_session_tapes.md)   **Used by:** run by hand — `TAPE_REBUILD_PLAN.md` §0.5 (promised) / §5.3 (results)
 
 ```powershell
-uv run python -m forecast_eval.tools.roll_parity --deployment night
-uv run python -m forecast_eval.tools.roll_parity --deployment day `
+uv run --no-sync python -m forecast_eval.tools.roll_parity --deployment night
+uv run --no-sync python -m forecast_eval.tools.roll_parity --deployment day `
   --out outputs\roll_parity_day.csv
 ```
 

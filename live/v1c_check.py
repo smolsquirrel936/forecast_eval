@@ -26,7 +26,7 @@ a backfill, replacing the ~1 MB estimate in §2.8b with a number.
 Usage (credentials from the environment, never from a file in the repo):
 
     $env:SHIOAJI_API_KEY="..."; $env:SHIOAJI_SECRET_KEY="..."
-    uv run python -m forecast_eval.live.v1c_check --date 2026-05-14
+    uv run --no-sync python -m forecast_eval.live.v1c_check --date 2026-05-14
 """
 from __future__ import annotations
 

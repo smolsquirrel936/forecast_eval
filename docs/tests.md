@@ -1,7 +1,7 @@
 # [tests/](../tests/) — unit + integration suite
 
 **Role:** Validation of every invariant the harness depends on (SPEC §6 Phase 5, §9).
-**Run:** `uv run python -m pytest forecast_eval/tests/ -v` (use the local `uv` venv — see [CLAUDE.md](../CLAUDE.md)).
+**Run:** `uv run --no-sync python -m pytest forecast_eval/tests/ -v` (use the local `uv` venv — see [CLAUDE.md](../CLAUDE.md)).
 **Last measured: 1537 passed, 1 failed, 2 skipped** at `bfd4338` (2026-09-09; the
 one failure is the known `volmultitf` CRLF artifact — LIVE_STRATEGY_ROUTING_PLAN).
 The `night` and `fullday_0909` merges added test files after that run, so the current

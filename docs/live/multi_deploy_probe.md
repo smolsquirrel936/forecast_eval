@@ -47,27 +47,27 @@ ones the new design **rests on**.
 ```bash
 # Q0. Reads config/secrets.toml through the same loader cli.py uses.
 # No market, no orders, ~1 minute. START HERE, and after any credential change.
-uv run python -m forecast_eval.live.multi_deploy_probe --mode accounts
+uv run --no-sync python -m forecast_eval.live.multi_deploy_probe --mode accounts
 
 # Q4-Q5. Places ONE resting order 500 points from the market, inside a session.
-uv run python -m forecast_eval.live.multi_deploy_probe --mode session \n    --i-understand-this-places-orders
+uv run --no-sync python -m forecast_eval.live.multi_deploy_probe --mode session \n    --i-understand-this-places-orders
 
 # X1. Opens +1 and tries to cross it to -1, first with one order and then with
 # a sized pair. Places up to six orders, flattening between the phases and at
 # the end. Refuses unless the account is already flat.
-uv run python -m forecast_eval.live.multi_deploy_probe --mode crossing --i-understand-this-places-orders
+uv run --no-sync python -m forecast_eval.live.multi_deploy_probe --mode crossing --i-understand-this-places-orders
 ```
 
 ```bash
 # X2. Times deal -> list_positions. Alternates Buy 1 / Sell 1 (default 4
 # samples), so it ends flat.
-uv run python -m forecast_eval.live.multi_deploy_probe --mode lag --i-understand-this-places-orders
+uv run --no-sync python -m forecast_eval.live.multi_deploy_probe --mode lag --i-understand-this-places-orders
 ```
 
 ## `--mode sessions` — X3, does option (b)'s shape fit?
 
 ```bash
-uv run python -m forecast_eval.live.multi_deploy_probe --mode sessions
+uv run --no-sync python -m forecast_eval.live.multi_deploy_probe --mode sessions
 ```
 
 No market, no orders, no acknowledgement. About a minute.

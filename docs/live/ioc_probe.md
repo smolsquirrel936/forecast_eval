@@ -51,7 +51,7 @@ usable close.
 
 ```powershell
 $env:SHIOAJI_API_KEY="..."; $env:SHIOAJI_SECRET_KEY="..."
-uv run python -m forecast_eval.live.ioc_probe --i-understand-this-places-orders
+uv run --no-sync python -m forecast_eval.live.ioc_probe --i-understand-this-places-orders
 ```
 
 | Flag | Default | |

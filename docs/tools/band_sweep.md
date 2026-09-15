@@ -5,7 +5,7 @@
 **Depends on:** [run.py](../run.md), [metrics.py](../metrics.md), [real_data.py](../real_data.md), [strategy/threshold.py](../strategy/threshold.md)   **Used by:** run by hand — `DAY_SESSION_PLAN.md` W5b, `TAPE_REBUILD_PLAN.md` T7
 
 ```powershell
-uv run python -m forecast_eval.tools.band_sweep `
+uv run --no-sync python -m forecast_eval.tools.band_sweep `
   --data \\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_day.csv `
   --warmup-bars 676123 `
   --out outputs\day_band_sweep.csv

@@ -34,8 +34,8 @@ comparison is windowed around each roll — away from one, every candidate month
 maps to the same answer under either rule, so there is nothing there to differ.
 
 ```powershell
-uv run python -m forecast_eval.tools.roll_parity --deployment night
-uv run python -m forecast_eval.tools.roll_parity --deployment day --out outputs\roll_parity_day.csv
+uv run --no-sync python -m forecast_eval.tools.roll_parity --deployment night
+uv run --no-sync python -m forecast_eval.tools.roll_parity --deployment day --out outputs\roll_parity_day.csv
 ```
 """
 from __future__ import annotations

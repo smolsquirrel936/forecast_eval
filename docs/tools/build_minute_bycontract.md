@@ -5,7 +5,7 @@
 **Depends on:** nothing in the package (pandas only)   **Used by:** run by hand, once per rebuild — `TAPE_REBUILD_PLAN.md` T1
 
 ```powershell
-uv run python -m forecast_eval.tools.build_minute_bycontract `
+uv run --no-sync python -m forecast_eval.tools.build_minute_bycontract `
   --src D:\...\dataset\RPT\extracted_data `
   --out D:\...\dataset\RPT\TXF_RPT_minute_bycontract.csv
 ```

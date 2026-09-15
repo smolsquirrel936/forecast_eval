@@ -24,7 +24,7 @@ as settled and asks whether our tick aggregation lands on the same bars.
 Usage (credentials from the environment, never from a file in the repo):
 
     $env:SHIOAJI_API_KEY="..."; $env:SHIOAJI_SECRET_KEY="..."
-    uv run python -m forecast_eval.live.v1_check --capture outputs/live_<ts>/ticks.csv
+    uv run --no-sync python -m forecast_eval.live.v1_check --capture outputs/live_<ts>/ticks.csv
 """
 from __future__ import annotations
 

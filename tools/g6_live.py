@@ -1,6 +1,6 @@
 """G6 live — two deployments holding at once, against a real session.
 
-    uv run python -m forecast_eval.tools.g6_live --out outputs/g6 \\
+    uv run --no-sync python -m forecast_eval.tools.g6_live --out outputs/g6 \\
         --i-understand-this-places-orders
 
 G6 (STRATEGY_SPLIT_PLAN §8, restated after §14):

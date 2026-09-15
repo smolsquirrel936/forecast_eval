@@ -5,7 +5,7 @@
 **Depends on:** [live/roll.py](../live/roll.md), [live/sessions.py](../live/sessions.md), [environment.py](../environment.md)   **Used by:** run by hand, once per rebuild — `TAPE_REBUILD_PLAN.md` T2/T3
 
 ```powershell
-uv run python -m forecast_eval.tools.build_session_tapes `
+uv run --no-sync python -m forecast_eval.tools.build_session_tapes `
   --src     \\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_bycontract.csv `
   --out-dir \\DESKTOP-SQUIRRE\dataset\RPT
 ```

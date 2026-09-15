@@ -1,7 +1,7 @@
 # [live/v72_probe.py](../../live/v72_probe.py)
 
 **Role:** One-shot probe: does TXF futures `place_order` work under `simulation=True`?
-**Run:** `uv run python -m forecast_eval.live.v72_probe --dry-run` then without the flag.
+**Run:** `uv run --no-sync python -m forecast_eval.live.v72_probe --dry-run` then without the flag.
 **Depends on:** — (`shioaji` at runtime)   **Used by:** humans, before V3
 
 ## Responsibility
