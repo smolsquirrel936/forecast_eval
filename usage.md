@@ -4,7 +4,7 @@ Practical guide for running `forecast_eval`. For the architecture and design rat
 
 > **The harness** — used throughout this doc — refers to the backtest engine in [run.py](run.py) (`run_backtest()` and its per-tick event loop wiring `Environment → Execution → Trader → Forecaster → SignalEmitter → Portfolio`). Calling `Toto2Forecaster.forecast()` directly bypasses the harness — no orders, no fills, no PnL accounting; see §8 for the direct-drive pattern.
 
-All commands below assume your shell is in **`night/`** (the parent of this folder). This repo uses a local `uv` venv (`.venv/`, Python 3.12) — prefix every command with `uv run`, which auto-activates it. See [AGENTS.md](../AGENTS.md) and [UV_SETUP.md](../UV_SETUP.md) for setup; `torch` must come from the cu130 index (RTX 5090 / Blackwell, sm_120).
+All commands below assume your shell is in **`night/`** (the parent of this folder). This repo uses a local `uv` venv (`.venv/`, Python 3.12) — prefix every command with `uv run --no-sync`, which uses it without touching it. **Never plain `uv run`, `uv sync`, `uv add` or `uv remove`:** `pyproject.toml` declares only `shioaji`, so plain `uv run` rebuilds an incompatible `.venv/` with shioaji alone, and `uv sync` removes every hand-installed package (torch, toto-2, pandas, pytest). See [AGENTS.md](../AGENTS.md) and [UV_SETUP.md](../UV_SETUP.md) for setup; `torch` must come from the cu130 index (RTX 5090 / Blackwell, sm_120).
 
 ---
 
@@ -14,9 +14,9 @@ There are **three entry points** plus a test suite:
 
 | Entry point | What it does | Needs Toto2? |
 |---|---|---|
-| [run.py](run.py) — `uv run python -m forecast_eval.run` | Runs Phases 1–4 demos back-to-back on synthetic ticks | No |
-| [test_toto2.py](test_toto2.py) — `uv run python -m forecast_eval.test_toto2` | One-shot smoke test: load checkpoint, run one forecast | Yes |
-| [real_data.py](real_data.py) — `uv run python -m forecast_eval.real_data` | Full backtest of Toto2 on real TXF 1-min bars (whole dataset, warmup split) | Yes |
+| [run.py](run.py) — `uv run --no-sync python -m forecast_eval.run` | Runs Phases 1–4 demos back-to-back on synthetic ticks | No |
+| [test_toto2.py](test_toto2.py) — `uv run --no-sync python -m forecast_eval.test_toto2` | One-shot smoke test: load checkpoint, run one forecast | Yes |
+| [real_data.py](real_data.py) — `uv run --no-sync python -m forecast_eval.real_data` | Full backtest of Toto2 on real TXF 1-min bars (whole dataset, warmup split) | Yes |
 | `pytest forecast_eval/tests/` | 98 unit + integration tests (~7 s) | No |
 
 Reports / charts are generated **automatically** at the end of every backtest by [reports.py](reports.py) (via the `auto_report=True` hook in `write_all`). You can also re-run [reports.py](reports.py) on any existing run directory to regenerate them — see §7.
@@ -26,14 +26,14 @@ Reports / charts are generated **automatically** at the end of every backtest by
 ## 2. Running tests
 
 ```bash
-uv run python -m pytest forecast_eval/tests/ -v
+uv run --no-sync python -m pytest forecast_eval/tests/ -v
 ```
 
 Run a single file or test:
 
 ```bash
-uv run python -m pytest forecast_eval/tests/test_execution.py -v
-uv run python -m pytest forecast_eval/tests/test_execution.py::test_marketable_buy_fills_at_next_print_price -v
+uv run --no-sync python -m pytest forecast_eval/tests/test_execution.py -v
+uv run --no-sync python -m pytest forecast_eval/tests/test_execution.py::test_marketable_buy_fills_at_next_print_price -v
 ```
 
 The suite covers the no-flip rule, marketable / passive fill rules, look-ahead defense, round-trip pairing, metric math, and end-to-end PnL on known data. See [tests/](tests/) for what's covered.
@@ -45,7 +45,7 @@ The suite covers the no-flip rule, marketable / passive fill rules, look-ahead d
 Synthetic random-walk ticks; no model, no real data, runs in seconds. Useful for sanity-checking changes to the trader / execution / metrics code.
 
 ```bash
-uv run python -m forecast_eval.run
+uv run --no-sync python -m forecast_eval.run
 ```
 
 Prints summaries for four demos:
@@ -72,7 +72,7 @@ print(res.summary())
 The smallest possible end-to-end check that Toto2 is wired up correctly. Downloads `Datadog/Toto-2.0-313m` on first run (~600 MB), then runs one forecast on a 512-row synthetic random walk:
 
 ```bash
-uv run python -m forecast_eval.test_toto2
+uv run --no-sync python -m forecast_eval.test_toto2
 ```
 
 Expected: a printed `=== Forecast ===` block with `last_price`, `predicted_price`, `predicted_return`, and the first / last 5 values of the `median_path`. If you see `[IMPORT ERROR]`, install `torch` and the local `toto2` package (see [CLAUDE.md](CLAUDE.md)).
@@ -97,12 +97,12 @@ with.
 
 ```bash
 # NIGHT's pinned configuration: Calmar 3.6006, 235 trades
-uv run python -m forecast_eval.real_data --strategy night --precompute \
+uv run --no-sync python -m forecast_eval.real_data --strategy night --precompute \
     --data "\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_night.csv" \
     --warmup-bars 538790
 
 # DAY's: Calmar 1.6937, 67 trades
-uv run python -m forecast_eval.real_data --strategy day --precompute \
+uv run --no-sync python -m forecast_eval.real_data --strategy day --precompute \
     --data "\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_day.csv" \
     --warmup-bars 676123
 ```
@@ -125,22 +125,22 @@ uv run python -m forecast_eval.real_data --strategy day --precompute \
 
 ```bash
 # defaults (313m checkpoint, full dataset, 30% warmup)
-uv run python -m forecast_eval.real_data
+uv run --no-sync python -m forecast_eval.real_data
 
 # batch forecasts on the GPU up front, then replay execution
-uv run python -m forecast_eval.real_data --precompute \
+uv run --no-sync python -m forecast_eval.real_data --precompute \
     --data "\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_day.csv" --lookback-frac 0.5
 
 # tweak thresholds
-uv run python -m forecast_eval.real_data \
+uv run --no-sync python -m forecast_eval.real_data \
     --buy-threshold 0.0002 --sell-threshold -0.0002
 
 # different checkpoint + probability gating
-uv run python -m forecast_eval.real_data \
+uv run --no-sync python -m forecast_eval.real_data \
     --checkpoint Datadog/Toto-2.0-1B --min-prob 0.61
 
 # enable session-boundary forced close
-uv run python -m forecast_eval.real_data --forced-close
+uv run --no-sync python -m forecast_eval.real_data --forced-close
 ```
 
 Key CLI flags (see `--help` for the full list):
@@ -207,10 +207,10 @@ Three chart groups (PNG + interactive HTML):
 
 ```bash
 # re-render from an existing run dir
-uv run python -m forecast_eval.reports outputs/real_data_20260525_003535
+uv run --no-sync python -m forecast_eval.reports outputs/real_data_20260525_003535
 
 # overlay the real price series on the price-fills chart
-uv run python -m forecast_eval.reports outputs/real_data_20260525_003535 \
+uv run --no-sync python -m forecast_eval.reports outputs/real_data_20260525_003535 \
     --data "\\DESKTOP-SQUIRRE\dataset\tick\TXF_OHLC_1min.csv"
 ```
 
@@ -318,8 +318,8 @@ When `forced_close=True`, `metrics["trading"]` is replaced by `metrics["trading_
 
 ## 11. Common gotchas
 
-* **Run from `night/`, not from inside `forecast_eval/`.** The `uv run python -m forecast_eval.xxx` form requires the parent. Direct execution (`python real_data.py`) only works for files with the `sys.path.insert(parent.parent)` trampoline at the top.
-* **Use `uv run` (the local `.venv`, Python 3.12) for anything touching `toto2`, `lightning`, or `pytest`.** See [AGENTS.md](../AGENTS.md) / [UV_SETUP.md](../UV_SETUP.md).
+* **Run from `night/`, not from inside `forecast_eval/`.** The `uv run --no-sync python -m forecast_eval.xxx` form requires the parent. Direct execution (`python real_data.py`) only works for files with the `sys.path.insert(parent.parent)` trampoline at the top.
+* **Use `uv run --no-sync` (the local `.venv`, Python 3.12) for anything touching `toto2`, `lightning`, or `pytest`.** Plain `uv run` can rebuild `.venv/` and drop those packages. See [AGENTS.md](../AGENTS.md) / [UV_SETUP.md](../UV_SETUP.md).
 * **NaN rows depend entirely on which file you load** (measured 2026-09-01; an earlier "~17 %" here was right about neither). The legacy `tick/TXF_OHLC_1min.csv` is **47.9 % NaN** — it carries a row per calendar minute, most of which the market was closed for. The four `RPT/` minute tapes carry **0 NaN closes**: they hold only minutes that actually printed. [real_data.py:load_minute_bars](real_data.py) drops NaN closes either way, which matters because Toto2 propagates them.
 * **`context_length` must divide the model's `patch_size`** ([forecaster/toto2.py](forecaster/toto2.py) truncates automatically, but if you see a shape mismatch this is why).
 * **No-flip rule** ([SPEC.md §4.2](SPEC.md)): a SELL while long closes only — it does not flip to short. Same for BUY while short. Pyramiding is also disabled.
