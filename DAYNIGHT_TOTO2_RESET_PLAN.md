@@ -174,6 +174,10 @@ Run G1 → G2 → G3 in order; stop at the first failure.
     were the largest single gain in both sessions and in fullday; fullday's
     stride-consensus (`combine.py`, copy — never import) reached Calmar 12.94; the
     RSI × Toto2 consensus family is exhausted.
+    *(Superseded 2026-09-15: the section was removed from all three plans. It steered a
+    loop that the reset meant to start clean, its evidence came from other strategies and
+    fees, and two of its claims did not match the archived results. The history stays in
+    the archive tags and `outputs/archive_*` folders.)*
 - Index `autoresearch_trading_plan.md`: both sessions "baseline: none yet — Toto2".
 
 ### Phase 8 — land
@@ -273,7 +277,7 @@ run per session. Output dirs: `outputs/reset_g3_{night,day}_<ts>/` (not `iterNN`
 - **Phase 7.** Both results files reset to the 8-column header, LF, trailing newline (the day
   file's BOM dropped). Plans rewritten for Toto2 with the window pinned to the G3 warmups
   (night 538790 → 2020-03-05 18:02; day 676123 → 2020-03-11 08:49) and a "Carried lessons"
-  section. The index plan was updated. None of the plan files are under git; their
+  section (removed again 2026-09-15, see Phase 7 above). The index plan was updated. None of the plan files are under git; their
   pre-reset copies are in the archive folder.
 
 ## 8. Extension: FULLDAY reset (requested and executed 2026-09-14)
