@@ -65,6 +65,13 @@ it.
 It hashes the **file**, not the imported module, so it needs no torch and an edit
 counts even when the old bytes are already imported.
 
+> **Limitation (noted 2026-09-15): the sha does not identify the whole stream.** It
+> covers `forecaster.py` only. `checkpoint`, `context_length`, `horizon_bars` and
+> `stride_bars` also shape the forecasts, but they live in the package's `PARAMS` (in
+> `wiring.py`) or arrive as CLI flags or `--param`, so changing one moves the stream and
+> leaves the sha unchanged. "Rows sharing a sha were scored on the same stream" holds only
+> when those four knobs also match. Check them in each run's `params.json`.
+
 ## Key points / gotchas
 - `SESSIONS` is a **declared tuple, not a directory scan**. A stray sibling
   directory (a half-finished experiment, a `__pycache__`) must not become a

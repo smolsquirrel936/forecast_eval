@@ -141,12 +141,19 @@ def test_an_explicit_flag_beats_the_strategy_at_its_own_default_value():
     assert origins["sell_threshold"] == "night"
 
 
-def test_fullday_is_days_band_and_is_marked_untuned():
-    # Tech: full-day inherits DAY's band, and says so in its own docstring.
+def test_fullday_band_is_its_own_inherited_values_and_is_marked_untuned():
+    # Tech: full-day's band and probability gate are pinned to their own literal
+    #       values (inherited from DAY at the split), and its docstring says UNTUNED.
     # Why:  §5/D5 — the inheritance is deliberate and the marking is the only
     #       thing stopping it from being read as provenance. If someone tunes
     #       full-day and forgets the docstring, this fails and asks for it.
-    assert wiring.params("fullday") == wiring.params("day")
+    #       Pinned to literals, NOT to params("day"): comparing against DAY made
+    #       every day-loop band edit fail a fullday test, coupling two sessions
+    #       the split keeps independent (DAYNIGHT_TOTO2_RESET_PLAN §8).
+    p = wiring.params("fullday")
+    assert p["buy_threshold"] == 0.001
+    assert p["sell_threshold"] == -0.001
+    assert p["min_prob"] == 0.65
     doc = __import__(
         "forecast_eval.strategy.fullday.wiring", fromlist=["wiring"]
     ).__doc__

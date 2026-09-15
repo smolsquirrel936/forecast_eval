@@ -117,8 +117,11 @@ uv run python -m forecast_eval.real_data --strategy day --precompute \
   from where, so `--strategy night --buy-threshold 0.0005` runs 0.0005 and says so.
 - **Omitting `--strategy` changes nothing.** The CLI's own historical defaults
   apply, so every command string recorded in `results.tsv` reproduces exactly.
-- The run records `strategy` and `forecaster_sha` into `params.json`; the sha is
-  what makes two `results.tsv` rows comparable on the same forecast stream.
+- The run records `strategy` and `forecaster_sha` into `params.json`. The sha is
+  necessary, but not sufficient, for two `results.tsv` rows to share a forecast stream.
+  It hashes `forecaster.py` only, so `checkpoint`, `context_length`, `horizon_bars` and
+  `stride_bars` must match too; changing any of them moves the stream without moving the
+  sha (see [docs/strategy/wiring.md](docs/strategy/wiring.md)).
 
 ```bash
 # defaults (313m checkpoint, full dataset, 30% warmup)
