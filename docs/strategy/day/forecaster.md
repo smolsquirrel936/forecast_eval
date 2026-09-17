@@ -23,7 +23,8 @@ DAY's forecaster construction site. `make_forecaster(...)` builds the
 - `torch` and `toto2` are imported **inside the function**, so this package
   imports cleanly on a machine with neither — which is what lets the isolation
   test and `--help` work without a GPU.
-- This file is what `results.tsv`'s `forecaster_sha` column hashes. A change here
+- This file is what `results_day.tsv`'s `forecaster_sha` column hashes (the
+  pre-split `results.tsv` has the column too, every row marked `pre-split`). A change here
   is a **forecast-stream** change: runs either side of it are no longer
   comparable on a fixed stream, and `--precompute` no longer amortises across
   iterations (STRATEGY_SPLIT_PLAN §2.4).

@@ -6,9 +6,10 @@ of it: the file is 23 KB and most searches move *parameters*, not model
 internals. To change the internals, copy the class body in here first — the
 shared original is hash-guarded by ``tests/test_strategy_isolation.py``.
 
-This file is what ``results.tsv``'s ``forecaster_sha`` column hashes, so a
-change here is visible in the research log as a forecast-stream change
-(STRATEGY_SPLIT_PLAN §2.4).
+This file is what ``results_night.tsv``'s ``forecaster_sha`` column hashes, so
+a change here is visible in the research log as a forecast-stream change
+(STRATEGY_SPLIT_PLAN §2.4). The pre-split ledger ``results.tsv`` carries the
+column too, but every row in it reads ``pre-split``.
 """
 from typing import Any, Optional
 

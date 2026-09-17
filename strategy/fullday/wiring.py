@@ -7,7 +7,9 @@ parity-checkable, and marked here so nothing mistakes them for provenance
 The one measurement of this exact configuration is the 2026-09-09 band sweep's
 0.001 / 0.65 cell (97 trades, Calmar 1.3975 at fee 0.00015, warmup 5000), which
 DAYNIGHT_TOTO2_RESET_PLAN §8 reproduced as its restore check. It is evidence the
-package is back, not a tuning result.
+package is back, not a tuning result: **no Calmar carries into the loop as a bar
+to beat** (§6 Q4), ``results_fullday.tsv`` starts empty, and ``iter01`` — this
+package unedited, at the current fee 0.0002 — sets the first best.
 
 The tape to search on is ``dataset/RPT/TXF_RPT_minute_fullday.csv`` —
 2 364 417 bars, 2018-01-02 -> 2026-08-21. NOT the combined

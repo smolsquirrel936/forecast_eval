@@ -1,15 +1,22 @@
 """NIGHT's strategy wiring — the ``PINNED`` configuration.
 
-Provenance: ``results.tsv`` commit ``4282d33``, re-measured on the rebuilt night
-tape (TAPE_REBUILD T5, 2026-09-01) — Calmar **3.6006**, 235 trades, net
-+24 135.60 points, max drawdown -6 703.24, on ``TXF_RPT_minute_night.csv``.
+Provenance of the knobs below: ``results.tsv`` commit ``4282d33``, re-measured
+on the rebuilt night tape (TAPE_REBUILD T5, 2026-09-01) over
+``TXF_RPT_minute_night.csv`` at warmup 538 790 — the loop's own window — but at
+**fee 0.00015**, the harness default at the time; it is 0.0002 now.
+
+**No Calmar carries out of that row** (DAYNIGHT_TOTO2_RESET_PLAN §6 Q4): an
+inherited high one would block the loop's progress, so ``results_night.tsv``
+starts empty and ``iter01`` — this package unedited, at the current fee — sets
+the first best. The row's own figures stay in ``results.tsv`` and in
+``live/config.py:PINNED``'s ``source_commit``/``source_calmar``, which
+``tests/test_live_config.py`` asserts against each other.
+
 The knobs live here and nowhere else: since LIVE_STRATEGY_ROUTING_PLAN D2 a
 live run builds from ``make_strategy`` below, so an edit to this package is a
-live change. ``live/config.py:PINNED`` keeps only the row's provenance
-(``source_commit``/``source_calmar``), which ``tests/test_live_config.py``
-asserts against ``results.tsv``.
+live change.
 
-NOT a claim this beats the market: over the evaluated window it now trails
+NOT a claim this beats the market: over the evaluated window it trails
 buy-and-hold by 9 205 points. The Calmar is earned by a small drawdown.
 """
 from typing import Any, Dict

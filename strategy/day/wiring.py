@@ -1,8 +1,19 @@
 """DAY's strategy wiring — the ``PINNED_DAY`` configuration.
 
-Provenance: ``results.tsv`` commit ``3c3ae38``, re-measured on the rebuilt day
-tape (TAPE_REBUILD T7, 2026-09-01) — Calmar **1.6937**, 67 trades, net
-+9 748.01 points, max drawdown -5 755.50, on ``TXF_RPT_minute_day.csv``.
+Provenance of the knobs below: ``results.tsv`` commit ``3c3ae38``, re-measured
+on the rebuilt day tape (TAPE_REBUILD T7, 2026-09-01) over
+``TXF_RPT_minute_day.csv`` at warmup 676 123 — the loop's own window — but at
+**fee 0.00015**, the harness default at the time; it is 0.0002 now.
+
+**No Calmar carries out of that row** (DAYNIGHT_TOTO2_RESET_PLAN §6 Q4): an
+inherited high one would block the loop's progress, so ``results_day.tsv``
+starts empty and ``iter01`` — this package unedited, at the current fee — sets
+the first best. The row's own figures stay in ``results.tsv`` and in
+``live/config.py:PINNED_DAY``'s ``source_commit``/``source_calmar``.
+
+The knobs live here and nowhere else: since LIVE_STRATEGY_ROUTING_PLAN D2 a
+live run builds from ``make_strategy`` below, so an edit to this package is a
+live change.
 
 Four facts DAY_SESSION_PLAN §2.6 names as the ones most likely to be lost when
 these components are rewritten. They are properties of THIS strategy, not of

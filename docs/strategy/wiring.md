@@ -15,7 +15,7 @@ file cannot drift from the tuned configuration the way its predecessor did.
 | `SESSIONS` | tuple | `("day", "night", "fullday")` — what `--strategy` renders its `choices=` from |
 | `params(session)` | function | that session's declared default knobs, as a fresh copy |
 | `make_strategy(session, **kwargs)` | function | that session's `{forecaster, emitter, make_trader, exit_rule, forced_close, params}` |
-| `forecaster_sha(session)` | function | 12-hex sha256 of that package's `forecaster.py` — the `results.tsv` column |
+| `forecaster_sha(session)` | function | 12-hex sha256 of that package's `forecaster.py` — the `results_<session>.tsv` column |
 
 ## What changed, and why
 Before STRATEGY_SPLIT_PLAN this module held a single `make_strategy()` that
@@ -55,10 +55,10 @@ every iteration is comparable and `--precompute` amortises across them. Once the
 forecaster can move, a Calmar improvement may come from the forecaster rather
 than the strategy and the log cannot tell which.
 
-`results.tsv` now carries a `forecaster_sha` column to restore the distinction —
-rows sharing a sha were scored on the same forecast stream; a change marks a
-stream change and has to be argued for. The 20 rows that predate the split read
-`pre-split`. `real_data.py --strategy <s>` prints the sha in its banner and
+Each session's `results_<session>.tsv` carries a `forecaster_sha` column to
+restore the distinction — rows sharing a sha were scored on the same forecast
+stream; a change marks a stream change and has to be argued for. The 20 rows of
+the pre-split `results.tsv` read `pre-split`. `real_data.py --strategy <s>` prints the sha in its banner and
 records it in `params.json`, so a row can be filled in from the run that produced
 it.
 

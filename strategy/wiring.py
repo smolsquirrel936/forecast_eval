@@ -57,9 +57,11 @@ def forecaster_sha(session: str) -> str:
     #       so every iteration is comparable and `--precompute` amortises. Once
     #       the forecaster can move, a Calmar improvement may come from the
     #       forecaster rather than the strategy and the log cannot tell which.
-    #       Recording this in `results.tsv` restores the distinction: rows sharing
-    #       a sha were scored on the same forecast stream and are comparable;
-    #       a sha change marks a stream change and has to be argued for.
+    #       Recording this in the session's own `results_<session>.tsv` restores
+    #       the distinction: rows sharing a sha were scored on the same forecast
+    #       stream and are comparable; a sha change marks a stream change and has
+    #       to be argued for. (The pre-split `results.tsv` has the column as well,
+    #       with every row marked `pre-split`.)
     #
     #       Hashed from the file rather than from the imported module so it does
     #       not require torch, and so an edit counts even if the process has the

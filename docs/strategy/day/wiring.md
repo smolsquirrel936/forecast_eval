@@ -26,7 +26,11 @@ factory. This is the file a search for this session edits first.
 | `params` | dict | the resolved knobs, for the run banner and `params.json` |
 
 ## Provenance
-`PINNED_DAY` (commit `3c3ae38`) — Calmar 1.6937, 67 trades, band ±0.001 / `min_prob` 0.65.
+`PINNED_DAY` (commit `3c3ae38`) — band ±0.001 / `min_prob` 0.65, measured at **fee
+0.00015** (the harness default then; it is 0.0002 now), warmup 676 123. The row's
+figures are in `results.tsv` and in `live/config.py:PINNED_DAY`. **No Calmar
+carries out of it as a bar to beat** (DAYNIGHT_TOTO2_RESET_PLAN §6 Q4):
+`results_day.tsv` starts empty and the loop's `iter01` sets the first best.
 
 ## Key points / gotchas
 - **Starting at the pinned config is what makes the split checkable.**

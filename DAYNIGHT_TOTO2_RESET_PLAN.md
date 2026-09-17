@@ -353,6 +353,29 @@ all of these, two new test files, and **one shared test**: `e773c23` rewrote
   fast-forwarded into `main`, and pushed by the user on 2026-09-15 (`origin/main` at
   `7fb7e8f`).
 
+## 9. Follow-up: the strategy packages' comments (2026-09-18)
+
+The reset's wording passes covered the plans, the docs and `live/config.py`, and §8's F5 did
+audit fullday's docstring — but day's and night's `wiring.py` docstrings were restored from
+`20767bb` and never re-read against the reset's own decisions. They still headlined
+**Calmar 3.6006** and **1.6937** at the top of the file each loop edits first, which is what
+§6 Q4 removed from the plans, and neither said the figures were measured at fee 0.00015 while
+the harness now defaults to 0.0002. Both were reworded: the provenance commit stays, the bar
+to beat goes, and the figures themselves remain in `results.tsv` and `live/config.py`. Day's
+docstring also gained the "an edit here is a live change" line that night's and fullday's
+already carried, and fullday's gained the Q4 sentence.
+
+Separately, the three `strategy/<session>/forecaster.py` docstrings, `strategy/wiring.py` and
+their docs pages still sent `forecaster_sha` to `results.tsv`; the loops log to
+`results_<session>.tsv`, and every `results.tsv` row reads `pre-split`. Corrected.
+
+**That docstring edit moved every `forecaster_sha`** — day `fdc1c384cf16` → `6587766b4391`,
+night `906a21edce12` → `f09b7ef5fffb`, fullday `b3629e2074f0` → `d7acdb22299f` (the sha in
+§8's G3F record above is the pre-edit one and stays as the record of that run). Done now, on
+purpose, because no `iterNN` row exists yet in any of the three results files: the same edit
+after `iter01` would read as a forecast-stream change when no forecast moved. The three
+session plans carry the new shas.
+
 ## Related
 
 `STRATEGY_SPLIT_PLAN.md` (§1 defaults, G1) · `LIVE_STRATEGY_ROUTING_PLAN.md` (D9, D10) ·

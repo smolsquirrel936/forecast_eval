@@ -46,8 +46,10 @@ factory. This is the file a search for this session edits first.
 > package is runnable and parity-checkable. They were not chosen for
 > `TXF_RPT_minute_fullday.csv`, and there is no `results.tsv` row for full-day.
 > The 2026-09-09 band sweep did measure this exact cell (97 trades, Calmar 1.3975
-> at fee 0.00015, warmup 5000). DAYNIGHT_TOTO2_RESET_PLAN §8 used it as the restore
-> check, not as a target. Live no longer refuses `--config fullday`
+> at fee 0.00015, warmup 5000 — the harness default fee is 0.0002 now).
+> DAYNIGHT_TOTO2_RESET_PLAN §8 used it as the restore check, not as a target, and
+> **no Calmar carries into the loop as a bar to beat** (§6 Q4): `results_fullday.tsv`
+> starts empty and the loop's `iter01` sets the first best. Live no longer refuses `--config fullday`
 > (LIVE_STRATEGY_ROUTING_PLAN D1). The package was restored to this state on
 > 2026-09-14 after the fullday loop (iter00–05, archived at
 > `archive/fullday-toto2-iter05`).
