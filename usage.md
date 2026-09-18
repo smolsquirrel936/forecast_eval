@@ -88,6 +88,33 @@ file and splits it: the first `--lookback-frac` is silent warmup, the rest is th
 backtest window. Defaults: context_length=3008, horizon=30, stride=30, matching
 the toto2 notebook configuration.
 
+### Holding out a tail (`--train-frac` / `--train-bars`)
+
+By default the printed metrics cover the whole post-warmup window — the same
+bars a parameter search tunes against, which is how a search overfits. Pass
+`--train-frac 0.7` (or `--train-bars <N>`) and the printed pack covers only the
+leading part; the trailing remainder is **held out** and is never measured,
+printed or recorded.
+
+```bash
+# Decide on the first 70 % of the eval window; the last 30 % stays unseen.
+uv run --no-sync python -m forecast_eval.real_data --strategy night --precompute \
+    --data "\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_night.csv" \
+    --warmup-bars 538790 --train-frac 0.7
+```
+
+Two things to know:
+
+* **The report is not windowed.** `report.html` and every artifact under the run
+  dir always cover the whole tape. Only the terminal pack is restricted, and when
+  a split is active it prints the train block first (`THE DECISION NUMBERS`) with
+  the whole-data block below it marked as the report figure.
+* **Record `--train-bars`, not `--train-frac`.** A fraction moves when the tape
+  grows, so a Calmar recorded against one cannot be re-derived later — the same
+  lesson `--warmup-bars` exists for. The `train_frac` / `train_split_bars`
+  columns in `results.tsv` are what keep two rows comparable; a number measured
+  on 70 % of the window is not comparable with one measured on 100 %.
+
 ### `--strategy day|night|fullday` — run a whole pinned deployment
 
 Since the three-way split (STRATEGY_SPLIT_PLAN), one flag selects a session's
@@ -150,6 +177,9 @@ Key CLI flags (see `--help` for the full list):
 | `--data` | `\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_day.csv` | Source 1-min CSV (night session: `TXF_RPT_minute_night.csv`) |
 | `--n-bars` | None (full) | Trailing rows to use |
 | `--lookback-frac` | 0.30 | Silent-warmup fraction |
+| `--warmup-bars` | None | Silent-warmup length in in-session BARS; overrides `--lookback-frac` |
+| `--train-frac` | 1.0 | Fraction of the EVAL window the printed metrics cover; the rest is held out and never scored |
+| `--train-bars` | None | Train length in in-session BARS; overrides `--train-frac` |
 | `--checkpoint` | `Datadog/Toto-2.0-313m` | HuggingFace checkpoint id |
 | `--context-length` | 3008 | Bars fed to the model per inference |
 | `--horizon-bars` | 30 | Forecast horizon |

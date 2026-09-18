@@ -16,6 +16,41 @@ and prints the metric pack plus a buy-and-hold floor.
 | `load_minute_bars(path, n_bars)` | function | drop NaN closes; `n_bars=None` → full dataset |
 | `main(argv)` | function | parse CLI, split, run (with progress bar), log, print metrics |
 
+## The train/test split
+`--train-frac` (default **1.0**) subdivides the *eval* window; warmup is
+untouched. The leading `train_frac` of it is what the printed metric pack covers,
+and the trailing remainder is **held out and never scored**:
+
+```
+|<---- warmup (no trades) ---->|<---- train ---->|<---- test (held out) ---->|
+0                           warmup        warmup+T                    n_session
+```
+
+`--train-bars` names the same boundary in in-session bars and **overrides
+`--train-frac` entirely**, exactly as `--warmup-bars` overrides `--lookback-frac`
+— and for the same reason: a fraction moves when the tape grows, so a Calmar
+recorded against one stops being re-derivable. Use the fraction interactively;
+record the bar count.
+
+**The HTML report always covers the WHOLE tape.** Only the terminal pack is
+windowed. The artifact bundle written under the run dir is the whole run, so
+every chart, the equity curve and the Result-summary tables are whole-data — the
+train numbers exist to be *decided* on, the report exists to be *read*. When a
+split is active the terminal prints the train block first, labelled
+`THE DECISION NUMBERS`, and the whole-data block below it says it is the report
+figure.
+
+Held-out **test** metrics are computed nowhere and printed nowhere. A loop that
+glances at the test Calmar every iteration has spent the holdout, which is the
+whole point of having one.
+
+Three derived fields reach `params.json` (and so the report's Settings table) next
+to `train_frac`: `train_split_bars`, the resolved train length, and
+`train_split_ts`, the last train bar. On a `--train-bars` run `train_frac` is
+recorded as **`None`**, not `1.0` — argparse's untouched default would record a
+value the run never consulted, and one that reads as "no split" on a run that has
+one. See [TRAIN_TEST_SPLIT_PLAN](../TRAIN_TEST_SPLIT_PLAN.md).
+
 ## Key points
 - **`--data` is required** — there is no default path. The old default named the
   DAY file while every tuning run used NIGHT, and a session picked by a default
@@ -34,6 +69,15 @@ and prints the metric pack plus a buy-and-hold floor.
 ## Key gotchas
 - Refuses to run if `warmup < context_length` (the model could never fire).
 - `--lookback-frac` must be strictly in (0, 1).
+- `--train-frac` must be in **(0, 1]** — 1.0 *is* admitted, unlike
+  `--lookback-frac`, because it is the default and names "score the whole eval
+  window", which is what every run recorded before the flag existed did.
+- `--train-bars` is bounded by **`eval_bars`**, not the in-session count and not
+  the raw row count: the train window is carved out of what is left after warmup,
+  so a larger value would pass a whole-tape check and then silently mean no split.
+- A round-trip open across the boundary is counted by neither side —
+  `build_trades` books a trade only on its closing fill, which is also what a run
+  that stopped at the split would have reported.
 
 ## The contract collapse is a no-op — measured
 `load_minute_bars` keeps the highest-volume row per minute when a `contract`

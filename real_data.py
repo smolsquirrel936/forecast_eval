@@ -249,6 +249,24 @@ def main(argv=None) -> int:
                          "Reproducible across tapes of different length, which a "
                          "fraction is not -- prefer this for any run that will be "
                          "recorded in results.tsv")
+    # Tech: --train-frac/--train-bars subdivide the *eval* window, leaving warmup
+    #       untouched; the metric pack the terminal reports covers only the train
+    #       part, while the artifacts and the HTML report stay whole-data.
+    # Why:  TRAIN_TEST_SPLIT_PLAN §1 -- every autoresearch iteration is scored on
+    #       the same bars every prior iteration already tuned against, so nothing
+    #       is left to answer "does this hold on bars the search never saw". The
+    #       pair mirrors --lookback-frac/--warmup-bars for the same reason (§3.1):
+    #       a fraction moves when the tape grows, so a recorded Calmar stops being
+    #       re-derivable. Default 1.0 means no split, and a default run is
+    #       byte-identical to one from before this flag existed.
+    ap.add_argument("--train-frac", type=float, default=1.0,
+                    help="Fraction of the EVAL window the reported metrics are "
+                         "measured on; the trailing remainder is held out and "
+                         "never scored. Default 1.0 (no split).")
+    ap.add_argument("--train-bars", type=int, default=None,
+                    help="Train length in in-session BARS; overrides --train-frac "
+                         "entirely. Reproducible across tape vintages -- prefer it "
+                         "for any run recorded in results.tsv")
     # Tech: --strategy raises one of the three per-session packages
     #       (STRATEGY_SPLIT_PLAN S3); every knob below it also declares then
     #       defaults from that package instead of from this CLI.
@@ -359,6 +377,16 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 2
 
+    # Tech: validate the train fraction into (0, 1] -- 1.0 IS admitted.
+    # Why:  unlike --lookback-frac, the top of the range is meaningful here: 1.0 is
+    #       the default and names "score the whole eval window", the behavior every
+    #       run recorded before this flag existed had. Only 0 (an empty train
+    #       window) and >1 (a train window longer than the data) are nonsense.
+    if not 0.0 < args.train_frac <= 1.0:
+        print(f"ERROR: --train-frac must be in (0, 1], got {args.train_frac}",
+              file=sys.stderr)
+        return 2
+
     # Tech: default the output dir and verify the data file exists.
     # Why:  same guards as the demo — unique run dir, fail fast on a bad path.
     if args.output_dir is None:
@@ -410,6 +438,17 @@ def main(argv=None) -> int:
               f"{args.warmup_bars}", file=sys.stderr)
         return 2
 
+    # Tech: an explicit --train-bars must fit inside the eval window.
+    # Why:  §3.1. The bound is `eval_bars`, not `n_session` and not the raw row
+    #       count: the train window is carved out of what is left AFTER warmup, so
+    #       a value between eval_bars and n_session would pass a whole-tape check
+    #       and then silently name the entire eval window, i.e. no split at all.
+    if args.train_bars is not None and not 0 < args.train_bars <= eval_bars:
+        print(f"ERROR: --train-bars must be in (0, {eval_bars}] -- the count of "
+              f"IN-SESSION bars AFTER warmup, not the {n_session} in-session or "
+              f"{n} loaded rows -- got {args.train_bars}", file=sys.stderr)
+        return 2
+
     # Tech: refuse to run if the warmup slice is shorter than one model context.
     # Why:  Toto2 needs at least context_length bars before its first forecast; a
     #       warmup smaller than that would mean the model can never fire, so we stop
@@ -423,6 +462,19 @@ def main(argv=None) -> int:
             file=sys.stderr,
         )
         return 2
+
+    # Tech: resolve the train length from --train-bars when given, else from
+    #       --train-frac, and name the last train bar. `split_ts` is the boundary
+    #       everything downstream windows on.
+    # Why:  §3.1 -- one line, the same precedence --warmup-bars has over
+    #       --lookback-frac. The timestamp rather than the index is what travels,
+    #       because `compute_metrics` filters events by time, and a trade is
+    #       counted iff its EXIT falls at or before it (§2.1).
+    n_train = (args.train_bars if args.train_bars is not None
+               else int(args.train_frac * eval_bars))
+    split_idx = warmup + n_train
+    split_ts = in_session[split_idx - 1]
+    split_active = n_train < eval_bars
 
     # Tech: print the full shape/range plus the explicit warmup and eval windows.
     # Why:  on a multi-hour full-dataset run it's important to see exactly which date
@@ -439,6 +491,37 @@ def main(argv=None) -> int:
           f"[{in_session[0]} .. {in_session[warmup - 1]}]")
     print(f"  eval   ({eval_bars / n_session:5.1%}) : {eval_bars} bars  "
           f"[{in_session[warmup]} .. {in_session[-1]}]")
+    # Tech: when a split is active, print the train and held-out halves of the
+    #       eval window, tagged with the flag that produced the boundary.
+    # Why:  §3.3. Nothing is printed at the default 1.0, so a run from before this
+    #       flag existed still prints exactly what it printed then. The tag exists
+    #       because a fraction and a bar count land on the same boundary by
+    #       different routes, and only one of them survives a tape re-vintage --
+    #       a reader deciding whether to trust a recorded number needs to know
+    #       which one produced it, the way the strategy banner names each origin.
+    # Tech: the two child lines hang off `eval` on a box-drawing tree, and their
+    #       percentages are of `eval_bars` while warmup/eval are of `n_session`.
+    # Why:  train and test are a subdivision OF the eval window, not two more
+    #       siblings of it -- a flat list of four reads as a four-way split of the
+    #       tape, and 80 % of eval is 53 % of the tape, so a reader who takes the
+    #       denominators to be the same is off by a third. The glyphs say
+    #       "contained in" in one character where a sentence would be ignored.
+    #       The warmup/eval lines above are deliberately NOT re-aligned to match:
+    #       they print identically with or without a split, which is what keeps a
+    #       no-split run's output the same as it was before this flag existed.
+    if split_active:
+        origin = ("--train-bars %d" % args.train_bars
+                  if args.train_bars is not None
+                  else "--train-frac %g" % args.train_frac)
+        n_test = eval_bars - n_train
+        width = max(len(str(n_train)), len(str(n_test)))
+        print(f"    ├─ train ({n_train / eval_bars:5.1%}) : "
+              f"{n_train:{width}d} bars  "
+              f"[{in_session[warmup]} .. {split_ts}]   [{origin}]")
+        print(f"    └─ test  ({n_test / eval_bars:5.1%}) : "
+              f"{n_test:{width}d} bars  "
+              f"[{in_session[split_idx]} .. {in_session[-1]}]   "
+              f"HELD OUT -- not scored")
     # Tech: say so out loud when the fraction path was used on a tape carrying
     #       off-session rows.
     # Why:  --lookback-frac multiplies the RAW row count, so on such a tape the
@@ -549,6 +632,16 @@ def main(argv=None) -> int:
     #       numbers (Settings + Result summary) — so they must exist before it runs.
     #       The same dicts are reused for the terminal blocks below (no recompute).
     metrics = compute_metrics(res, ticks, forced_close=args.forced_close)
+    # Tech: a second, train-windowed pack, computed only when a split is active.
+    # Why:  §4.2 -- this is the pack the keep/discard decision reads, and the one
+    #       above is what the artifacts and the HTML report carry. Both come from
+    #       the SAME `res`: the backtest is causal, so windowing its events is
+    #       exactly a run that stopped at the split (§2.1), and no second GPU pass
+    #       is needed. Skipped entirely at the default 1.0 so a bare run does no
+    #       extra work and prints what it always printed.
+    train_metrics = (compute_metrics(res, ticks, forced_close=args.forced_close,
+                                     through=split_ts)
+                     if split_active else None)
     # Tech: attach the per-year returns table to the pack, built from the trade
     #       records the pack itself just produced, at this run's own point
     #       value and --capital base.
@@ -574,8 +667,35 @@ def main(argv=None) -> int:
     #       reader who wants to re-run it has just read them all; relying on
     #       where a late setattr lands would break silently the next time an
     #       attribute is stamped onto args.
+    # Tech: drop the raw `--train-bars` dest, then append the three train fields
+    #       as one contiguous group before `command`.
+    # Why:  §4.3. Settings renders `params` in dict order, and `train_frac` is
+    #       already a key of `vars(args)` -- rebinding an existing key does NOT
+    #       move it, so the group has to be popped and re-inserted or it lands
+    #       wherever argparse happened to declare the flag. `train_bars` is
+    #       removed rather than recorded: it is None on every --train-frac run, so
+    #       as a Settings row it is dead in the common case, and `command` below
+    #       already reproduces the typed flag verbatim. `train_frac` is recorded
+    #       as None when --train-bars won, because writing argparse's untouched
+    #       1.0 there would record a value the run never consulted -- one that
+    #       reads as "no split" on a run that has one.
+    # Tech: `eval_bars` leads the group as the denominator the two below are
+    #       shares of.
+    # Why:  a bar count is not a proportion, and on a `--train-bars` run
+    #       `train_frac` is None by design -- so without this field nothing in
+    #       `params.json` can say what share of the window was scored, and the
+    #       report's Settings row has nothing to render a percentage from. It is
+    #       also the bound the `--train-bars` validation quotes, so recording it
+    #       makes a rejected value self-explanatory after the fact.
+    p = vars(args).copy()
+    p.pop("train_bars")
+    p.pop("train_frac")
     params = {
-        **vars(args),
+        **p,
+        "eval_bars": eval_bars,
+        "train_frac": None if args.train_bars is not None else args.train_frac,
+        "train_split_bars": n_train,
+        "train_split_ts": str(split_ts),
         "command": _command_string(sys.argv[1:] if argv is None else list(argv)),
     }
 
@@ -591,12 +711,31 @@ def main(argv=None) -> int:
 
     # Tech: print the three metric blocks (trading/forecast/attribution).
     # Why:  same SPEC §7 deliverable and formatting convention as the demo.
-    print("\n=== Trading metrics ===")
+    # Tech: with a split active, the train-windowed trading block prints FIRST
+    #       under its own heading, and the whole-data headings below say what they
+    #       are. Without one, every heading is exactly what it was.
+    # Why:  §4.4 -- two trading blocks now reach the terminal and only one of them
+    #       may be recorded. The order and the labels are the whole guard: the
+    #       number a reader meets first is the decision number, and the other says
+    #       in its own heading that it is the report figure. At the default there
+    #       is one block and the output is unchanged.
+    def _print_block(block):
+        for k, v in block.items():
+            print(f"    {k:38s} {v if not isinstance(v, float) else f'{v:+.6f}'}")
+
+    if split_active:
+        print(f"\n=== Trading metrics "
+              f"[TRAIN {n_train / eval_bars:.1%} -- THE DECISION NUMBERS] ===")
+        for key in [k for k in train_metrics if k.startswith("trading")]:
+            print(f"  [{key}]")
+            _print_block(train_metrics[key])
+
+    print("\n=== Trading metrics ===" if not split_active else
+          "\n=== Trading metrics (WHOLE data -- report figure, do NOT record) ===")
     trading_keys = [k for k in metrics if k.startswith("trading")]
     for key in trading_keys:
         print(f"  [{key}]")
-        for k, v in metrics[key].items():
-            print(f"    {k:38s} {v if not isinstance(v, float) else f'{v:+.6f}'}")
+        _print_block(metrics[key])
 
     print("\n=== Forecast quality ===")
     for k, v in metrics["forecast"].items():

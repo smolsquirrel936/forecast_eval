@@ -28,6 +28,7 @@ import pandas as pd
 
 from .environment import classify_session
 from .events import FillEvent, Forecast
+from .portfolio import Portfolio
 
 
 # ---------------------------------------------------------------------------
@@ -648,8 +649,49 @@ def compute_metrics(
     *,
     forced_close: bool = False,
     roll_fills: Optional[Collection[Any]] = None,
+    through: Optional[Any] = None,
 ) -> Dict[str, Dict]:
-    """Full metric pack. Bucketed by session iff ``forced_close``."""
+    """Full metric pack. Bucketed by session iff ``forced_close``.
+
+    ``through`` windows the pack to events at or before that timestamp —
+    the train/test split of TRAIN_TEST_SPLIT_PLAN §2. Leave it ``None``
+    (the default, and what the report path always passes) and every number
+    below covers the whole run, unchanged.
+    """
+    # Tech: when `through` is given, keep only the fills, signals and forecasts
+    #       stamped at or before it, and replay the surviving fills through a
+    #       fresh Portfolio. `None` binds the originals and nothing below changes.
+    # Why:  TRAIN_TEST_SPLIT_PLAN §2.1 — the backtest is causal, so this prefix is
+    #       exactly what a run that stopped at `through` would have produced, and
+    #       the windowing is a filter rather than an approximation. The Portfolio
+    #       is *replayed* because `result.portfolio` carries the whole run's
+    #       realized PnL and fees: handing that figure to the attribution block
+    #       beside a windowed signal replay would report the gap between two
+    #       different windows. Replaying also keeps `realized_net_pnl_points`
+    #       defined identically on both paths (`realized_pnl - total_fees`), which
+    #       re-summing trade records would not — those omit an open leg's fee.
+    fills = result.fills
+    signals = result.signals
+    forecasts = result.forecasts
+    portfolio = result.portfolio
+    if through is not None:
+        fills = [f for f in fills if f.timestamp <= through]
+        signals = [s for s in signals if s["timestamp"] <= through]
+        forecasts = [f for f in forecasts if f.timestamp <= through]
+        # Tech: re-book the surviving fills into a new Portfolio at the same
+        #       contract multiplier, tagging each by its own timestamp's session.
+        # Why:  only `net_pnl()` is read from this object, and that is a
+        #       session-agnostic sum, so the tag does not reach any number this
+        #       function returns. Be aware the per-session buckets on THIS
+        #       portfolio are not faithful under `forced_close`: the run loop
+        #       books a forced close to the *prior* session through a latch
+        #       (SPEC §4.7) that a timestamp lookup cannot see. Read
+        #       `realized_pnl_by_session` off `result.portfolio`, never off this.
+        portfolio = Portfolio(
+            contract_multiplier=result.portfolio.contract_multiplier)
+        for f in fills:
+            portfolio.apply_fill(f, classify_session(f.timestamp))
+
     # Tech: rebuild round-trips from the fills, tagging each by the exit's session.
     # Why:  trades are the unit every trading metric needs; classify_session is the
     #       same function the Environment used, so booking is consistent end to end.
@@ -659,7 +701,7 @@ def compute_metrics(
     #       session's per-trade numbers comparable with a backtest, where a held
     #       position crosses a splice instead of being closed and re-opened.
     session_lookup = classify_session
-    trades = build_trades(result.fills, session_lookup=session_lookup,
+    trades = build_trades(fills, session_lookup=session_lookup,
                           roll_fills=roll_fills)
 
     out: Dict[str, Dict] = {}
@@ -681,10 +723,18 @@ def compute_metrics(
     # Why:  the SPEC defines forecast/signal metrics at the model level, not per
     #       session, so they aren't bucketed; asdict() makes trades JSON/CSV-friendly
     #       for the logging layer.
-    out["forecast"] = forecast_quality(result.forecasts, tick_df)
+    # Tech: `tick_df` is passed whole even when `through` windowed the forecasts.
+    # Why:  TRAIN_TEST_SPLIT_PLAN §2.2 — forecast_quality reads the realized price
+    #       at `i + horizon_bars`, so the last ~horizon forecasts before a split
+    #       look just past it. Truncating the frame instead would make those
+    #       forecasts score against a missing future and disagree with the same
+    #       block on a whole-data run for a reason unrelated to the split. The
+    #       block is diagnostic; no trading metric and no keep/discard decision
+    #       reads it.
+    out["forecast"] = forecast_quality(forecasts, tick_df)
     out["attribution"] = signal_attribution(
-        result.signals,
-        realized_net_pnl_points=result.portfolio.net_pnl(),
+        signals,
+        realized_net_pnl_points=portfolio.net_pnl(),
     )
     out["trades"] = {"records": [asdict(t) for t in trades]}
     return out

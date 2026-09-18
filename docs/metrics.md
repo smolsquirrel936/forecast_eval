@@ -20,7 +20,7 @@ per-trade and unannualized.**
 | `signal_attribution(signals, realized)` | function | frictionless signal PnL vs realized → drag |
 | `signal_attribution_curve(signals)` | function | per-round-trip cumulative signal PnL (for charts) |
 | `buy_and_hold_pnl(tick_df, fee_rate)` | function | the "floor" baseline |
-| `compute_metrics(result, tick_df, forced_close)` | function | the top-level pack |
+| `compute_metrics(result, tick_df, forced_close, through=None)` | function | the top-level pack; `through` windows it to a train split |
 
 ## The three blocks
 - **Trading metrics** — from round-trips: total/net PnL, hit rate, avg win/loss,
@@ -38,6 +38,24 @@ per-trade and unannualized.**
 - The forecast-quality realized window is in **ticks**, not the model's bar unit —
   approximate if the horizon is expressed in aggregated bars (e.g. Toto2 `1min`).
 - `build_trades` assumes `max_position == 1` (the v1 invariant).
+- **`through` windows the pack without re-running the backtest.** Pass a
+  timestamp and only fills, signals and forecasts at or before it are counted.
+  The backtest is causal, so this prefix is *exactly* what a run that stopped
+  there would have produced — a filter, not an approximation
+  ([TRAIN_TEST_SPLIT_PLAN](../TRAIN_TEST_SPLIT_PLAN.md) §2.1). Two consequences
+  worth knowing:
+  - The surviving fills are replayed through a **fresh `Portfolio`**, so
+    `realized_net_pnl_points` is `realized_pnl - total_fees` on both paths rather
+    than a re-sum of trade records (which omit an open leg's fee). Only
+    `net_pnl()` is read off it: its **per-session buckets are not faithful under
+    `forced_close`**, because the run loop books a forced close to the *prior*
+    session through a latch a timestamp lookup cannot see. Read
+    `realized_pnl_by_session` off `result.portfolio`, never off the replay.
+  - `tick_df` is **not** truncated, so the last ~`horizon_bars` forecasts before
+    the split read a realized price from the held-out side. That touches the
+    hit-rate / IC block only — no trading metric and no keep/discard decision
+    reads it. Truncating instead would make those forecasts score against a
+    missing future and disagree with a whole-data run for an unrelated reason.
 - **`roll_fills` keeps a contract roll one trade.** Pass the timestamps of the
   fills that were roll legs and a closing leg listed there does not end the
   round-trip: its PnL and fees are banked and the trade continues at the

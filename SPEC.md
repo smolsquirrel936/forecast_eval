@@ -207,6 +207,28 @@ Forecaster declares `warmup_bars`. Environment replays ticks during this period 
 
 **Why:** most time-series models (Toto2 included) need a context window of past bars to condition on; predicting from too little history yields noise. Letting the strategy trade during that period would take real positions and pay real fees on those noisy forecasts, contaminating the PnL evaluation. Replaying ticks during warm-up (rather than skipping them) keeps the history buffer building up in chronological order, so the moment `warmup_bars` is reached the forecaster sees a realistic context exactly as it would in live trading — no artificial jump-start.
 
+### 4.8a Train / test split of the evaluation window
+
+Warm-up divides the tape once; the region after it may be divided again. The
+leading `train_frac` of the post-warm-up window is the **training set** — the
+only part a parameter search is allowed to score on — and the trailing remainder
+is **held out**: never measured, never printed, never recorded. `train_frac`
+defaults to 1.0, which means no split and is what every run predating the knob
+did.
+
+**Why:** the harness fits nothing (the forecaster is pretrained, and warm-up is
+model *context*, not training), but the search around it does. An autoresearch
+loop that keeps or discards a knob on the same bars every earlier iteration
+already tuned against has no region left that can answer "does this hold where
+the search never looked". The split creates one.
+
+**Why the report is exempt:** the held-out region is withheld from the *decision*,
+not from the record. The artifact bundle and the generated report always cover
+the whole tape, because a report is read after the fact by someone who wants to
+know what actually happened — while the metric pack printed for the loop is
+windowed. Both come from one backtest pass: the loop is causal, so windowing its
+recorded events is exactly a run that stopped at the boundary.
+
 ### 4.9 Report generation
 
 After every backtest completes, the log writer automatically invokes the chart generator on its own log bundle. The same generator is also exposed as a standalone CLI so reports can be regenerated from existing logs without re-running the backtest:
@@ -321,6 +343,12 @@ Reported in every run.
 - The gap is execution + cost drag — how much trader plumbing eats model edge.
 
 When `forced_close_on_session_end = True`, all of the above are reported separately for DAY and NIGHT.
+
+When a train/test split is configured (§4.8a), the reported pack covers the
+training window only, while the artifact bundle and the report keep covering the
+whole run. Forecast-quality is the one block that reads slightly past the
+boundary — its realized return is looked up `horizon_bars` ahead — which is
+tolerated because no trading metric and no selection decision depends on it.
 
 ## 8. Project Structure
 

@@ -53,5 +53,29 @@ A bundle whose `trades` frame predates `entry_ts` simply gets no origin.
 - `generate_report` raises a precise `FileNotFoundError` listing any missing
   artifact — it expects a bundle written by [logging_io.write_all](logging_io.md).
 
+## The train/test boundary
+When the run held a tail back, all three figures — both panels of
+equity/drawdown, price-with-fills, and signal-vs-realized — carry a dashed
+orange rule at `train_split_ts` captioned `train ends`. All three share a
+timestamp x-axis, so the boundary is the same instant on each.
+
+- It is read from the run's own `params.json` (`_active_split_ts`), so a
+  standalone `python -m forecast_eval.reports <dir>` re-render marks it too, and
+  a bundle written before the feature simply has no key and renders as it always
+  did.
+- **It is drawn only when a tail was actually held back.** A default run records
+  a `train_split_ts` as well — the boundary is then just the last bar — and
+  drawing that would pin a meaningless rule to the right edge of every chart.
+  `train_split_bars >= eval_bars` suppresses it.
+- It never joins a legend: the equity panel already carries strategy plus
+  buy-and-hold, and the price panel price plus BUY plus SELL. The caption says
+  what it is without competing for that space.
+
+`train_frac` renders in Settings as an **unsigned** percentage with trailing
+zeros trimmed (`80%`, `75.5%`) — it is a share of a window, so the leading `+`
+every other float carries reads as noise. On a `--train-bars` run the stored
+value is `None` (the file records which flag was used, and that one was not), and
+the table derives the share from `train_split_bars / eval_bars` instead.
+
 ## Related
 [logging_io.py](logging_io.md) · [metrics.py](metrics.md) · [usage.md §7](../usage.md) · [SPEC §4.9](../SPEC.md)

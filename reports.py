@@ -65,6 +65,80 @@ def _read_artifact(run_dir: Path, name: str) -> Optional[pd.DataFrame]:
 # Chart 1: equity + drawdown.
 # ---------------------------------------------------------------------------
 
+# Tech: the train/test boundary's colour and caption, shared by all six
+#       renderers so the static and interactive charts mark it identically.
+# Why:  one constant means the PNG and the HTML cannot drift apart on the one
+#       element that is not a data series — a reader comparing them would read a
+#       colour change as meaning something.
+_SPLIT_COLOR = "#ff7f0e"
+_SPLIT_LABEL = "train ends"
+
+
+def _split_ts(value) -> Optional[pd.Timestamp]:
+    # Tech: coerce a stored `train_split_ts` to a Timestamp, or None if it is
+    #       absent or unparseable.
+    # Why:  the value arrives from params.json as a string, and every run dir
+    #       written before the train/test split existed has no such key at all —
+    #       those must render exactly as they always did rather than raise, which
+    #       is what makes re-rendering an old bundle safe.
+    if value is None:
+        return None
+    try:
+        ts = pd.Timestamp(value)
+    except (ValueError, TypeError):
+        return None
+    return None if pd.isna(ts) else ts
+
+
+def _active_split_ts(settings: Optional[Mapping]):
+    # Tech: the boundary to mark — the stored `train_split_ts`, but only when the
+    #       run actually held a tail back (`train_split_bars < eval_bars`).
+    # Why:  a run at the default `--train-frac 1.0` still records a split
+    #       timestamp, because the "boundary" is then simply the last bar. Drawing
+    #       that would put a rule flush against the right edge of all three charts
+    #       on every ordinary run, marking nothing. The line exists to say "the
+    #       held-out region starts here", so it must appear only when one exists.
+    if not settings:
+        return None
+    bars, total = settings.get("train_split_bars"), settings.get("eval_bars")
+    if isinstance(bars, int) and isinstance(total, int) and bars >= total:
+        return None
+    return _split_ts(settings.get("train_split_ts"))
+
+
+def _axvline_split(ax, split_ts, *, annotate: bool = True) -> None:
+    # Tech: draw the boundary as a dashed orange rule on a matplotlib axis, with
+    #       the caption riding just inside the top of the axes.
+    # Why:  `label=` is deliberately not passed, so the line never joins the
+    #       legend — the equity panel already carries strategy + buy-and-hold and
+    #       the price panel price + BUY + SELL. The annotation says what it is
+    #       without competing for that space. `clip_on=False` keeps the caption
+    #       visible when the line lands near the right edge of a heavily-split run.
+    if split_ts is None:
+        return
+    ax.axvline(split_ts, color=_SPLIT_COLOR, lw=1.3, ls="--", zorder=4)
+    if annotate:
+        ax.annotate(_SPLIT_LABEL, xy=(split_ts, 1.0), xycoords=("data", "axes fraction"),
+                    xytext=(4, -10), textcoords="offset points",
+                    color=_SPLIT_COLOR, fontsize=8, ha="left", va="top",
+                    clip_on=False, zorder=4)
+
+
+def _add_vline_split(fig, split_ts, **kwargs) -> None:
+    # Tech: the plotly twin — a dashed orange vline carrying the same caption.
+    # Why:  `add_vline` draws a shape, not a trace, so it stays out of the legend
+    #       by construction, which is the behaviour chosen for the static charts
+    #       too. `kwargs` forwards row/col for the two-panel equity figure.
+    if split_ts is None:
+        return
+    fig.add_vline(
+        x=split_ts, line_width=1.3, line_dash="dash", line_color=_SPLIT_COLOR,
+        annotation_text=_SPLIT_LABEL, annotation_position="top right",
+        annotation_font_color=_SPLIT_COLOR, annotation_font_size=11,
+        **kwargs,
+    )
+
+
 def _equity_series(trades: pd.DataFrame) -> pd.DataFrame:
     # Tech: from trades, build a per-exit equity curve (cumulative net PnL), its
     #       running peak, and the drawdown (equity − peak); empty in → empty out.
@@ -147,6 +221,7 @@ def plot_equity_drawdown_mpl(
     ticks: Optional[pd.DataFrame] = None,
     fee_rate: float = 0.0002,
     point_value: float = 200.0,
+    split_ts=None,
 ) -> None:
     # Tech: a 2-row figure (equity on top 3/4, drawdown below); when there are no
     #       trades, print a centered "no trades" placeholder instead of curves.
@@ -200,6 +275,12 @@ def plot_equity_drawdown_mpl(
     # Why:  ConciseDateFormatter keeps tick labels readable across any run length
     #       (seconds to months) without manual locator tuning; tight_layout + a fixed
     #       dpi give a predictable PNG, and closing the figure frees memory in sweeps.
+    # Tech: the boundary goes on both panels, captioned only on the top one.
+    # Why:  the panels share an x-axis and are read as one stacked chart, so a
+    #       rule on only the equity half would look like a drawing error; two
+    #       captions on one vertical line is just duplication.
+    _axvline_split(ax1, split_ts)
+    _axvline_split(ax2, split_ts, annotate=False)
     ax1.set_ylabel("Cumulative net PnL (points)")
     ax1.set_title("Equity curve")
     ax2.set_ylabel("Drawdown")
@@ -217,6 +298,7 @@ def plot_equity_drawdown_plotly(
     ticks: Optional[pd.DataFrame] = None,
     fee_rate: float = 0.0002,
     point_value: float = 200.0,
+    split_ts=None,
 ) -> "go.Figure":
     # Tech: the interactive twin of the equity/drawdown chart — two stacked panels,
     #       each with a left points axis and a right currency axis that is the exact
@@ -304,6 +386,13 @@ def plot_equity_drawdown_plotly(
     fig.update_yaxes(title_text=f"currency @ {point_value:g}", row=1, col=1, secondary_y=True)
     fig.update_yaxes(title_text="points", row=2, col=1, secondary_y=False)
     fig.update_yaxes(title_text=f"currency @ {point_value:g}", row=2, col=1, secondary_y=True)
+    # Tech: the boundary on both stacked panels, captioned only on the top one.
+    # Why:  same reason as the PNG twin — the panels share an x-axis and read as
+    #       one chart, so the rule must cross both, and one caption is enough.
+    _add_vline_split(fig, split_ts, row=1, col=1)
+    if split_ts is not None:
+        fig.add_vline(x=split_ts, line_width=1.3, line_dash="dash",
+                      line_color=_SPLIT_COLOR, row=2, col=1)
     fig.update_layout(height=520, showlegend=not bh.empty,
                       margin=dict(t=40, l=60, r=70, b=40))
 
@@ -345,6 +434,8 @@ def plot_price_fills_mpl(
     fills: pd.DataFrame,
     ticks: Optional[pd.DataFrame],
     out_path: Path,
+    *,
+    split_ts=None,
 ) -> None:
     # Tech: draw the price line — preferring the real tick series, else reconstructing
     #       a rough line from fill prices — then overlay BUY (green ▲) / SELL (red ▼).
@@ -372,6 +463,7 @@ def plot_price_fills_mpl(
     # Tech: label, legend, concise date axis, save at fixed dpi and close.
     # Why:  same rationale as the equity chart — readable dates across any span and
     #       deterministic output that won't leak figures during a sweep.
+    _axvline_split(ax, split_ts)
     ax.set_ylabel("Price")
     ax.set_xlabel("Time")
     ax.set_title("Price with fills")
@@ -386,6 +478,8 @@ def plot_price_fills_mpl(
 def plot_price_fills_plotly(
     fills: pd.DataFrame,
     ticks: Optional[pd.DataFrame],
+    *,
+    split_ts=None,
 ) -> "go.Figure":
     # Tech: interactive price-with-fills — same price-source preference and BUY/SELL
     #       marker overlay as the matplotlib version, as plotly traces.
@@ -415,6 +509,7 @@ def plot_price_fills_plotly(
             name="SELL",
             marker=dict(symbol="triangle-down", color="#d62728", size=9),
         ))
+    _add_vline_split(fig, split_ts)
     fig.update_layout(
         height=460, title="Price with fills",
         xaxis_title="time", yaxis_title="price",
@@ -471,6 +566,8 @@ def plot_signal_vs_realized_mpl(
     signals: pd.DataFrame,
     trades: pd.DataFrame,
     out_path: Path,
+    *,
+    split_ts=None,
 ) -> None:
     # Tech: plot the frictionless signal curve and the realized curve together.
     # Why:  side by side they show how much theoretical edge survives to realized
@@ -501,6 +598,7 @@ def plot_signal_vs_realized_mpl(
             color="#d62728", alpha=0.15, label="execution + cost drag",
         )
     ax.axhline(0, color="grey", lw=0.5, ls="--")
+    _axvline_split(ax, split_ts)
     ax.set_ylabel("Cumulative PnL (points)")
     ax.set_xlabel("Time")
     ax.set_title("Signal vs. realized PnL — gap = execution + cost drag")
@@ -515,6 +613,8 @@ def plot_signal_vs_realized_mpl(
 def plot_signal_vs_realized_plotly(
     signals: pd.DataFrame,
     trades: pd.DataFrame,
+    *,
+    split_ts=None,
 ) -> "go.Figure":
     # Tech: interactive twin of chart 3 — the signal and realized curves as two
     #       lines (no shaded band).
@@ -534,6 +634,7 @@ def plot_signal_vs_realized_plotly(
             mode="lines", name="realized PnL",
             line=dict(color="#d62728", width=2),
         ))
+    _add_vline_split(fig, split_ts)
     fig.update_layout(
         height=460,
         title="Signal vs. realized PnL — gap = execution + cost drag",
@@ -585,6 +686,16 @@ _FRACTION_PERCENT_KEYS = frozenset({
 #       fraction set is what prevents that.
 _ALREADY_PERCENT_KEYS = frozenset({"percent_profitable"})
 
+# Tech: fractions rendered as an UNSIGNED percentage with trailing zeros trimmed
+#       — 0.8 becomes "80%", 0.755 becomes "75.5%".
+# Why:  `train_frac` is a share of a window, not a measurement that can come out
+#       negative, so the leading "+" every other float carries reads as noise on
+#       it; and "+80.00%" is three characters of false precision for a number the
+#       user typed as 0.8. Separate from _FRACTION_PERCENT_KEYS because those are
+#       signed metrics where the sign is load-bearing (a negative fee_drag means
+#       something).
+_UNSIGNED_PERCENT_KEYS = frozenset({"train_frac"})
+
 
 # Tech: keys whose value is a left-aligned string rather than a right-aligned
 #       number — the long, path-like Settings fields.
@@ -608,6 +719,10 @@ def fmt_value(v, key: Optional[str] = None) -> str:
         return str(v)
     if math.isinf(v) or math.isnan(v):
         return f"{v:+}"
+    if key in _UNSIGNED_PERCENT_KEYS:
+        # Tech: 2-decimal percent, then strip trailing zeros and a bare point.
+        # Why:  0.8 -> "80%" rather than "80.00%", while 0.755 keeps its "75.5%".
+        return f"{v * 100:.2f}".rstrip("0").rstrip(".") + "%"
     if key in _FRACTION_PERCENT_KEYS:
         return f"{v * 100:+.2f}%"
     if key in _ALREADY_PERCENT_KEYS:
@@ -715,9 +830,28 @@ def _kv_table_html(mapping: Mapping) -> str:
         cls = "v left" if k in _LEFT_ALIGN_KEYS else "v"
         rows.append(
             f"<tr><td class='k'>{k}</td>"
-            f"<td class='{cls}'><div>{fmt_value(v, k)}</div></td></tr>"
+            f"<td class='{cls}'><div>{fmt_value(_derived(k, v, mapping), k)}</div></td></tr>"
         )
     return f"<table class='kv'>{''.join(rows)}</table>"
+
+
+def _derived(key: str, value, mapping: Mapping):
+    # Tech: substitute a value the stored record cannot hold on its own —
+    #       currently only `train_frac` on a run whose split was pinned in bars,
+    #       where it is stored as None and the share is train_split_bars/eval_bars.
+    # Why:  `params.json` records which FLAG was used (None means "--train-frac
+    #       was never consulted"), and that record is deliberate — but the reader
+    #       of a report wants the share that was actually scored, and on a pinned
+    #       run those are the runs they were told to record. Deriving it here,
+    #       rather than storing an effective fraction, keeps the file honest about
+    #       the flag while the table stays honest about the window. Anything
+    #       missing or unusable falls through to the stored value untouched.
+    if key != "train_frac" or value is not None:
+        return value
+    bars, total = mapping.get("train_split_bars"), mapping.get("eval_bars")
+    if not isinstance(bars, int) or not isinstance(total, int) or total <= 0:
+        return value
+    return bars / total
 
 
 def _annual_returns_html(rows) -> str:
@@ -919,14 +1053,24 @@ def generate_report(
 
     paths = {}
     paths["equity_png"] = out_dir / "equity_drawdown.png"
+    # Tech: read the train/test boundary out of the run's own settings; None when
+    #       the run had no split, or when the bundle predates the feature.
+    # Why:  taking it from `params.json` rather than a parameter is what makes the
+    #       standalone `python -m forecast_eval.reports <dir>` re-render mark the
+    #       boundary too — the run dir is self-describing, so a report rebuilt
+    #       months later says the same thing as the one written with the run.
+    split_ts = _active_split_ts(settings)
+
     plot_equity_drawdown_mpl(trades, paths["equity_png"], ticks=ticks,
-                             fee_rate=fee_rate, point_value=point_value)
+                             fee_rate=fee_rate, point_value=point_value,
+                             split_ts=split_ts)
 
     paths["price_png"] = out_dir / "price_fills.png"
-    plot_price_fills_mpl(fills, ticks, paths["price_png"])
+    plot_price_fills_mpl(fills, ticks, paths["price_png"], split_ts=split_ts)
 
     paths["attribution_png"] = out_dir / "signal_vs_realized.png"
-    plot_signal_vs_realized_mpl(signals, trades, paths["attribution_png"])
+    plot_signal_vs_realized_mpl(signals, trades, paths["attribution_png"],
+                                split_ts=split_ts)
 
     if _HAS_PLOTLY:
         # Tech: when plotly is present, build the three interactive figures and stitch
@@ -937,9 +1081,10 @@ def generate_report(
         html_path = run_dir / "report.html"
         figs = [
             plot_equity_drawdown_plotly(trades, ticks=ticks, fee_rate=fee_rate,
-                                        point_value=point_value),
-            plot_price_fills_plotly(fills, ticks),
-            plot_signal_vs_realized_plotly(signals, trades),
+                                        point_value=point_value,
+                                        split_ts=split_ts),
+            plot_price_fills_plotly(fills, ticks, split_ts=split_ts),
+            plot_signal_vs_realized_plotly(signals, trades, split_ts=split_ts),
         ]
         html_parts = [
             "<html><head><meta charset='utf-8'><title>forecast_eval report</title>",
