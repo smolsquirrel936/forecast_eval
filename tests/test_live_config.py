@@ -465,8 +465,13 @@ def test_every_deployment_is_pinned_to_the_best_keep_row_for_its_session(name):
     two pins coexist: a DAY row cannot re-pin NIGHT."""
     cfg = config_named(name)
     if not cfg.is_tuned:
-        pytest.skip(f"{name} declares itself untuned (no source_commit); "
-                    f"live/cli.py refuses it -- see the untuned tests below")
+        pytest.skip(f"{name} carries no provenance (source_commit and "
+                    f"source_calmar are both None), so there is no results.tsv "
+                    f"row for this assertion to check a pin against. This is "
+                    f"not enforcement: live/cli.py has no provenance gate "
+                    f"(LIVE_STRATEGY_ROUTING_PLAN D1) and runs an "
+                    f"unprovenanced deployment, recording the gap as "
+                    f"UNTUNED/nan in its banner and the recorder's meta header")
     session = _session_of(cfg)
     assert _rows_for(session), f"results.tsv has no {session} rows"
     row = _row_for(cfg)
@@ -492,8 +497,13 @@ def test_every_deployment_row_agrees_with_its_policy_and_dataset(name):
     was tuned on is the 2026-08-11 defect, and it starts exactly here."""
     cfg = config_named(name)
     if not cfg.is_tuned:
-        pytest.skip(f"{name} declares itself untuned (no source_commit); "
-                    f"live/cli.py refuses it -- see the untuned tests below")
+        pytest.skip(f"{name} carries no provenance (source_commit and "
+                    f"source_calmar are both None), so there is no results.tsv "
+                    f"row for this assertion to check a pin against. This is "
+                    f"not enforcement: live/cli.py has no provenance gate "
+                    f"(LIVE_STRATEGY_ROUTING_PLAN D1) and runs an "
+                    f"unprovenanced deployment, recording the gap as "
+                    f"UNTUNED/nan in its banner and the recorder's meta header")
     row = _row_for(cfg)
     assert row["session"] == _session_of(cfg)
     row_file = row["dataset"].split("@")[0]
