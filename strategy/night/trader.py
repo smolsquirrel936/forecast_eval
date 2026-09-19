@@ -5,7 +5,8 @@ ExitRules (§4.1 step 2) can decide on stop-loss / time-stop / etc.
 
 
 PER-SESSION COPY (STRATEGY_SPLIT_PLAN S1). Verbatim copy of
-``trader.py`` at sha256:3bea278e07c9d1dd, with only the relative-import depth
+``trader.py`` at sha256:fcb896217167 (newline-normalised, as
+``tests/test_strategy_isolation.py`` pins it), with only the relative-import depth
 changed. It is this package's to edit; the shared original is frozen and
 hash-guarded by ``tests/test_strategy_isolation.py``. Diverge freely here.
 """

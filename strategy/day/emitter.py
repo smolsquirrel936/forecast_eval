@@ -16,7 +16,8 @@ strength is 1.0.
 
 
 PER-SESSION COPY (STRATEGY_SPLIT_PLAN S1). Verbatim copy of
-``strategy/threshold.py`` at sha256:b7721ff7ea99a021, with only the relative-import depth
+``strategy/threshold.py`` at sha256:2b91f9839a57 (newline-normalised, as
+``tests/test_strategy_isolation.py`` pins it), with only the relative-import depth
 changed. It is this package's to edit; the shared original is frozen and
 hash-guarded by ``tests/test_strategy_isolation.py``. Diverge freely here.
 """
