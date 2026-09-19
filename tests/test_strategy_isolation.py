@@ -27,33 +27,48 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SESSIONS = ("day", "night", "fullday")
 
 # Tech: sha256 of every file the three packages start from and must not edit,
-#       pinned at the split (2026-09-02).
+#       pinned at the split (2026-09-02). Each digest is taken over the file's
+#       bytes with CRLF folded to LF (see `_content_sha256`), so these are the
+#       LF-normalised hashes, not the raw working-tree ones.
 # Why:  §3.1. These are the shared originals. An agent that edits one instead of
 #       copying it into its own package moves all three sessions at once, which
 #       is precisely the interference the split exists to prevent — and it would
 #       otherwise be invisible until a parity run disagreed weeks later.
 SHARED_FILES = {
     "strategy/threshold.py":
-        "b7721ff7ea99a02139689229b047b7c3cca21ecf8fc01c469a192770db6b3f7b",
+        "2b91f9839a573c52329640f17a61655ccb4e3c1721d7ffb15d29cdc10899123c",
     "strategy/dummy.py":
         "0fd21255d8bb42123e414db8e7445c4708b3200d24b1bff2818eee83a4553532",
     "strategy/volmultitf.py":
         "9fcac9650ab983131ff64aec9ec1061e0b5fff4001beedbfec05f1b367f37df5",
     "strategy/base.py":
-        "f72360e494f101a0bc7a558f305607345b104c240fb8dc027f37b55b1663cb23",
+        "8e1869b7b38ba7b12bda3efe38685c71c8d6184d5afd09fd3a5927177e411580",
     "trader.py":
-        "3bea278e07c9d1dd41e0b8cc23f6e02b1864657b7148bf5b60a5bff710e02099",
+        "fcb89621716734c4bfb9f9d9274c1886cf894138dd9d9f56955cf94c19bdd2e5",
     "forecaster/toto2.py":
-        "b3bdce453c431defc3b1ff3185441db872f1af4793db1505293cf74e4744ae1e",
+        "1ed756c5527189d19069b1a7bb0b1c999415c65668d1959824ff6f423057173f",
     "forecaster/base.py":
-        "db7cfb2fdef9492b1b3216658b76596868bca6fb4263d62ebedf88e1be655b5a",
+        "c670e2f2b7ef64f4ff151a2149b60b05ae0ea9a1242288138a1463e41ad42393",
 }
+
+
+def _content_sha256(path):
+    # Tech: digest the file's bytes with every CRLF folded to a bare LF.
+    # Why:  the pin asserts that CONTENT has not changed, and a line ending is
+    #       not content. This repo runs `core.autocrlf=true` with no
+    #       .gitattributes, so these files check out CRLF on Windows and LF
+    #       elsewhere — a raw-bytes digest therefore pins the checkout platform
+    #       as tightly as it pins the code, and the same unedited file hashes
+    #       two different ways on two machines. Normalising first is what makes
+    #       the guard portable; it costs nothing, because an edit that changes
+    #       only line endings is not an edit the split cares about.
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
 @pytest.mark.parametrize("rel,expected", sorted(SHARED_FILES.items()))
 def test_shared_files_are_unmodified(rel, expected):
     path = ROOT / rel
-    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    actual = _content_sha256(path)
     assert actual == expected, (
         f"{rel} has changed, and it is SHARED by all three session packages.\n"
         f"  If you are tuning one session: copy this file into "
