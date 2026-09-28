@@ -1,15 +1,14 @@
-"""FULL-DAY's strategy wiring — UNTUNED.
+"""FULL-DAY's strategy wiring — ``fullday_split_iter07`` (SIMTRADE_0929).
 
-**These parameters were not chosen for the full-day tape.** They are DAY's
-band and probability gate, inherited so the package is runnable and
-parity-checkable, and marked here so nothing mistakes them for provenance
-(STRATEGY_SPLIT_PLAN §5 / D5). There is no ``results.tsv`` row for full-day.
-The one measurement of this exact configuration is the 2026-09-09 band sweep's
-0.001 / 0.65 cell (97 trades, Calmar 1.3975 at fee 0.00015, warmup 5000), which
-DAYNIGHT_TOTO2_RESET_PLAN §8 reproduced as its restore check. It is evidence the
-package is back, not a tuning result: **no Calmar carries into the loop as a bar
-to beat** (§6 Q4), ``results_fullday.tsv`` starts empty, and ``iter01`` — this
-package unedited, at the current fee 0.0002 — sets the first best.
+**These parameters come from the split loop, scored on its TRAIN 70 % only.**
+``autoresearch_split_0.7_fullday`` @ ``394ce85`` moved ``stride_bars`` 30 -> 15
+and ``min_prob`` 0.65 -> 0.50 from the DAY band and gate this package inherited
+at the split (STRATEGY_SPLIT_PLAN §5 / D5). Calmar 2.8213 over 134 trades on the
+train window; the held-out 30 % has never been scored. The row lives in
+``results_fullday.tsv``, not ``results.tsv``, so ``PINNED_FULLDAY`` still
+records ``source_commit=None`` and names this commit in its ``source_note``.
+At 0.50 the probability gate is nearly idle: 0.55 -> 0.50 left the trade
+count at 134.
 
 The tape to search on is ``dataset/RPT/TXF_RPT_minute_fullday.csv`` —
 2 364 417 bars, 2018-01-02 -> 2026-08-21. NOT the combined

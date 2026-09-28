@@ -213,10 +213,20 @@ class LiveConfig:
         )
 
 
-# Tech: the configuration a live run trades, pinned to the best row in
-#       `results.tsv` for its session **on the tape vintage it is scored
-#       against** (commit 4282d33, Calmar 3.6006, 235 trades, net +24 135.60
-#       points, max drawdown -6 703.24, `TXF_RPT_minute_night.csv@2026-09-01`).
+# Tech: SIMTRADE_0929 — the NIGHT deployment's provenance is cleared
+#       (`source_commit`/`source_calmar` None), because its package now trades
+#       `night_iter10` (`6159a4c`, branch `autoresearch_night_0918`, whole-data
+#       Calmar 6.5793, 144 trades), a row that lives only in `results_night.tsv`.
+# Why:  SIMTRADE_0929_PLAN step 5. `results.tsv` has no row for these settings,
+#       so the 4282d33 pin below would name a strategy this deployment no longer
+#       trades. None is the honest value (the same one FULL-DAY used); the source
+#       is carried in `source_note`. The history below describes the old pin.
+#
+# Tech: the configuration a live run traded until SIMTRADE_0929, pinned to the
+#       best row in `results.tsv` for its session **on the tape vintage it is
+#       scored against** (commit 4282d33, Calmar 3.6006, 235 trades, net
+#       +24 135.60 points, max drawdown -6 703.24,
+#       `TXF_RPT_minute_night.csv@2026-09-01`).
 # Why:  NIGHT policy because every tuning run used
 #       `TXF_RPT_minute_night.csv` — verified from `params.json` and from all 174
 #       trades of the latest run being tagged NIGHT (SHIOAJI_PLAN §2.12).
@@ -254,13 +264,15 @@ class LiveConfig:
 #       §2.2 measured phase alone moving 13.6742 -> 8.7651. See
 #       `TAPE_REBUILD_PLAN.md` §5.1 before reading this as a 4.5x decay.
 PINNED = LiveConfig(
-    source_commit="4282d33",
-    source_calmar=3.6006,
+    source_commit=None,
+    source_calmar=None,
     source_dataset=r"\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_night.csv",
     source_note=(
-        "TAPE_REBUILD_PLAN T5 re-measure on the rebuilt tape "
-        "(@2026-09-01); parameters unchanged from e44a047, tape corrected; "
-        "235 trades; net +24135.60 pts; max dd -6703.24"
+        "SIMTRADE_0929: night_iter10 (6159a4c, autoresearch_night_0918) + "
+        "knob-test fix 4bf33063c; Calmar 6.5793 on the WHOLE eval window "
+        "(no held-out tail), 144 trades; recorded in results_night.tsv only, "
+        "not results.tsv. buy +0.00065 / sell -0.00045, min_prob 0.55, "
+        "min_trend_ticks 12, long_only"
     ),
     policy=SessionPolicy.night(),
 )
@@ -340,49 +352,32 @@ PINNED_DAY = LiveConfig(
 #       unusual while doing it. Selecting the whole config keeps the policy
 #       travelling inside the value it belongs to, so the two cannot disagree.
 # Tech: the FULL-DAY deployment. It carries no `source_commit` and no
-#       `source_calmar`, which is what `is_tuned` reads as "unprovenanced", and
-#       its band and probability gate are DAY's — inherited, not measured.
-# Why:  STRATEGY_SPLIT_PLAN §5 / D5. Full-day needs to exist as a value before it
-#       has a tuned row: the backtest runs it today (`--strategy fullday`), the
-#       parity machinery can check it, and `strategy/fullday/` has somewhere to
-#       point. What it must NOT do is trade, and the honest way to arrange that
-#       is a config that says it is untuned and an entry point that refuses it
-#       (`live/cli.py`), rather than plausible-looking numbers borrowed from
-#       another session.
+#       `source_calmar`, which `is_tuned` reads as "no results.tsv row"; its
+#       settings are `fullday_split_iter07` (`394ce85`, branch
+#       `autoresearch_split_0.7_fullday`): band +-0.001, min_prob 0.50, stride 15.
+# Why:  SIMTRADE_0929_PLAN step 5. Until then this was a stub trading DAY's band
+#       and gate, "inherited, not measured" (STRATEGY_SPLIT_PLAN D5). The split
+#       loop has since measured these values on `TXF_RPT_minute_fullday.csv` --
+#       but only on the TRAIN 70 % of the eval window (Calmar 2.8213, 134
+#       trades), recorded in `results_fullday.tsv`, which `results.tsv`-scoped
+#       drift guards do not read. None stays the honest value; the source lives
+#       in `source_note`. The CLI no longer refuses an unprovenanced config
+#       (`live/cli.py`, LIVE_STRATEGY_ROUTING_PLAN D1).
 #
-#       WHY DAY'S NUMBERS AND NOT NIGHT'S: full-day trades DAY, so it rolls at
-#       12:45 like DAY (`roll_at_time`, extended 2026-09-01; DAY_SESSION_PLAN §4
-#       C4 has a FULL-DAY row). Inheriting the band from the deployment it shares
-#       a roll instant with is the least arbitrary choice available — but it is
-#       still arbitrary, and it is not evidence. W5a measured what transferring a
-#       band across sessions is worth: NIGHT's band on the day tape scores 0.4129
-#       against 3.6006. There is no reason to expect DAY's band to transfer to
-#       full-day any better.
-#
-#       THE TAPE TO TUNE ON is `TXF_RPT_minute_fullday.csv` (2 364 417 bars,
-#       2018-01-02 -> 2026-08-21), NOT the combined `TXF_RPT_minute.csv`, whose
-#       first 15.6 % is day-only because TAIFEX had no night session before
-#       2017-05-15 (TAPE_REBUILD_PLAN §2.5). Running `tools/band_sweep.py` there
-#       is the work that replaces this stub.
-#
-#       ALSO UNANSWERED, and bigger than the band: full-day is not a third
-#       independent strategy, it is a SUPERSET session that overlaps both others
-#       by construction. Running it beside DAY and NIGHT on one account is
-#       STRATEGY_SPLIT_PLAN §7.1 — the reconciliation rail halts every deployment
-#       the moment two of them hold at once — and §7.4, which is a risk decision
-#       nobody has made.
+#       STILL TRUE: full-day is a SUPERSET session that overlaps DAY and NIGHT by
+#       construction. On one account the three run under the owning process
+#       (`live/owner_cli.py`, STRATEGY_SPLIT_PLAN §18), and the exposure question
+#       (§7.4) is a risk decision, not an engineering one.
 PINNED_FULLDAY = LiveConfig(
     source_commit=None,
     source_calmar=None,
     source_dataset=r"\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_fullday.csv",
     source_note=(
-        "UNTUNED (STRATEGY_SPLIT_PLAN D5, 2026-09-02). No results.tsv row "
-        "exists for the FULL-DAY session and this configuration has never "
-        "traded, in simulation or otherwise. Band 0.001 / min_prob 0.65 are "
-        "DAY's, inherited because full-day shares DAY's 12:45 roll instant -- "
-        "they were never measured on the full-day tape. live/cli.py refuses "
-        "--config fullday until a tuned row exists; the backtest runs it via "
-        "`real_data.py --strategy fullday`."
+        "SIMTRADE_0929: fullday_split_iter07 (394ce85, "
+        "autoresearch_split_0.7_fullday); Calmar 2.8213 on the TRAIN 70% of "
+        "the eval window (held-out 30% never scored), 134 trades; recorded in "
+        "results_fullday.tsv only, not results.tsv. band 0.001, min_prob 0.50 "
+        "(gate nearly idle: 0.55 -> 0.50 left 134 trades), stride 15, no stop"
     ),
     policy=SessionPolicy.both(),
 )

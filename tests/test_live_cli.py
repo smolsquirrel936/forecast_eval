@@ -16,6 +16,7 @@ from forecast_eval.live.recorder import Recorder
 from forecast_eval.live.runtime import LiveRuntime
 from forecast_eval.live.sessions import SessionPolicy
 from forecast_eval.live.state import HaltAction, RailsConfig, SafetyRails
+from forecast_eval.strategy import wiring
 
 
 def _params(cfg):
@@ -335,8 +336,14 @@ def test_warmup_window_defaults_wide_enough_for_priming():
     assert config_named("night").warmup_days_default() >= 30
     for name, cfg in CONFIGS.items():
         got = cfg.warmup_days_default()
-        # >= 21 sessions of boundaries, expressed in calendar days for this policy
-        assert got * 5 / 7 * cfg.policy.bars_per_session() >= 21 * 840, (
+        # >= 21 night sessions of boundaries (21 * 840 bars at NIGHT's stride
+        # 30), counted in boundaries at THIS deployment's own stride.
+        # SIMTRADE_0929: this was a bar count, which silently assumed stride 30.
+        # Priming counts non-HOLD signals per boundary (runtime._check_primed),
+        # so fullday's stride 15 reaches the same boundaries in half the bars.
+        stride = wiring.params(cfg.strategy_package)["stride_bars"]
+        boundaries = got * 5 / 7 * cfg.policy.bars_per_session() / stride
+        assert boundaries >= 21 * 840 / 30, (
             f"{name}: {got} days is too narrow to prime"
         )
 
