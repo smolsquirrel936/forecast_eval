@@ -38,11 +38,11 @@ PARAMS: Dict[str, Any] = {
     "checkpoint": "Datadog/Toto-2.0-1B",
     "context_length": 3008,
     "horizon_bars": 30,
-    "stride_bars": 30,
+    "stride_bars": 15,
     # emitter
     "buy_threshold": 0.001,
     "sell_threshold": -0.001,
-    "min_prob": 0.65,
+    "min_prob": 0.50,
     "full_confidence_prob": 0.9,
     # trader
     "aggression_ticks": 0,

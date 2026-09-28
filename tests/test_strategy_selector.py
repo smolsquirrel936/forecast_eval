@@ -153,7 +153,7 @@ def test_fullday_band_is_its_own_inherited_values_and_is_marked_untuned():
     p = wiring.params("fullday")
     assert p["buy_threshold"] == 0.001
     assert p["sell_threshold"] == -0.001
-    assert p["min_prob"] == 0.65
+    assert p["min_prob"] == 0.50
     doc = __import__(
         "forecast_eval.strategy.fullday.wiring", fromlist=["wiring"]
     ).__doc__
