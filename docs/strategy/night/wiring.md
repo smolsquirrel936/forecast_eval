@@ -12,7 +12,7 @@ factory. This is the file a search for this session edits first.
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
-| `PARAMS` | dict | the twelve default knobs `--strategy night` resolves against |
+| `PARAMS` | dict | the twelve shared default knobs `--strategy night` resolves against, plus this session's own `long_only` |
 | `make_strategy(*, warmup_bars, tick_size=1.0, **overrides)` | function | the session's strategy stack |
 
 ## Return contract
@@ -45,6 +45,16 @@ starts empty and the loop's `iter01` sets the first best.
   `min_trend_ticks`, `path_momentum`, `trend_filter`. `real_data.py` never
   exposed them, so every recorded run used the emitter's class defaults; leaving
   them there is what reproduces those runs.
+- **`night_iter02` added a session-declared knob beyond the shared twelve**:
+  `long_only` (default `True`), threaded into [trader.py](trader.md)'s entry
+  veto. `--param long_only=False` on the evaluation command restores short
+  entries without an edit.
+- **`night_iter08` declared the first of the formerly-absent emitter knobs**:
+  `min_trend_ticks` (20.0) is now in `PARAMS` and threaded into the built
+  emitter, so it lands in `params.json` and `--param` reaches it. The other
+  three emitter-class knobs (`short_window`, `path_momentum`, `trend_filter`)
+  remain on the copied emitter's defaults; moving them means editing
+  [emitter.py](emitter.md).
 
 ## Related
 [strategy/night/wiring.md](wiring.md) · [strategy/wiring.py](../wiring.md) · [strategy/base.py](../base.md) · [STRATEGY_SPLIT_PLAN.md](../../../STRATEGY_SPLIT_PLAN.md)

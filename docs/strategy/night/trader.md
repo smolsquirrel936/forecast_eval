@@ -12,7 +12,7 @@ aggression and sizing, and the fill bookkeeping that feeds `ExitRule` queries.
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
-| `Trader(execution, *, tick_size, aggression_ticks, max_position, max_aggression_ticks)` | class | the state machine |
+| `Trader(execution, *, tick_size, aggression_ticks, max_position, max_aggression_ticks, long_only)` | class | the state machine |
 | `on_signal(direction, market, *, strength)` | method | cancel-then-act; open from flat, close on an opposing signal, never flip |
 | `submit_exit(market)` | method | closing limit for an `ExitRule` firing or a session-boundary forced close |
 | `on_fill(...)` / `position_state()` | method | position mirror and the immutable snapshot `ExitRule`s read |
@@ -21,6 +21,12 @@ aggression and sizing, and the fill bookkeeping that feeds `ExitRule` queries.
 - **This is a per-session copy** of [trader.py](../../trader.md), verbatim at the
   split with only the import depth changed (STRATEGY_SPLIT_PLAN S1). The shared
   original is frozen and hash-guarded.
+- **Diverged at `night_iter02`: the `long_only` entry veto.** With the knob set
+  (it is, via [wiring.py](wiring.md)'s `PARAMS`), a SELL arriving while flat is
+  treated as HOLD — cancel any pending order, then no entry. SELL while long
+  still closes, so the exit path is untouched; `long_only=False` (the default)
+  is byte-identical to the shared copy. Guarded by
+  [tests/test_night_trader_long_only.py](../../../tests/test_night_trader_long_only.py).
 - It is handed to `run_backtest` as a **factory**, not an instance —
   `make_trader(execution)` — because `Execution` is built inside the run
   (`fee_rate` is a run parameter). See [run.py](../../run.md) §2.1 of the split

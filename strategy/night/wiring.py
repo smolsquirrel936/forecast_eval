@@ -39,24 +39,42 @@ PARAMS: Dict[str, Any] = {
     "horizon_bars": 30,
     "stride_bars": 30,
     # emitter
-    "buy_threshold": 0.00045,
+    # night_iter05: 0.00045 -> 0.0006. Offline emitter replay (bit-exact on
+    # the recorded signal counts) says the wider entry band drops the marginal
+    # entries whose re-entry paths, not their own PnL, were the drag.
+    # night_iter07: 0.0006 -> 0.00065 (grid top around the incumbent).
+    "buy_threshold": 0.00065,
     "sell_threshold": -0.00045,
-    "min_prob": 0.5,
+    # night_iter06: 0.5 -> 0.55. Rung two of the offline-replay ladder:
+    # cutting barely-convictioned entries (dir_prob in [0.5, 0.55)) traded
+    # ~4 points of net for ~1000 of drawdown in the replay.
+    "min_prob": 0.55,
     "full_confidence_prob": 0.9,
+    # night_iter08: 3.0 -> 20.0 (declared at iter08; PARAMS entry added so the
+    # knob is recorded in params.json and reachable via --param). The trend
+    # filter's short-window confirmation now demands a real ~20-point early->
+    # late move instead of the class-default non-opposing 3.
+    # night_iter09: 20.0 -> 15.0 (grid top: the tt plateau peaks at 15).
+    # night_iter10: 15.0 -> 12.0 (finer grid top on the incumbent config).
+    "min_trend_ticks": 12.0,
     # trader
     "aggression_ticks": 0,
     "max_aggression_ticks": None,
     "max_position": 1,
     "forced_close": False,
+    # night_iter02: session-declared knob (beyond the shared twelve) — the
+    # Trader's long-only entry veto. `--param long_only=False` restores shorts.
+    "long_only": True,
 }
 
-# Tech: the emitter knobs deliberately absent from PARAMS — `short_window`,
-#       `min_trend_ticks`, `path_momentum`, `trend_filter`.
+# Tech: the emitter knobs still absent from PARAMS — `short_window`,
+#       `path_momentum`, `trend_filter`.
 # Why:  `real_data.py` has never exposed them as flags, so every recorded run
-#       used `ThresholdEmitter`'s own class defaults (3 / 3.0 / True / True,
-#       which is also what `LiveConfig` declares). Leaving them to the copied
-#       emitter's defaults reproduces those runs exactly; a search that wants to
-#       move them edits `emitter.py`, which this package owns.
+# used `ThresholdEmitter`'s own class defaults (3 / True / True). Leaving them
+# to the copied emitter's defaults reproduces those runs exactly; a search that
+# wants to move them edits `emitter.py`, which this package owns.
+# `min_trend_ticks` was the exception: iter08 declared it (see PARAMS) once the
+# offline replay had a use for it, following the same D6 pattern as long_only.
 
 
 def make_strategy(
@@ -107,6 +125,7 @@ def make_strategy(
         sell_threshold=p["sell_threshold"],
         min_prob=p["min_prob"],
         full_confidence_prob=p["full_confidence_prob"],
+        min_trend_ticks=p["min_trend_ticks"],
     )
 
     def make_trader(execution: Any) -> Trader:
@@ -116,6 +135,7 @@ def make_strategy(
             aggression_ticks=p["aggression_ticks"],
             max_position=p["max_position"],
             max_aggression_ticks=p["max_aggression_ticks"],
+            long_only=p["long_only"],
         )
 
     return {
