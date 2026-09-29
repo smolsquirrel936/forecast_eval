@@ -149,8 +149,17 @@ class OwnerProcess:
         #       see the book" and halts — deliberately, so start-up is not
         #       mistaken for a flat account. The opening `position` event is what
         #       lets a deployment begin.
-        self.api.set_order_callback(self._on_event)
+        self.attach()
         self.publish_positions()
+
+    def attach(self) -> None:
+        # Tech: (re-)register the owner's one order callback on the api handle.
+        # Why:  callbacks are bound to the connection object (§2.24, MEASURED
+        #       2026-08-17): a `force_refresh=True` re-login drops them, so the
+        #       owner's re-login must re-attach or it keeps placing orders while
+        #       hearing none of their deals. Split out of `start` because a
+        #       re-login must not re-announce positions.
+        self.api.set_order_callback(self._on_event)
 
     def seed_from(self, nets: Dict[str, int]) -> None:
         # Tech: seed each deployment's net and the account total from a mapping.

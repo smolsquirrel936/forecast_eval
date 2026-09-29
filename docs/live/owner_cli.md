@@ -1,8 +1,8 @@
 # [live/owner_cli.py](../../live/owner_cli.py)
 
 **Role:** the entry point for the owning process — the one process that places orders.
-**Pipeline:** login → seed from the ledgers → reconcile → serve (`poll` / `reconcile`) until stopped.
-**Depends on:** [live/owner_process.py](owner_process.md), [live/ledger.py](ledger.md), [live/contracts.py](contracts.md), [live/credentials.py](credentials.md)   **Used by:** the operator
+**Pipeline:** login → seed from the ledgers → reconcile → serve (`poll` / re-login / `reconcile`) until stopped.
+**Depends on:** [live/owner_process.py](owner_process.md), [live/ledger.py](ledger.md), [live/contracts.py](contracts.md), [live/credentials.py](credentials.md), [live/relogin.py](relogin.md)   **Used by:** the operator
 
 ```bash
 # 1. the owner FIRST
@@ -58,6 +58,36 @@ one wrong spelling costs — "0 futures accounts" reported for a credential trad
 TXF nightly, because `str(AccountType.Future)` is `'F'`. Writing this function
 reproduced the same class of mistake one level up (`sj.constant.AccountType`,
 which does not exist in 1.7.2); its own test caught it.
+
+## It re-logs in before every session open (§2.24)
+
+A Shioaji token dies **24 h after login** and the SDK cannot refresh one — the
+[relogin](relogin.md) page has the soak that died proving it. Until 2026-09-29
+the owner logged in once and never again, while every deployment re-logged in on
+schedule. Past 24 h the deployments kept trading through an owner whose
+`list_positions` raised (logged as an anomaly, not a stop) and whose orders
+failed.
+
+It now runs the same `ReloginScheduler`, driven once per serve pass:
+
+| | Owner | Deployments ([cli.py](cli.md)) |
+|---|---|---|
+| re-login window | open − 8 min → open − 6 min (08:37, 14:52) | open − 5 min → open − 1 min (08:40, 14:55) |
+| verify | `api.usage()` — raises on a dead token | `api.usage()` + a tick since the re-login |
+
+**Earlier on purpose.** The three deployments re-login in the same second, and a
+`force_refresh=True` login opens a new connection before the old one drops, ~30 s
+later (relogin_probe Q9), against a cap of **5 per `person_id`** (§2.8b) with four
+already open. Going three minutes first means the owner's spike has cleared
+before theirs begin — it adds nothing to that collision — and the process every
+deployment depends on is refreshed before any of them.
+
+**What the re-login re-takes.** `force_refresh=True` (a plain `login()` is a
+measured no-op), then `subscribe_trade(account)` and `OwnerProcess.attach()` —
+callbacks die with the old connection (Q3). A refused `subscribe_trade` raises,
+so the scheduler counts a failed attempt and retries inside the window rather
+than settling on a session that cannot hear fills. There is no tick half to the
+verify: the owner holds no quote feed.
 
 ## The serve loop
 

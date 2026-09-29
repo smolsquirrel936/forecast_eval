@@ -240,3 +240,98 @@ def test_no_futures_account_returns_none_not_a_guess():
 
     assert _futures_account(_API(), []) is None
     assert _futures_account(_API(), None) is None
+
+
+# ---- the owner's re-login (§2.24) ------------------------------------------
+#
+# Until 2026-09-29 the owner logged in once and never again, so past 24 h its
+# token died while the deployments -- which do re-login -- kept trading through
+# it. These pin the fix: the schedule, the action, and that the loop drives it.
+
+def test_the_owner_refreshes_before_every_deployment_does():
+    """Owner window [relogin_at, verify_at] ends before the deployments' starts,
+    so its connection spike (~30 s, relogin_probe Q9) has cleared first."""
+    from forecast_eval.live.owner_cli import owner_relogin_anchors
+    from forecast_eval.live.relogin import session_open_anchors
+
+    owner = owner_relogin_anchors()
+    deployments = session_open_anchors()
+    assert len(owner) == len(deployments) == 2
+    for (o_relogin, o_verify, o_open), (d_relogin, _, d_open) in zip(owner,
+                                                                      deployments):
+        assert o_open == d_open
+        assert o_relogin < o_verify < d_relogin
+
+
+class _ReloginAPI:
+    def __init__(self, subscribed=True):
+        self.logins, self.subscribed_accounts = [], []
+        self._subscribed = subscribed
+
+    def login(self, **kw):
+        self.logins.append(kw)
+
+    def subscribe_trade(self, account):
+        self.subscribed_accounts.append(account)
+        return self._subscribed
+
+
+class _AttachOwner:
+    def __init__(self):
+        self.attached = 0
+
+    def attach(self):
+        self.attached += 1
+
+
+class _Cred:
+    api_key, secret_key = "k", "s"
+
+
+def test_the_relogin_refreshes_and_retakes_what_the_refresh_drops():
+    """A plain login is a measured no-op, and callbacks die with the connection."""
+    from forecast_eval.live.owner_cli import make_relogin
+
+    api, owner = _ReloginAPI(), _AttachOwner()
+    make_relogin(api, _Cred(), "ACCOUNT", owner)()
+    assert api.logins == [dict(api_key="k", secret_key="s", force_refresh=True)]
+    assert api.subscribed_accounts == ["ACCOUNT"]
+    assert owner.attached == 1
+
+
+def test_a_refused_deal_stream_fails_the_attempt():
+    """Settling on a session that cannot hear fills is the failure to avoid."""
+    from forecast_eval.live.owner_cli import make_relogin
+
+    owner = _AttachOwner()
+    with pytest.raises(RuntimeError, match="subscribe_trade"):
+        make_relogin(_ReloginAPI(subscribed=False), _Cred(), "ACCOUNT", owner)()
+    assert owner.attached == 0
+
+
+class _FakeScheduler:
+    def __init__(self, outcome=None):
+        self.checks, self._outcome = 0, outcome
+
+    def check(self, now):
+        self.checks += 1
+        return self._outcome
+
+    def token_age(self, now):
+        return "0:01:00"
+
+
+def test_serve_drives_the_relogin_scheduler_and_reports_its_outcome(capsys):
+    from forecast_eval.live.relogin import Outcome
+
+    sched = _FakeScheduler(Outcome.RELOGGED)
+    assert _serve(_FakeOwner(), _Args(), None, sched) == 0
+    assert sched.checks == 1
+    assert "relogin: " + Outcome.RELOGGED.value in capsys.readouterr().out
+
+
+def test_a_quiet_scheduler_prints_nothing(capsys):
+    sched = _FakeScheduler(None)
+    assert _serve(_FakeOwner(), _Args(), None, sched) == 0
+    assert sched.checks == 1
+    assert "relogin" not in capsys.readouterr().out
