@@ -143,7 +143,17 @@ places orders on.** `live/config.py` holds only the provenance record.
     days (night 30, day 84). Priming needs 3 non-HOLD signals in the window; if
     fullday stops with `emitter priming incomplete`, re-run it with
     `--warmup-days 30`. It refuses before trading, so a retry is safe.
-12. **Old run folders moved.** `outputs/` was renamed to
+12. **Re-logins and the 5-connection cap (accepted 2026-09-29).** Shioaji
+    allows 5 connections per `person_id`; the owner plus three deployments hold
+    4. Each process re-logs in before every open with `force_refresh=True`, which
+    opens a new connection ~30 s before the old one drops. The owner goes first
+    (08:37, 14:52); **the three deployments go in the same second (08:40,
+    14:55)**, so up to 7 connections can exist briefly. What Shioaji does above 5
+    has never been measured: a refused login retries 60 s later, but an evicted
+    connection could be the owner's. Watch the consoles at 08:40–08:45 and
+    14:55–15:00 for `VERIFY_FAILED` or `relogin` failures. Logins per day (~30)
+    are far under the 1 000/day cap.
+13. **Old run folders moved.** `outputs/` was renamed to
     `output_backup_260929/` on 2026-09-29; every `outputs/...` path in the plans
     and in AGENTS.md (the autoresearch run folders, `archive_*`) now lives there.
 
