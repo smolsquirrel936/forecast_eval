@@ -153,7 +153,22 @@ places orders on.** `live/config.py` holds only the provenance record.
     connection could be the owner's. Watch the consoles at 08:40–08:45 and
     14:55–15:00 for `VERIFY_FAILED` or `relogin` failures. Logins per day (~30)
     are far under the 1 000/day cap.
-13. **Old run folders moved.** `outputs/` was renamed to
+13. **Day and night warm up on tape bars spliced to broker bars.** The broker
+    serves minute bars only for listed contracts (the front month and the one
+    before), so a first run into an empty `outputs/` cannot reach the history
+    priming needs. On 2026-09-29 day stopped with `emitter priming incomplete:
+    2/3 samples from 5142 bars`: `202609` had expired on 09-16, and `202610`
+    before the roll was the thinly traded back month. Both caches were therefore
+    seeded from the RPT tapes (`live/seed_cache.py`, DAY_SESSION_PLAN C7; the
+    mix was accepted in D4, 2026-08-24). Consequences, measured that morning:
+    - day's context is RPT bars to **08-21**, then only `202610` back-month bars
+      (~160 a session instead of ~300) until the 09-16 roll. Its 3 008-bar
+      context (~10 day sessions) still reached into that thin stretch on 09-29
+      and clears after about four more sessions;
+    - night's and fullday's contexts (~3.6 and ~2.6 sessions) lie entirely
+      after the roll;
+    - all three primed with **4** samples, just over the floor of 3.
+14. **Old run folders moved.** `outputs/` was renamed to
     `output_backup_260929/` on 2026-09-29; every `outputs/...` path in the plans
     and in AGENTS.md (the autoresearch run folders, `archive_*`) now lives there.
 
@@ -170,6 +185,17 @@ otherwise.
 ```powershell
 uv run --no-sync python -m forecast_eval.live.flatten --dry-run   # read-only
 uv run --no-sync python -m forecast_eval.live.flatten             # only if not flat, in session hours
+```
+
+**0b. Into a fresh `outputs/`, seed the day and night bar caches first.** Skip
+this when `outputs/` already holds `bars_cache_day.csv` / `bars_cache_night.csv`
+from an earlier run — every start-up merges the cache with the broker's bars and
+rewrites it. There is no seeder for fullday (`day_night`); its 13-day window
+fits in what the broker serves.
+
+```powershell
+uv run --no-sync python -m forecast_eval.live.seed_cache --data "\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_day.csv"   --out outputs/bars_cache_day.csv   --session day
+uv run --no-sync python -m forecast_eval.live.seed_cache --data "\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_night.csv" --out outputs/bars_cache_night.csv --session night
 ```
 
 **1. The owner — start it FIRST.** It is the only process that places orders; a
@@ -202,3 +228,9 @@ Ctrl-C each deployment, then the owner last. Then one of:
   place of `--fresh-start`. This needs `outputs/` intact: the fill ledgers, soak
   epochs and per-deployment state files live there, and the owner reconciles the
   account against the ledgers' sum at start-up.
+
+**Across a contract expiry** (October settles 10-21; the deployments roll on
+10-20): the bar cache is written only at start-up, and an expired month can no
+longer be fetched. Restart each deployment (`--resume` if it holds a position)
+shortly before the expiry, so the cache takes the old month's bars while the
+broker still serves them.
