@@ -2,7 +2,7 @@
 
 **Role:** Replace the session token before its 24-hour wall, in a window where nothing real is trading.
 **Pipeline:** [cli.py](cli.md) owns the API object and drives this from its clock tick.
-**Depends on:** [environment.py](../environment.md) for the session opens — no `shioaji` import   **Used by:** [live/cli.py](cli.md), [tests/test_live_relogin.py](../tests.md)
+**Depends on:** [environment.py](../environment.md) for the session opens — no `shioaji` import   **Used by:** [live/cli.py](cli.md), [live/owner_cli.py](owner_cli.md) (its own, earlier anchors), [tests/test_live_relogin.py](../tests.md)
 
 ## Responsibility
 The session token expires **24 hours after login**, and the SDK has no refresh

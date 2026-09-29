@@ -28,6 +28,13 @@ erroring — but that is a start-up gate. This process watches the headroom on i
 reconcile cadence and warns, because it is the one that outlives all three
 deployments.
 
+**It re-logs in before every session open, like the deployments.** A Shioaji
+token dies 24 h after login and the SDK cannot refresh one (`relogin.py`, §2.24).
+Until 2026-09-29 the owner logged in once and never again, so a run past 24 h
+kept its deployments trading while the owner's `list_positions` raised (logged,
+not stopped) and its orders failed. It now runs the same `ReloginScheduler`,
+three minutes AHEAD of the deployments' windows — see `OWNER_RELOGIN_LEAD`.
+
 **The console prints the account's `person_id`** — a Taiwanese national ID —
 from Shioaji's compiled layer, exactly as `live/cli.py` does. Read the output
 before pasting it anywhere.
@@ -38,6 +45,7 @@ import argparse
 import signal
 import sys
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -46,6 +54,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from forecast_eval.live.contracts import resolve_txf            # noqa: E402
 from forecast_eval.live.ledger import per_deployment_nets       # noqa: E402
 from forecast_eval.live.owner_process import OwnerProcess       # noqa: E402
+from forecast_eval.live.relogin import (ReloginScheduler,        # noqa: E402
+                                        session_open_anchors)
 from forecast_eval.live.startup import usage_bytes              # noqa: E402
 
 # Tech: how often the owner drains intents and republishes positions.
@@ -55,6 +65,57 @@ from forecast_eval.live.startup import usage_bytes              # noqa: E402
 #       reconcile runs on its own, slower cadence because it costs a venue call.
 DEFAULT_POLL_SECONDS = 1.0
 DEFAULT_RECONCILE_SECONDS = 30.0
+
+# Tech: the owner's re-login and verify leads before each session open —
+#       re-login from open-8 min, verify from open-6 min (08:37/08:39,
+#       14:52/14:54).
+# Why:  the deployments re-login at open-5 min, all three in the same second.
+#       A `force_refresh=True` login opens a new connection before the old one
+#       drops, ~30 s later (relogin_probe Q9), against a cap of 5 per person_id
+#       (§2.8b) with four already open. Going first and three minutes early
+#       means the owner's spike has cleared before theirs begin, so the owner
+#       adds nothing to that collision — and the process every deployment
+#       depends on is refreshed before any of them.
+OWNER_RELOGIN_LEAD = timedelta(minutes=8)
+OWNER_VERIFY_LEAD = timedelta(minutes=6)
+
+
+def owner_relogin_anchors():
+    """The owner's `(relogin_at, verify_at, open_at)` triples."""
+    return session_open_anchors(relogin_lead=OWNER_RELOGIN_LEAD,
+                                verify_lead=OWNER_VERIFY_LEAD)
+
+
+def make_relogin(api: Any, cred: Any, account: Any, owner: Any):
+    """The owner's re-login action: refresh the token, re-take what it drops."""
+    def _relogin() -> None:
+        # Tech: a refreshing login, then re-subscribe the account's deal stream
+        #       and re-attach the order callback; raise if the subscription is
+        #       refused.
+        # Why:  `force_refresh=True` because a plain `login()` is a measured
+        #       NO-OP that leaves the token expiring (relogin_probe Q1/Q8). It
+        #       rebuilds the connection, and callbacks die with the old one (Q3),
+        #       so without the re-attach the owner would place orders and hear
+        #       no deals. A refused `subscribe_trade` raises so the scheduler
+        #       counts a failed attempt and retries inside the window, instead of
+        #       settling on a session that cannot hear fills (§18.14).
+        api.login(api_key=cred.api_key, secret_key=cred.secret_key,
+                  force_refresh=True)
+        if account is not None and api.subscribe_trade(account) is False:
+            raise RuntimeError("subscribe_trade returned False after re-login")
+        owner.attach()
+    return _relogin
+
+
+def _relogin_tick(relogin: Any, now: datetime) -> None:
+    # Tech: let the scheduler act if a window is live, and print any outcome.
+    # Why:  the scheduler owns retries, backoff and the verify; the loop only
+    #       drives it once a pass and says what happened, so an operator
+    #       watching the owner's console sees a failed refresh before the open.
+    outcome = relogin.check(now)
+    if outcome is not None:
+        print(f"relogin: {outcome.value}  (token age "
+              f"{relogin.token_age(now)})")
 
 DEFAULT_SLUGS = ("day", "night", "day_night")
 
@@ -183,6 +244,7 @@ def main(argv=None) -> int:
     api = sj.Shioaji(simulation=True)
     try:
         accounts = api.login(api_key=cred.api_key, secret_key=cred.secret_key)
+        login_at = datetime.now()
         account = _futures_account(api, accounts)
 
         # Tech: subscribe the futures account's order/deal stream explicitly and
@@ -253,11 +315,23 @@ def main(argv=None) -> int:
                   + (f" of {limit:,}" if limit else ""))
 
         owner.start()
+
+        # Tech: the token scheduler, verified by `api.usage()`.
+        # Why:  `usage()` raises on a dead token (relogin_probe Q7), and it is an
+        #       authenticated REST call — the kind that died at 24 h. The owner
+        #       has no tick feed, so unlike `live/cli.py` there is no tick half.
+        relogin = ReloginScheduler(
+            relogin=make_relogin(api, cred, account, owner),
+            verify=api.usage, anchors=owner_relogin_anchors())
+        relogin.note_login(login_at)
+        print("relogin anchors: " + ", ".join(
+            f"{a:%H:%M}/{v:%H:%M}" for a, v, _ in owner_relogin_anchors()))
+
         print(f"owner serving {args.slugs} — poll {args.poll_seconds}s, "
               f"reconcile {args.reconcile_seconds}s")
         print("START THE DEPLOYMENTS NOW (live/cli.py --broker client).")
 
-        return _serve(owner, args, api)
+        return _serve(owner, args, api, relogin)
     finally:
         try:
             api.logout()
@@ -277,7 +351,8 @@ def _usage(api: Any) -> Any:
         return None
 
 
-def _serve(owner: OwnerProcess, args: Any, api: Any = None) -> int:
+def _serve(owner: OwnerProcess, args: Any, api: Any = None,
+           relogin: Any = None) -> int:
     """The loop: drain intents, publish, reconcile on a slower cadence."""
     # Tech: install a SIGINT/SIGTERM handler that asks the loop to stop, then
     #       poll until it does.
@@ -302,6 +377,8 @@ def _serve(owner: OwnerProcess, args: Any, api: Any = None) -> int:
     last_reconcile = 0.0
     while not stopping["now"]:
         owner.poll()
+        if relogin is not None:
+            _relogin_tick(relogin, datetime.now())
 
         now = time.monotonic()
         if now - last_reconcile >= args.reconcile_seconds:
