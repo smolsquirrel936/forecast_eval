@@ -194,8 +194,8 @@ rewrites it. There is no seeder for fullday (`day_night`); its 13-day window
 fits in what the broker serves.
 
 ```powershell
-uv run --no-sync python -m forecast_eval.live.seed_cache --data "\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_day.csv"   --out outputs/bars_cache_day.csv   --session day
-uv run --no-sync python -m forecast_eval.live.seed_cache --data "\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_night.csv" --out outputs/bars_cache_night.csv --session night
+uv run --no-sync python -m forecast_eval.live.seed_cache --data "\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_day.csv"   --out outputs/bars_cache_day.csv   --session day
+uv run --no-sync python -m forecast_eval.live.seed_cache --data "\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_night.csv" --out outputs/bars_cache_night.csv --session night
 ```
 
 **1. The owner — start it FIRST.** It is the only process that places orders; a
