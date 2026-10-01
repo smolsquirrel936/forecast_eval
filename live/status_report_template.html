@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simtrade Status Report</title>
+<!-- Rendered by forecast_eval/live/status_report.py — edit this template, not the generated page. -->
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --card: #ffffff;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --wash: #f0efec; --wash-2: #e8e7e2;
+  --s-1: #2a78d6; --s-2: #eb6834; --s-3: #1baf7a; --s-4: #eda100;
+  --s-5: #e87ba4; --s-6: #008300; --s-7: #4a3aa7; --s-8: #e34948;
+  --s-feed: #4a3aa7; --s-owner: #898781;
+  --good: #0ca30c; --good-text: #006300; --warning: #fab219; --critical: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --card: #1a1a19;
+    --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --wash: #262624; --wash-2: #30302e;
+    --s-1: #3987e5; --s-2: #d95926; --s-3: #199e70; --s-4: #c98500;
+    --s-5: #d55181; --s-6: #008300; --s-7: #9085e9; --s-8: #e66767;
+    --s-feed: #9085e9; --s-owner: #a3a29b; --good-text: #0ca30c;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --card: #1a1a19;
+  --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --wash: #262624; --wash-2: #30302e;
+  --s-1: #3987e5; --s-2: #d95926; --s-3: #199e70; --s-4: #c98500;
+  --s-5: #d55181; --s-6: #008300; --s-7: #9085e9; --s-8: #e66767;
+  --s-feed: #9085e9; --s-owner: #a3a29b; --good-text: #0ca30c;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--page); color: var(--ink); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1120px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 28px; line-height: 1.2; margin: 0 0 6px; font-weight: 650; }
+h2 { font-size: 20px; margin: 48px 0 4px; font-weight: 650; }
+h3 { font-size: 15px; margin: 24px 0 8px; font-weight: 600; }
+p { margin: 8px 0; max-width: 78ch; }
+.sub { color: var(--ink-2); }
+.small { font-size: 13px; color: var(--ink-2); }
+.lede { color: var(--ink-2); margin: 0 0 20px; max-width: 80ch; }
+code { font: 12.5px ui-monospace, "Cascadia Mono", Consolas, monospace; background: var(--wash); padding: 1px 5px; border-radius: 4px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
+.runs { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 860px) { .grid4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.key { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+.run-card h3 { margin: 0 0 2px; font-size: 17px; display: flex; align-items: center; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); margin-left: auto; }
+.pill .dot { width: 8px; height: 8px; border-radius: 50%; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; margin-top: 12px; font-size: 14px; }
+.kv dt { color: var(--ink-2); }
+.kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.tile { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.tile .lab { font-size: 13px; color: var(--ink-2); }
+.tile .val { font-size: 24px; font-weight: 600; line-height: 1.25; margin-top: 2px; }
+.tile .note { font-size: 12.5px; color: var(--muted); }
+.findings { margin: 0; padding-left: 0; list-style: none; }
+.findings li { padding: 10px 0 10px 30px; border-top: 1px solid var(--border); position: relative; max-width: 92ch; }
+.findings li:first-child { border-top: 0; }
+.ic { position: absolute; left: 0; top: 10px; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #fff; }
+.ic.ok { background: var(--good); } .ic.warn { background: var(--warning); color: #0b0b0b; } .ic.info { background: var(--muted); }
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { padding: 7px 12px; text-align: left; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+table.wrap td { white-space: normal; overflow-wrap: anywhere; }
+table.wrap td:first-child { white-space: nowrap; }
+th { font-weight: 600; color: var(--ink-2); font-size: 13px; background: var(--surface); }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.mx td, table.mx th { text-align: center; font-variant-numeric: tabular-nums; }
+table.mx td:first-child, table.mx th:first-child { text-align: left; }
+table.mx td .f { display: block; font-size: 12px; color: var(--ink-2); }
+.ok-mark { color: var(--good-text); font-weight: 700; margin-right: 4px; }
+.bad-mark { color: var(--critical); font-weight: 700; margin-right: 4px; }
+.chart { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px 8px; margin: 12px 0; }
+.chart-title { font-weight: 600; font-size: 14.5px; }
+.chart-sub { font-size: 13px; color: var(--ink-2); margin-bottom: 6px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); margin: 4px 0 6px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.svgbox { width: 100%; }
+svg text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+details { margin: 8px 0 0; }
+summary { cursor: pointer; font-size: 13px; color: var(--ink-2); padding: 4px 0; }
+.bar-inline { display: inline-block; height: 10px; border-radius: 0 3px 3px 0; vertical-align: middle; margin-right: 8px; min-width: 2px; }
+.callout { border-left: 3px solid var(--axis); padding: 6px 0 6px 14px; color: var(--ink-2); margin: 12px 0; max-width: 90ch; }
+.callout:empty { display: none; }
+#tip { position: fixed; pointer-events: none; z-index: 10; background: var(--card); color: var(--ink); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font-size: 12.5px; line-height: 1.45; box-shadow: 0 4px 16px rgba(0,0,0,.12); max-width: 300px; display: none; white-space: pre-line; }
+.toc { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13.5px; margin: 14px 0 0; }
+.toc a { color: var(--ink-2); text-decoration: none; border-bottom: 1px solid var(--axis); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Simtrade Status Report</h1>
+  <div class="sub" id="asof"></div>
+  <nav class="toc">
+    <a href="#overview">Overview</a><a href="#basic">1 · Basic info</a><a href="#data">2 · Data received</a>
+    <a href="#decisions">3 · Decisions</a><a href="#position">4 · Position</a><a href="#stability">5 · Stability</a>
+    <a href="#hardware">6 · Hardware</a><a href="#method">Sources</a>
+  </nav>
+
+  <h2 id="overview">Overview</h2>
+  <p class="lede" id="overview-lede"></p>
+  <div class="runs" id="runcards"></div>
+  <h3>Key findings</h3>
+  <div class="card"><ul class="findings" id="findings"></ul></div>
+
+  <h2 id="basic">1 · Basic info</h2>
+  <p class="lede" id="basic-lede"></p>
+  <div class="chart">
+    <div class="chart-title">Sessions covered, by deployment</div>
+    <div class="chart-sub">Each block spans the first to last 1-minute bar the deployment built in that session. Hatched = the session is still open.</div>
+    <div class="legend" id="lg-sessions"></div>
+    <div class="svgbox" id="ch-sessions"></div>
+  </div>
+  <div class="table-wrap"><table id="tb-basic" class="wrap"></table></div>
+  <div class="callout" id="basic-note"></div>
+
+  <h2 id="data">2 · Data received</h2>
+  <p class="lede">Ticks are what each deployment's capture wrote to <code>ticks.csv</code>. Bars are the 1-minute bars it built from them. Deployments on the same contract receive the same tape, so differences in their counts come only from different start times.</p>
+  <div class="grid4" id="tiles-data"></div>
+  <div class="chart">
+    <div class="chart-title">Ticks received per hour</div>
+    <div class="chart-sub" id="ticks-sub"></div>
+    <div class="svgbox" id="ch-ticks"></div>
+  </div>
+  <h3>Records per session</h3>
+  <div class="table-wrap"><table id="tb-ticks"></table></div>
+  <h3>Feed quality</h3>
+  <div class="table-wrap"><table id="tb-feed"></table></div>
+  <div class="callout">A bar is only built for a minute with at least one trade, so a session can have fewer than 300 (day) or 840 (night) bars with nothing lost. <b>Lost minutes</b> are minutes that do have trades in <code>ticks.csv</code> but no bar; any number above 0 is a real gap. A <b>feed check</b> runs when the stream goes quiet and asks the venue whether anything was missed. A <code>quiet</code> verdict means nothing was. The delay figures include any clock offset between this PC and the exchange.</div>
+
+  <h2 id="decisions">3 · Decisions</h2>
+  <p class="lede">Every <i>stride</i> bars, each deployment forecasts the next <i>horizon</i> bars. It emits BUY or SELL only if four gates pass in order: the predicted return crosses the band, the directional probability ≥ <code>min_prob</code>, the trend filter agrees, and path momentum agrees. Otherwise it emits HOLD.</p>
+  <div class="grid4" id="tiles-dec"></div>
+  <h3>Decision funnel</h3>
+  <div class="table-wrap"><table id="tb-funnel"></table></div>
+  <div class="small" style="margin-top:6px">The band and <code>min_prob</code> stages are rebuilt from each forecast's <code>predicted_return</code> and <code>prob_up</code>. The trend and path stage is what is left once emitted signals are counted.</div>
+  <div class="chart">
+    <div class="chart-title">Predicted return per forecast</div>
+    <div class="chart-sub">Shared y-scale. The shaded strip is each deployment's HOLD band. Open dots fell inside the band; filled dots crossed it.</div>
+    <div class="legend" id="lg-fc"></div>
+    <div class="svgbox" id="ch-fc"></div>
+  </div>
+  <h3>Forecast quality so far</h3>
+  <div class="table-wrap"><table id="tb-quality"></table></div>
+  <div class="callout" id="dec-note"></div>
+  <details><summary>Show every forecast (table)</summary><div class="table-wrap" style="max-height:420px;overflow:auto"><table id="tb-fcall"></table></div></details>
+
+  <h2 id="position">4 · Position</h2>
+  <p class="lede">Position is checked twice: by each deployment (the <code>position</code> on every bar) and by the owner, which publishes the account position to each deployment (<code>events_&lt;slug&gt;.jsonl</code>).</p>
+  <div class="grid4" id="tiles-pos"></div>
+  <div class="chart">
+    <div class="chart-title">Position over time</div>
+    <div class="chart-sub">Contracts held, from each bar's <code>position</code> field.</div>
+    <div class="svgbox" id="ch-pos"></div>
+  </div>
+  <div class="table-wrap"><table id="tb-pos"></table></div>
+
+  <h2 id="stability">5 · Stability</h2>
+  <p class="lede">A Shioaji token expires 24 h after login, so every process logs in again on a schedule before each session opens. A deployment confirms each re-login a few minutes later.</p>
+  <div class="chart">
+    <div class="chart-title">Logins per process, by session</div>
+    <div class="chart-sub">Each cell is one successful login (“stored new token” in <code>shioaji.log</code>, in local time), grouped by the session open it came before. Failed attempts come from each deployment's <code>session.jsonl</code>.</div>
+    <div class="legend"><span><span class="ok-mark">✓</span>logged in</span><span><span class="bad-mark">✕</span>attempt failed, then retried</span></div>
+    <div class="table-wrap" style="border:0"><table id="tb-loginmx" class="mx"></table></div>
+  </div>
+  <div class="table-wrap"><table id="tb-stab"></table></div>
+
+  <h2 id="hardware">6 · Hardware</h2>
+  <p class="lede">A snapshot taken when this page was generated; nothing records resource use over time. Per-process VRAM comes from Windows GPU counters, because <code>nvidia-smi</code> can't attribute memory per process on a WDDM display GPU.</p>
+  <div class="grid4" id="tiles-hw"></div>
+  <div class="chart" id="vram-box">
+    <div class="chart-title">GPU memory (VRAM)</div>
+    <div class="chart-sub" id="vram-sub"></div>
+    <div class="legend" id="lg-vram"></div>
+    <div class="svgbox" id="ch-vram"></div>
+  </div>
+  <div class="chart" id="commit-box">
+    <div class="chart-title">System commit charge (RAM + page file)</div>
+    <div class="chart-sub" id="commit-sub"></div>
+    <div class="legend" id="lg-commit"></div>
+    <div class="svgbox" id="ch-commit"></div>
+  </div>
+  <div class="table-wrap"><table id="tb-hw"></table></div>
+
+  <h2 id="method">Sources &amp; method</h2>
+  <div class="small" id="sources"></div>
+</main>
+<div id="tip"></div>
+
+<script>
+const D = __STATUS_DATA__;
+const RUNS = D.runs;
+const HW = D.hardware || { procs: [] };
+const NOW = new Date(D.generated);
+const SVGNS = "http://www.w3.org/2000/svg";
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmt = (n, d = 0) => n == null || Number.isNaN(n) ? "—" : Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const pct = (n, d = 1) => n == null || !isFinite(n) ? "—" : (n * 100).toFixed(d) + "%";
+const dt = s => new Date(s);
+const pad = n => String(n).padStart(2, "0");
+const fdt = s => { if (!s) return "—"; const d = dt(s); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const fhm = s => { const d = dt(s); return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const dur = h => `${Math.floor(h / 24)}d ${Math.floor(h % 24)}h ${pad(Math.round((h * 60) % 60))}m`;
+const ago = s => s == null ? "—" : s < 60 ? "under 1 min ago" : `${Math.round(s / 60)} min ago`;
+const GiB = mib => (mib / 1024).toFixed(1);
+const proc = pid => HW.procs.find(p => p.pid === pid);
+const hm = s => { const [h, m] = s.split(":").map(Number); return [h, m]; };
+const SH = D.session_hours;
+
+// Colour follows the entity: known packages keep fixed slots, others take the next free one.
+const KNOWN = ["day", "night", "fullday"];
+const SLOT = {};
+let next = KNOWN.length;
+for (const r of RUNS) SLOT[r.package] = KNOWN.includes(r.package) ? KNOWN.indexOf(r.package) + 1 : Math.min(8, ++next);
+const COLOR = r => `var(--s-${SLOT[r.package]})`;
+const NAME = r => r.package.charAt(0).toUpperCase() + r.package.slice(1);
+const runKey = r => `<i class="key" style="background:${COLOR(r)}"></i>${esc(NAME(r))}`;
+const ownerKey = `<i class="key" style="background:var(--s-owner)"></i>Owner`;
+
+// Time axis starts at the hour of the earliest start.
+const T0 = (() => { const t = new Date(Math.min(...RUNS.map(r => dt(r.started)), NOW)); t.setMinutes(0, 0, 0); return t; })();
+
+function el(tag, attrs = {}, parent, text) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text != null) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function table(id, head, rows, numCols = []) {
+  $(id).innerHTML = "<thead><tr>" + head.map((h, i) => `<th class="${numCols.includes(i) ? "num" : ""}">${h}</th>`).join("") + "</tr></thead><tbody>" +
+    rows.map(r => "<tr>" + r.map((c, i) => `<td class="${numCols.includes(i) ? "num" : ""}">${c}</td>`).join("") + "</tr>").join("") + "</tbody>";
+}
+function tiles(id, items) {
+  $(id).innerHTML = items.map(t => `<div class="tile"><div class="lab">${t.lab}</div><div class="val">${t.val}</div>${t.note ? `<div class="note">${t.note}</div>` : ""}</div>`).join("");
+}
+function legend(id, items) {
+  $(id).innerHTML = items.map(i => `<span>${i.html || `<i class="sw" style="background:${i.color}"></i>`}${i.label}</span>`).join("");
+}
+const fmtBand = p => {
+  const f = v => (v * 100).toFixed(3).replace(/\.?0+$/, "");
+  return p.buy === -p.sell ? `±${f(p.buy)}%` : `+${f(p.buy)}% / ${f(p.sell)}%`;
+};
+function sessionsDone(r) {
+  const done = r.sessions.filter(s => s.complete);
+  const kinds = {};
+  done.forEach(s => kinds[s.kind] = (kinds[s.kind] || 0) + 1);
+  return { n: done.length, text: Object.entries(kinds).map(([k, v]) => `${v} ${k.toLowerCase()}`).join(" + "), open: r.sessions.some(s => !s.complete) };
+}
+
+// ---------- tooltip
+const tip = $("tip");
+document.addEventListener("mousemove", e => {
+  const t = e.target.closest && e.target.closest("[data-tip]");
+  if (!t) { tip.style.display = "none"; return; }
+  tip.textContent = t.getAttribute("data-tip");
+  tip.style.display = "block";
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = e.clientX + 14, y = e.clientY + 14;
+  if (x + w > innerWidth - 8) x = e.clientX - w - 14;
+  if (y + h > innerHeight - 8) y = e.clientY - h - 14;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+});
+
+// ---------- shared time axis
+function timeScale(W, L, Rm) { const span = Math.max(1, NOW - T0); return t => L + ((dt(t) - T0) / span) * (W - L - Rm); }
+function sessionBands() {
+  const out = [], [dh, dm] = hm(SH.day_open), [ch, cm] = hm(SH.day_close), [nh, nm] = hm(SH.night_open), [xh, xm] = hm(SH.night_close);
+  for (let d = new Date(T0.getTime() - 864e5); d < NOW; d = new Date(d.getTime() + 864e5)) {
+    const y = d.getFullYear(), m = d.getMonth(), dd = d.getDate();
+    out.push({ a: new Date(y, m, dd, dh, dm), b: new Date(y, m, dd, ch, cm) });
+    out.push({ a: new Date(y, m, dd, nh, nm), b: new Date(y, m, dd + 1, xh, xm) });
+  }
+  return out.filter(s => s.a < NOW && s.b > T0).map(s => ({ a: s.a < T0 ? T0 : s.a, b: s.b > NOW ? NOW : s.b }));
+}
+function drawTimeAxis(svg, x, top, bottom, { bands = true, labels = true, now = true } = {}) {
+  if (bands) for (const s of sessionBands())
+    el("rect", { x: x(s.a), y: top, width: Math.max(1, x(s.b) - x(s.a)), height: bottom - top, fill: "var(--wash)" }, svg);
+  const hours = (NOW - T0) / 36e5, step = hours > 24 * 6 ? 24 : hours > 24 * 2 ? 6 : 3;
+  for (let d = new Date(T0); d <= NOW; d = new Date(d.getTime() + 36e5)) {
+    if (d.getHours() % step) continue;
+    const X = x(d), mid = d.getHours() === 0;
+    el("line", { x1: X, x2: X, y1: top, y2: bottom, stroke: "var(--grid)", "stroke-width": 1 }, svg);
+    if (labels) el("text", { x: X, y: bottom + 15, "text-anchor": "middle", "font-size": 11, fill: mid ? "var(--ink-2)" : "var(--muted)", "font-weight": mid ? 600 : 400 }, svg,
+      mid ? `${pad(d.getMonth() + 1)}-${pad(d.getDate())}` : `${pad(d.getHours())}:00`);
+  }
+  const xn = x(NOW);
+  el("line", { x1: xn, x2: xn, y1: top - 4, y2: bottom, stroke: "var(--ink-2)", "stroke-width": 1 }, svg);
+  if (now) el("text", { x: xn - 4, y: top - 6, "text-anchor": "end", "font-size": 11, fill: "var(--ink-2)" }, svg, "now");
+}
+function mkSvg(id, H) {
+  const box = $(id); box.innerHTML = "";
+  const W = Math.max(320, box.clientWidth);
+  return { svg: el("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img" }, box), W };
+}
+
+// ---------- overview
+function renderOverview() {
+  $("asof").textContent = `As of ${fdt(D.generated)} (local time) · generated by forecast_eval.live.status_report`;
+  $("overview-lede").innerHTML = `${RUNS.length} deployment(s) found under <code>${esc(D.outputs)}</code>` +
+    (D.owner ? `, trading through the shared owner process (PID ${D.owner.pid})` : ", and <b>no owner process is running</b>") + ".";
+  $("runcards").innerHTML = RUNS.map(r => {
+    const s = sessionsDone(r), dc = r.decisions, p = proc(r.pid);
+    const logins = ((D.logins[String(r.pid)] || {}).logins || []).length;
+    return `<div class="card run-card">
+      <h3>${runKey(r)}<span class="pill"><i class="dot" style="background:${r.running ? "var(--good)" : "var(--critical)"}"></i>${r.running ? "Running" : "Stopped"}</span></h3>
+      <div class="small">${esc(r.params.sessions.join(" + "))} · band ${fmtBand(r.params)} · min_prob ${r.params.min_prob}${r.params.long_only ? " · long-only" : ""}</div>
+      <dl class="kv">
+        <dt>Started</dt><dd>${fdt(r.started)}</dd>
+        <dt>Uptime</dt><dd>${dur(r.uptime_h)}</dd>
+        <dt>Sessions passed</dt><dd>${s.n}${s.text ? ` (${s.text})` : ""}${s.open ? " + 1 open" : ""}</dd>
+        <dt>Ticks received</dt><dd>${fmt(r.ticks.total)}</dd>
+        <dt>Bars built</dt><dd>${fmt(r.bars)}</dd>
+        <dt>Forecasts / signals</dt><dd>${dc.forecasts} / ${dc.nonhold} non-HOLD</dd>
+        <dt>Orders / fills</dt><dd>${dc.orders} / ${dc.fills}</dd>
+        <dt>Position now</dt><dd>${r.position.now === 0 ? "Flat (0)" : fmt(r.position.now)}</dd>
+        <dt>Logins</dt><dd>${logins}${r.stability.relogin_failed.length ? ` (+${r.stability.relogin_failed.length} failed)` : ""}</dd>
+        <dt>VRAM</dt><dd>${p ? GiB(p.ded) + " GiB" : "—"}</dd>
+      </dl></div>`;
+  }).join("");
+  $("findings").innerHTML = D.findings.map(f => `<li><span class="ic ${f.level}">${f.level === "ok" ? "✓" : f.level === "warn" ? "!" : "i"}</span>${f.html}</li>`).join("");
+}
+
+// ---------- 1. basic info
+function renderSessions() {
+  legend("lg-sessions", [...RUNS.map(r => ({ color: COLOR(r), label: esc(NAME(r)) })),
+    { html: `<i class="sw" style="background:repeating-linear-gradient(45deg,var(--muted) 0 2px,transparent 2px 5px)"></i>`, label: "Session still open" }]);
+  const rowH = 34, top = 22, H = top + rowH * RUNS.length + 26;
+  const { svg, W } = mkSvg("ch-sessions", H);
+  const defs = el("defs", {}, svg);
+  RUNS.forEach((r, i) => {
+    const p = el("pattern", { id: `hatch-${i}`, width: 6, height: 6, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" }, defs);
+    el("rect", { width: 6, height: 6, fill: COLOR(r), opacity: 0.25 }, p);
+    el("line", { x1: 0, y1: 0, x2: 0, y2: 6, stroke: COLOR(r), "stroke-width": 2.5 }, p);
+  });
+  const L = 78, x = timeScale(W, L, 14);
+  drawTimeAxis(svg, x, top, top + rowH * RUNS.length);
+  RUNS.forEach((r, i) => {
+    const y = top + i * rowH;
+    el("text", { x: L - 10, y: y + rowH / 2 + 4, "text-anchor": "end", "font-size": 12.5, fill: "var(--ink)" }, svg, NAME(r));
+    for (const s of r.sessions) {
+      const a = x(s.first), b = x(new Date(dt(s.last).getTime() + 6e4));
+      el("rect", { x: a, y: y + 8, width: Math.max(3, b - a - 2), height: rowH - 16, rx: 3, fill: s.complete ? COLOR(r) : `url(#hatch-${i})`,
+        "data-tip": `${NAME(r)} · ${s.label} session${s.complete ? "" : " (open)"}\n${fhm(s.first)} → ${fhm(s.last)}\n${fmt(s.bars)} bars of ${s.expected} possible` }, svg);
+    }
+  });
+}
+function renderBasic() {
+  $("basic-lede").textContent = `When each deployment started, how long it has run, and which trading sessions it has covered. Sessions: day ${SH.day_open}–${SH.day_close}, night ${SH.night_open}–${SH.night_close} (next day).`;
+  const sha = r => r.params.package_sha_now == null ? "" : r.params.package_sha_now === r.params.strategy_sha
+    ? " (unchanged since start)" : ` <b>— package changed since start (now <code>${esc(r.params.package_sha_now)}</code>)</b>`;
+  table("tb-basic", ["", ...RUNS.map(runKey)], [
+    ["Status", ...RUNS.map(r => r.running ? `Running (PID ${r.pid})` : "<b>Stopped</b> — no live process found")],
+    ["Run folder", ...RUNS.map(r => `<code>${esc(r.dir)}</code>`)],
+    ["Started", ...RUNS.map(r => fdt(r.started))],
+    ["Uptime", ...RUNS.map(r => dur(r.uptime_h))],
+    ["Trades sessions", ...RUNS.map(r => esc(r.params.sessions.join(" + ")))],
+    ["Sessions passed (complete)", ...RUNS.map(r => { const s = sessionsDone(r); return `<b>${s.n}</b>${s.text ? ` (${s.text})` : ""}`; })],
+    ["Session in progress", ...RUNS.map(r => r.sessions.filter(s => !s.complete).map(s => s.label).join(", ") || "none")],
+    ["Last heartbeat", ...RUNS.map(r => `${fdt(r.heartbeat)} (${ago(r.heartbeat_age_s)})`)],
+    ["Band (buy / sell)", ...RUNS.map(r => fmtBand(r.params))],
+    ["min_prob", ...RUNS.map(r => r.params.min_prob ?? "—")],
+    ["Long-only", ...RUNS.map(r => r.params.long_only ? "yes" : "no (two-sided)")],
+    ["Forecaster", ...RUNS.map(r => `${esc((r.params.ckpt || "").split("/").pop())} · ctx ${r.params.ctx} · horizon ${r.params.horizon} · stride ${r.params.stride}`)],
+    ["Max position", ...RUNS.map(r => r.params.max_position)],
+    ["Warm-up history", ...RUNS.map(r => r.warm_up.bars ? `${fmt(r.warm_up.bars)} bars (${String(r.warm_up.first).slice(0, 10)} → ${String(r.warm_up.last).slice(0, 10)})` : "—")],
+    ["Code", ...RUNS.map(r => `git <code>${esc(r.params.git)}</code>${r.params.dirty ? " (dirty)" : ""} · strategy <code>${esc(r.params.strategy_sha)}</code>${sha(r)}${r.params.overridden ? " · <b>overridden</b>" : ""}`)],
+    ["Soak id", ...RUNS.map(r => `<code>${esc(r.params.soak_id)}</code>`)],
+  ]);
+  const retired = RUNS.flatMap(r => r.stability.retired.map(o => `${esc(NAME(r))}: soak <code>${esc(o.soak_id)}</code> (${fdt(o.started_at)} → replaced ${fdt(o.retired_at)})`));
+  const fatal = D.fatal.map(f => `${esc(f.when.replace("T", " "))} · ${esc(f.kind)} · ${f.attributed ? esc(f.attributed) : "<i>unattributed</i>"}<br><span class="small">${esc(f.message)}</span>`);
+  $("basic-note").innerHTML = (retired.length ? `<b>Earlier soaks replaced by these runs:</b><br>${retired.join("<br>")}` : "") +
+    (fatal.length ? `${retired.length ? "<br><br>" : ""}<b>Entries in <code>fatal.jsonl</code>:</b><br>${fatal.join("<br>")}` : "") +
+    (D.owner ? `${retired.length || fatal.length ? "<br><br>" : ""}Owner process PID ${D.owner.pid}, started ${fdt(D.owner.started)}.` : "");
+}
+
+// ---------- 2. data
+function renderData() {
+  if (!RUNS.length) return;
+  const ref = RUNS.reduce((a, r) => r.ticks.total > a.ticks.total ? r : a, RUNS[0]);
+  const others = RUNS.filter(r => r !== ref);
+  tiles("tiles-data", [
+    { lab: `Ticks received (${esc(NAME(ref))})`, val: fmt(ref.ticks.total), note: others.map(r => `${esc(r.package)} ${fmt(r.ticks.total)}`).join(" · ") },
+    { lab: "Contracts traded on the tape", val: fmt(ref.ticks.volume), note: Object.keys(ref.ticks.codes).map(esc).join(", ") },
+    { lab: "1-min bars built", val: RUNS.map(r => fmt(r.bars)).join(" · "), note: RUNS.map(r => esc(r.package)).join(" · ") },
+    { lab: "Pre-open trial prints", val: fmt(ref.ticks.trial), note: "simtrade=1 prints; never traded on" },
+  ]);
+  $("ticks-sub").innerHTML = `From the ${esc(NAME(ref))} capture (<code>ticks.csv</code>). Shaded columns mark trading sessions.`;
+  const H = 210, top = 22, bottom = H - 26;
+  const { svg, W } = mkSvg("ch-ticks", H);
+  const L = 52, x = timeScale(W, L, 14);
+  const data = ref.ticks.by_hour.map(([h, n]) => ({ t: dt(h), n })).filter(d => d.t >= T0);
+  const raw = Math.max(1, ...data.map(d => d.n)), step = raw > 8000 ? 2000 : raw > 2000 ? 1000 : raw > 400 ? 200 : 50;
+  const maxN = Math.ceil(raw / step) * step, y = v => bottom - (v / maxN) * (bottom - top);
+  drawTimeAxis(svg, x, top, bottom);
+  for (let v = 0; v <= maxN; v += step) {
+    el("line", { x1: L, x2: W - 14, y1: y(v), y2: y(v), stroke: v ? "var(--grid)" : "var(--axis)", "stroke-width": 1 }, svg);
+    el("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }, svg, fmt(v));
+  }
+  const hourW = x(new Date(T0.getTime() + 36e5)) - x(T0), bw = Math.max(1, Math.min(24, hourW - 2));
+  for (const d of data) {
+    const X = x(d.t) + (hourW - bw) / 2, Y = y(d.n), r = Math.min(3, bw / 2, bottom - Y);
+    el("path", { d: `M${X},${bottom}V${Y + r}q0,-${r} ${r},-${r}h${bw - 2 * r}q${r},0 ${r},${r}V${bottom}Z`, fill: "var(--s-feed)",
+      "data-tip": `${fhm(d.t)}–${pad((d.t.getHours() + 1) % 24)}:00\n${fmt(d.n)} ticks` }, svg);
+  }
+  const labels = [...new Set(RUNS.flatMap(r => [...Object.keys(r.ticks.by_session), ...r.sessions.map(s => s.label)]))].filter(l => l !== "outside");
+  const order = l => { const s = RUNS.flatMap(r => r.sessions).find(s => s.label === l); return s ? s.start : `${new Date().getFullYear()}-${l.slice(-5)}T${l.startsWith("DAY") ? SH.day_open : SH.night_open}`; };
+  labels.sort((a, b) => order(a).localeCompare(order(b)));
+  const sess = (r, l) => r.sessions.find(s => s.label === l);
+  const rows = labels.map(l => {
+    const any = RUNS.map(r => sess(r, l)).find(Boolean), open = any && !any.complete;
+    return [`${l.startsWith("DAY") ? "Day" : "Night"} ${l.slice(-5)}${open ? " (open)" : ""}`,
+      ...RUNS.map(r => fmt(r.ticks.by_session[l] || 0)),
+      ...RUNS.map(r => { const s = sess(r, l); return s ? `${fmt(s.bars)}${s.complete ? ` / ${s.expected}` : ""}` : `<span class="small">not traded</span>`; }),
+      ...RUNS.map(r => { const s = sess(r, l); return s ? (s.lost_minutes.length ? `<b>${s.lost_minutes.length}</b>` : "0") : "—"; })];
+  });
+  rows.push(["Outside sessions (incl. pre-open)", ...RUNS.map(r => fmt(r.ticks.by_session.outside || 0)), ...RUNS.map(() => "—"), ...RUNS.map(() => "—")]);
+  rows.push(["<b>Total</b>", ...RUNS.map(r => `<b>${fmt(r.ticks.total)}</b>`), ...RUNS.map(r => `<b>${fmt(r.bars)}</b>`),
+    ...RUNS.map(r => `<b>${r.sessions.reduce((a, s) => a + s.lost_minutes.length, 0)}</b>`)]);
+  const n = RUNS.length;
+  table("tb-ticks", ["Session", ...RUNS.map(r => `${esc(NAME(r))} ticks`), ...RUNS.map(r => `${esc(NAME(r))} bars`), ...RUNS.map(r => `${esc(NAME(r))} lost min.`)],
+    rows, Array.from({ length: 3 * n }, (_, i) => i + 1));
+  const gap = (r, k) => { const v = Object.entries(r.ticks.max_gap).filter(([l]) => l.startsWith(k)).map(([, v]) => v); return v.length ? Math.max(...v).toFixed(0) + " s" : "—"; };
+  table("tb-feed", ["", ...RUNS.map(runKey)], [
+    ["First tick", ...RUNS.map(r => fdt(r.ticks.first))],
+    ["Latest tick", ...RUNS.map(r => fdt(r.ticks.last))],
+    ["Venue → received delay, median", ...RUNS.map(r => r.ticks.lat_med == null ? "—" : r.ticks.lat_med.toFixed(2) + " s")],
+    ["Venue → received delay, p95 / p99", ...RUNS.map(r => r.ticks.lat_p95 == null ? "—" : `${r.ticks.lat_p95.toFixed(2)} / ${r.ticks.lat_p99.toFixed(2)} s`)],
+    ["Longest silence in a day session", ...RUNS.map(r => gap(r, "DAY"))],
+    ["Longest silence in a night session", ...RUNS.map(r => gap(r, "NIGHT"))],
+    ["Feed checks (verdict)", ...RUNS.map(r => Object.entries(r.stability.feed).map(([v, c]) => `${c} × ${esc(v)}`).join(", ") || "none")],
+  ]);
+}
+
+// ---------- 3. decisions
+function renderDecisions() {
+  tiles("tiles-dec", [
+    ...RUNS.slice(0, 3).map(r => ({ lab: `${esc(NAME(r))} forecasts`, val: fmt(r.decisions.forecasts), note: Object.entries(r.decisions.signals).map(([d, c]) => `${c} ${esc(d)}`).join(" · ") })),
+    { lab: "Orders · fills · round trips", val: ["orders", "fills", "trades"].map(k => RUNS.reduce((a, r) => a + r.decisions[k], 0)).join(" · "),
+      note: `net P&L: ${fmt(RUNS.reduce((a, r) => a + r.decisions.pnl_points, 0), 1)} points` },
+  ]);
+  const stages = [
+    ["Forecasts made", r => r.decisions.forecasts],
+    ["Crossed the return band", r => r.decisions.band_pass],
+    ["… and directional prob ≥ min_prob", r => r.decisions.prob_pass],
+    ["… and trend + path filters agree → signal", r => r.decisions.nonhold],
+    ["Order sent to owner", r => r.decisions.orders],
+    ["Filled", r => r.decisions.fills],
+  ];
+  const maxF = Math.max(1, ...RUNS.map(r => r.decisions.forecasts));
+  table("tb-funnel", ["Stage", ...RUNS.map(runKey)], stages.map(([lab, f]) => [lab, ...RUNS.map(r => {
+    const v = f(r);
+    return `<span class="bar-inline" style="width:${Math.max(2, (v / maxF) * 110)}px;background:${COLOR(r)}"></span>${fmt(v)}`;
+  })]));
+
+  legend("lg-fc", [
+    { html: `<svg width="12" height="12"><circle cx="6" cy="6" r="4" fill="var(--card)" stroke="var(--muted)" stroke-width="1.5"/></svg>`, label: "Inside band → HOLD" },
+    { html: `<svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="var(--muted)"/></svg>`, label: "Crossed band" },
+    { html: `<svg width="12" height="12"><circle cx="6" cy="6" r="4.5" fill="var(--muted)" stroke="var(--ink)" stroke-width="1.5"/></svg>`, label: "Emitted as a signal (labelled)" },
+    { html: `<i class="sw" style="background:var(--wash-2)"></i>`, label: "HOLD band" },
+  ]);
+  const all = RUNS.flatMap(r => r.decisions.rows.map(x => x.ret).concat([r.params.buy, r.params.sell])).filter(v => v != null);
+  const lim = Math.ceil(Math.max(1e-4, ...all.map(Math.abs)) * 1e4 + 1) / 1e4;
+  const panelH = 132, gap = 44, top = 40;
+  const H = top + RUNS.length * (panelH + gap) - gap + 30;
+  const { svg, W } = mkSvg("ch-fc", H);
+  const L = 62, x = timeScale(W, L, 14);
+  RUNS.forEach((r, i) => {
+    const p0 = top + i * (panelH + gap), p1 = p0 + panelH, y = v => p0 + ((lim - v) / (2 * lim)) * panelH, pr = r.params;
+    drawTimeAxis(svg, x, p0, p1, { bands: false, labels: i === RUNS.length - 1, now: i === 0 });
+    el("rect", { x: L, y: y(pr.buy), width: W - L - 14, height: y(pr.sell) - y(pr.buy), fill: "var(--wash-2)", opacity: 0.8 }, svg);
+    for (const v of [lim, lim / 2, 0, -lim / 2, -lim]) {
+      el("line", { x1: L, x2: W - 14, y1: y(v), y2: y(v), stroke: v === 0 ? "var(--axis)" : "var(--grid)", "stroke-width": 1 }, svg);
+      el("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }, svg, (v > 0 ? "+" : "") + (v * 100).toFixed(2) + "%");
+    }
+    el("circle", { cx: L + 4, cy: p0 - 14, r: 4.5, fill: COLOR(r) }, svg);
+    const tt = el("text", { x: L + 14, y: p0 - 10, "font-size": 12.5, "font-weight": 600, fill: "var(--ink)" }, svg, NAME(r));
+    el("tspan", { "font-weight": 400, fill: "var(--ink-2)", dx: 8 }, tt, `HOLD band ${fmtBand(pr)} · min_prob ${pr.min_prob} · horizon ${pr.horizon} · ${r.decisions.rows.length} forecasts`);
+    for (const f of r.decisions.rows) {
+      const emitted = f.sig !== "HOLD", cx = x(f.ts), cy = y(f.ret);
+      el("circle", { cx, cy, r: f.crossed ? 5 : 4, fill: f.crossed ? COLOR(r) : "var(--card)", stroke: emitted ? "var(--ink)" : f.crossed ? "none" : COLOR(r), "stroke-width": emitted ? 2 : 1.5,
+        "data-tip": `${NAME(r)} · bar ${fhm(f.ts)}\npredicted ${(f.ret * 100).toFixed(4)}%   P(up) ${f.prob == null ? "—" : f.prob.toFixed(3)}\nrealised ${f.realized == null ? "pending" : (f.realized * 100).toFixed(4) + "%"}\nsignal: ${f.sig}` }, svg);
+      if (emitted) el("text", { x: cx, y: cy + (f.ret < 0 ? 16 : -9), "text-anchor": "middle", "font-size": 10.5, fill: "var(--ink)", "font-weight": 600 }, svg, f.sig);
+    }
+  });
+  const range = (r, k) => { const v = r.decisions.rows.map(x => x[k]).filter(v => v != null); return v.length ? [Math.min(...v), Math.max(...v)] : null; };
+  table("tb-quality", ["", ...RUNS.map(runKey)], [
+    ["Forecasts with a realised outcome", ...RUNS.map(r => fmt(r.decisions.n_eval))],
+    ["Direction hit rate (sign of horizon return)", ...RUNS.map(r => r.decisions.n_eval ? `<b>${pct(r.decisions.hit / r.decisions.n_eval)}</b> (${r.decisions.hit}/${r.decisions.n_eval})` : "—")],
+    ["Mean abs. error of the predicted price", ...RUNS.map(r => r.decisions.mae_pts == null ? "—" : fmt(r.decisions.mae_pts, 1) + " pts")],
+    ["Predicted return, range", ...RUNS.map(r => { const v = range(r, "ret"); return v ? `${(v[0] * 100).toFixed(3)}% … ${(v[1] * 100).toFixed(3)}%` : "—"; })],
+    ["P(up), range", ...RUNS.map(r => { const v = range(r, "prob"); return v ? `${v[0].toFixed(2)} … ${v[1].toFixed(2)}` : "—"; })],
+  ]);
+  $("dec-note").innerHTML = RUNS.filter(r => r.decisions.nonhold).map(r => {
+    const s = r.decisions.rows.filter(f => f.sig !== "HOLD");
+    return `<b>${esc(NAME(r))}</b> emitted ${s.map(f => `${f.sig} at ${fhm(f.ts)}`).join(", ")}.` +
+      (r.params.long_only ? " It is long-only, so a SELL is acted on only as an exit from a long." : "");
+  }).join("<br>");
+  table("tb-fcall", ["Bar", "Deployment", "Predicted", "P(up)", "Realised", "Signal"],
+    RUNS.flatMap(r => r.decisions.rows.map(f => [f.ts.replace("T", " ").slice(0, 16), esc(NAME(r)), (f.ret * 100).toFixed(4) + "%", f.prob == null ? "—" : f.prob.toFixed(3), f.realized == null ? "pending" : (f.realized * 100).toFixed(4) + "%", f.sig]))
+      .sort((a, b) => a[0].localeCompare(b[0])), [2, 3, 4]);
+}
+
+// ---------- 4. position
+function renderPosition() {
+  const nowVals = RUNS.map(r => r.position.now);
+  tiles("tiles-pos", [
+    { lab: "Current position", val: nowVals.every(v => v === 0) ? "0 · flat" : RUNS.map(r => `${esc(r.package)} ${r.position.now}`).join(", "), note: "from the newest bar" },
+    { lab: "Position changes", val: fmt(RUNS.reduce((a, r) => a + r.position.changes, 0)), note: "across all bars since start" },
+    { lab: "Owner position updates", val: fmt(RUNS.reduce((a, r) => a + r.position.owner_events, 0)), note: "values: " + [...new Set(RUNS.flatMap(r => Object.keys(r.position.owner_values)))].join(", ") },
+    { lab: "Fills", val: fmt(RUNS.reduce((a, r) => a + r.decisions.fills, 0)), note: "fills.csv rows" },
+  ]);
+  const maxPos = Math.max(1, ...RUNS.map(r => r.params.max_position || 1));
+  const panelH = 52, gap = 26, top = 24;
+  const H = top + RUNS.length * (panelH + gap) - gap + 30;
+  const { svg, W } = mkSvg("ch-pos", H);
+  const L = 128, x = timeScale(W, L, 14);
+  RUNS.forEach((r, i) => {
+    const p0 = top + i * (panelH + gap), p1 = p0 + panelH, y = v => p0 + ((maxPos - v) / (2 * maxPos)) * panelH;
+    drawTimeAxis(svg, x, p0, p1, { labels: i === RUNS.length - 1, now: i === 0 });
+    for (const v of [maxPos, 0, -maxPos]) {
+      el("line", { x1: L, x2: W - 14, y1: y(v), y2: y(v), stroke: v === 0 ? "var(--axis)" : "var(--grid)", "stroke-width": 1 }, svg);
+      el("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end", "font-size": 10.5, fill: "var(--muted)" }, svg, v > 0 ? `long +${v}` : v < 0 ? `short ${v}` : "flat 0");
+    }
+    el("circle", { cx: 8, cy: p0 + panelH / 2, r: 4, fill: COLOR(r) }, svg);
+    el("text", { x: 17, y: p0 + panelH / 2 + 4, "font-size": 12.5, fill: "var(--ink)" }, svg, NAME(r));
+    // Positions are only known per bar, so each session is drawn at the value its
+    // bars recorded; with no position changes that is one flat segment.
+    for (const s of r.sessions) {
+      const a = x(s.first), b = x(new Date(dt(s.last).getTime() + 6e4)), v = r.position.changes ? null : (r.position.values[0] ?? 0);
+      if (v == null) continue;
+      el("line", { x1: a, x2: b, y1: y(v), y2: y(v), stroke: COLOR(r), "stroke-width": 2, "stroke-linecap": "round",
+        "data-tip": `${NAME(r)} · ${s.label}\nposition ${v} for all ${fmt(s.bars)} bars` }, svg);
+    }
+    if (r.position.changes) el("text", { x: L + 8, y: p0 + 14, "font-size": 11, fill: "var(--ink-2)" }, svg, `${r.position.changes} position changes — see trades.csv`);
+  });
+  table("tb-pos", ["", ...RUNS.map(runKey)], [
+    ["Position now", ...RUNS.map(r => r.position.now ?? "—")],
+    ["Distinct positions seen", ...RUNS.map(r => r.position.values.join(", "))],
+    ["Position changes", ...RUNS.map(r => r.position.changes)],
+    ["Owner position events", ...RUNS.map(r => fmt(r.position.owner_events))],
+    ["Owner-reported positions", ...RUNS.map(r => Object.entries(r.position.owner_values).map(([q, c]) => `${esc(q)} (×${fmt(c)})`).join(", ") || "—")],
+    ["Orders / fills / closed trades", ...RUNS.map(r => `${r.decisions.orders} / ${r.decisions.fills} / ${r.decisions.trades}`)],
+  ], RUNS.map((_, i) => i + 1));
+}
+
+// ---------- 5. stability
+function slotOf(iso) {
+  // The session open a login came before: the first day/night open at or after it.
+  const t = dt(iso), [dh, dm] = hm(SH.day_open), [nh, nm] = hm(SH.night_open);
+  for (let k = 0; k < 4; k++) {
+    const d = new Date(t.getFullYear(), t.getMonth(), t.getDate() + k);
+    for (const [h, m, lab] of [[dh, dm, SH.day_open], [nh, nm, SH.night_open]]) {
+      const o = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, m);
+      if (o >= t) return { key: o.getTime(), label: `${pad(o.getMonth() + 1)}-${pad(o.getDate())}<br><span class="small">before ${lab} open</span>` };
+    }
+  }
+  return { key: t.getTime(), label: fhm(iso) };
+}
+function renderStability() {
+  const lanes = [...(D.owner ? [{ label: ownerKey, pid: D.owner.pid, run: null }] : []), ...RUNS.map(r => ({ label: runKey(r), pid: r.pid, run: r }))];
+  const cols = new Map();
+  const cells = lanes.map(ln => {
+    const logins = ((D.logins[String(ln.pid)] || {}).logins || []);
+    const map = new Map();
+    logins.slice(1).forEach(t => { const s = slotOf(t); cols.set(s.key, s.label); map.set(s.key, { t, fails: [] }); });
+    (ln.run ? ln.run.stability.relogin_failed : []).forEach(f => {
+      const s = slotOf(f.when); cols.set(s.key, s.label);
+      if (!map.has(s.key)) map.set(s.key, { t: null, fails: [] });
+      map.get(s.key).fails.push(f.when);
+    });
+    return { ln, start: logins[0], map };
+  });
+  const keys = [...cols.keys()].sort((a, b) => a - b);
+  const hms = t => t.slice(11, 19);
+  table("tb-loginmx", ["Process", "Start", ...keys.map(k => cols.get(k))], cells.map(c => [c.ln.label,
+    c.start ? `<span class="ok-mark">✓</span>${hms(c.start)}<br><span class="small">${c.start.slice(5, 10)}</span>` : "—",
+    ...keys.map(k => { const v = c.map.get(k); if (!v) return "—";
+      return v.fails.map(f => `<span class="f"><span class="bad-mark">✕</span>${hms(f)}</span>`).join("") + (v.t ? `<span class="ok-mark">✓</span>${hms(v.t)}` : `<b>no login</b>`); })]));
+  const lg = pid => D.logins[String(pid)] || { logins: [], attempts: 0, errors: [] };
+  const own = D.owner ? lg(D.owner.pid) : null;
+  const head = ["", ...(D.owner ? [ownerKey] : []), ...RUNS.map(runKey)];
+  const row = (lab, o, f) => [lab, ...(D.owner ? [o] : []), ...RUNS.map(f)];
+  table("tb-stab", head, [
+    row("PID", D.owner && D.owner.pid, r => r.pid ?? "—"),
+    row("Successful logins", own && `<b>${own.logins.length}</b>`, r => `<b>${lg(r.pid).logins.length}</b>`),
+    row("Login attempts", own && own.attempts, r => lg(r.pid).attempts),
+    row("Failed re-login attempts", "—", r => r.stability.relogin_failed.length ? `<b>${r.stability.relogin_failed.length}</b> (${r.stability.relogin_failed.map(f => fhm(f.when)).join(", ")})` : 0),
+    row("Re-logins confirmed by a later check", "—", r => `${r.stability.verified} / ${r.stability.relogins.length}`),
+    row("Token age at confirmation", "—", r => r.stability.token_age.length ? `${Math.min(...r.stability.token_age)}–${Math.max(...r.stability.token_age)} s` : "—"),
+    row("Alerts (excluding routine re-login info)", "—", r => Object.entries(r.stability.alerts).filter(([a]) => a !== "info:relogin").map(([a, c]) => `${c} × ${esc(a)}`).join(", ") || "none"),
+    row("SDK errors in shioaji.log", own && (own.errors.length ? own.errors.map(e => `<span data-tip="${esc(e.msg)}">${fhm(e.when)}</span>`).join(", ") : 0),
+      r => lg(r.pid).errors.length ? lg(r.pid).errors.map(e => `<span data-tip="${esc(e.msg)}">${fhm(e.when)}</span>`).join(", ") : 0),
+    row("Consecutive failures", "—", r => r.stability.consecutive_failures ?? "—"),
+    row("Backfills on start-up day", "—", r => r.stability.backfills ?? "—"),
+  ], Array.from({ length: head.length - 1 }, (_, i) => i + 1));
+}
+
+// ---------- 6. hardware
+function stackBar(id, legId, total, parts, unit) {
+  const { svg, W } = mkSvg(id, 64);
+  const Wd = W - 2, y0 = 8, bh = 26;
+  let x0 = 0;
+  parts.filter(p => p.v > 0).forEach(p => {
+    const w = (p.v / total) * Wd;
+    el("rect", { x: x0, y: y0, width: Math.max(1, w - 2), height: bh, rx: 3, fill: p.color, "data-tip": `${p.label}\n${p.v.toFixed(1)} ${unit} (${pct(p.v / total)})` }, svg);
+    if (w > 64) el("text", { x: x0 + 8, y: y0 + bh / 2 + 4, "font-size": 12, fill: p.ink || "#ffffff", "font-weight": 600 }, svg, `${p.v.toFixed(1)} ${unit}`);
+    x0 += w;
+  });
+  el("text", { x: 0, y: y0 + bh + 20, "font-size": 11, fill: "var(--muted)" }, svg, "0");
+  el("text", { x: Wd, y: y0 + bh + 20, "font-size": 11, fill: "var(--muted)", "text-anchor": "end" }, svg, `${fmt(total, 1)} ${unit}`);
+  legend(legId, parts.map(p => ({ color: p.color, label: `${esc(p.label)} · ${p.v.toFixed(1)} ${unit}` })));
+}
+function renderHardware() {
+  const g = HW.gpu, m = HW.mem, mine = RUNS.filter(r => proc(r.pid));
+  const simV = mine.reduce((a, r) => a + proc(r.pid).ded, 0);
+  tiles("tiles-hw", [
+    { lab: "VRAM in use", val: g ? `${GiB(g.used)} / ${GiB(g.total)} GiB` : "—", note: g ? `${pct(g.used / g.total, 0)} of ${esc(g.name)}` : "nvidia-smi unavailable" },
+    { lab: "VRAM held by deployments", val: `${GiB(simV)} GiB`, note: g ? `${GiB(g.total - g.used)} GiB free` : "" },
+    { lab: "GPU load right now", val: g ? `${fmt(g.util)}%` : "—", note: g ? `${fmt(g.temp)} °C · ${fmt(g.power)} W / ${fmt(g.power_limit)} W` : "" },
+    { lab: "System commit", val: m ? `${fmt(m.commit - m.commit_free)} / ${fmt(m.commit)} GiB` : "—", note: m ? `RAM ${fmt(m.ram)} GiB, ${fmt(m.ram_free)} GiB free` : "" },
+  ]);
+  if (g) {
+    $("vram-sub").textContent = `Dedicated VRAM per process on ${g.name}, total ${fmt(g.total)} MiB (driver ${g.driver}).`;
+    stackBar("ch-vram", "lg-vram", g.total / 1024, [
+      ...[...mine].sort((a, b) => proc(b.pid).ded - proc(a.pid).ded).map(r => ({ label: NAME(r), v: proc(r.pid).ded / 1024, color: COLOR(r) })),
+      { label: "Desktop & other apps", v: Math.max(0, g.used - simV) / 1024, color: "var(--muted)" },
+      { label: "Free", v: (g.total - g.used) / 1024, color: "var(--wash-2)", ink: "var(--ink)" },
+    ], "GiB");
+  } else $("vram-box").style.display = "none";
+  if (m) {
+    $("commit-sub").textContent = `Private committed memory per process, against the system commit limit (${fmt(m.ram)} GiB RAM + page file).`;
+    const simC = mine.reduce((a, r) => a + proc(r.pid).priv, 0) / 1024, used = m.commit - m.commit_free;
+    stackBar("ch-commit", "lg-commit", m.commit, [
+      ...[...mine].sort((a, b) => proc(b.pid).priv - proc(a.pid).priv).map(r => ({ label: NAME(r), v: proc(r.pid).priv / 1024, color: COLOR(r) })),
+      { label: "Owner + everything else", v: Math.max(0, used - simC), color: "var(--muted)" },
+      { label: "Free", v: m.commit_free, color: "var(--wash-2)", ink: "var(--ink)" },
+    ], "GiB");
+  } else $("commit-box").style.display = "none";
+  const rows = [...(D.owner ? [{ label: ownerKey, pid: D.owner.pid }] : []), ...RUNS.map(r => ({ label: runKey(r), pid: r.pid }))];
+  table("tb-hw", ["Process", "PID", "VRAM dedicated", "VRAM shared", "RAM working set", "Private commit", "CPU time", "Threads", "Handles"],
+    rows.map(p => { const q = proc(p.pid); return q ? [p.label, p.pid, `${fmt(q.ded)} MiB`, `${fmt(q.shr)} MiB`, `${fmt(q.ws)} MiB`, `${fmt(q.priv)} MiB`, `${fmt(q.cpu / 60, 1)} min`, q.threads, q.handles] : [p.label, p.pid ?? "—", "—", "—", "—", "—", "—", "—", "—"]; }),
+    [1, 2, 3, 4, 5, 6, 7, 8]);
+}
+
+function renderSources() {
+  $("sources").innerHTML = `<p>Run folders under <code>${esc(D.outputs)}</code>: ${RUNS.map(r => `<code>${esc(r.dir)}/</code>`).join(", ")}. From each: <code>session.jsonl</code> (bars, forecasts, signals, re-logins, alerts, feed checks), <code>ticks.csv</code>, <code>orders/fills/trades.csv</code>, <code>params.json</code>. Strategy knobs not in <code>params.json</code> (such as <code>long_only</code>) are read from the package's <code>PARAMS</code> in <code>wiring.py</code>; the package hash is compared with the run's to show whether it changed since start.</p>
+  <p>Shared state: <code>live_restart_&lt;slug&gt;.json</code> (heartbeat, failures), <code>soak_epoch_&lt;slug&gt;.json</code> (start time, retired soaks), <code>events_&lt;slug&gt;.jsonl</code> (the owner's position stream), <code>fatal.jsonl</code>. Live processes are matched by their <code>--strategy</code> argument.</p>
+  <p>Logins: <code>shioaji.log</code> lines “Stored new token” per PID, converted from UTC to local time. Hardware: Windows <code>GPU Process Memory</code> counters, <code>Get-Process</code>, <code>Win32_OperatingSystem</code> and <code>nvidia-smi</code>, read once when the page was generated.</p>
+  <p>Hit rate compares the sign of <code>predicted_return</code> with the realised return from the forecast bar's price to the price <i>horizon</i> bars later. Forecasts whose horizon has not finished are not counted. Findings are fixed rules: VRAM ≥ 85% or commit ≥ 80% warns, and a heartbeat older than 5 minutes warns.</p>`;
+}
+
+function renderCharts() { renderSessions(); renderData(); renderDecisions(); renderPosition(); renderStability(); renderHardware(); }
+renderOverview(); renderBasic(); renderCharts(); renderSources();
+let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(renderCharts, 150); });
+</script>
+</body>
+</html>
