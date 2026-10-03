@@ -206,7 +206,8 @@ Design, phase status and measured findings live in
 [SHIOAJI_PLAN.md](../SHIOAJI_PLAN.md).
 
 **Operating a running simtrade** (stop, pause, restart, halts, the daily
-timeline, and a dated current-status section) is the task page
+timeline, reports while it runs, and a dated current-status section) is the
+task page
 [simtrade_operations.md](simtrade_operations.md).
 
 ---
