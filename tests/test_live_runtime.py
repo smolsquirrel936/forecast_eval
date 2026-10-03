@@ -235,6 +235,55 @@ def test_prime_cap_takes_what_exists_when_the_frame_is_shorter_than_K():
     assert rt.warm and rt.forecaster.n_calls == 21
 
 
+def test_priming_uses_the_fixed_batch_size_not_auto():
+    """MEASURED 2026-10-03: "auto" sizes the priming batch to 80 % of the VRAM
+    free at start-up (it picked 1024 and held 21.5 GiB), so the first of three
+    deployments claimed the card and the others over-committed it to 63 GB."""
+    rt = _runtime()
+    seen = []
+    real = rt.forecaster.forecast_series_batch
+
+    def spy(*args, **kw):
+        seen.append(kw.get("batch_size", "auto"))
+        return real(*args, **kw)
+
+    rt.forecaster.forecast_series_batch = spy
+    rt.warm_up(_bars(CTX + 60))
+    assert seen == [runtime_mod.PRIME_BATCH_SIZE]
+    assert isinstance(runtime_mod.PRIME_BATCH_SIZE, int)
+
+
+def test_priming_releases_the_gpu_cache_before_trading():
+    """The priming batch is the largest allocation a deployment makes; its
+    working set must not stay reserved for the whole soak."""
+    calls = []
+
+    class _Cuda:
+        @staticmethod
+        def is_available():
+            return True
+
+        @staticmethod
+        def empty_cache():
+            calls.append("empty_cache")
+
+    class _Torch:
+        cuda = _Cuda
+
+    rt = _runtime()
+    rt.forecaster._torch = _Torch
+    rt.warm_up(_bars(CTX + 60))
+    assert calls == ["empty_cache"]
+
+
+def test_releasing_the_gpu_cache_is_a_no_op_without_torch():
+    """A CPU or test forecaster never loaded torch; warm-up must not need it."""
+    rt = _runtime()
+    assert getattr(rt.forecaster, "_torch", None) is None
+    rt.warm_up(_bars(CTX + 60))
+    assert rt.warm
+
+
 def test_the_prime_cap_is_deliberately_wider_than_the_fetch_it_is_sized_against():
     """These two numbers are NOT meant to agree, and a future reader will want
     to reconcile them. `warmup_days_default` sizes the *request* (a guaranteed

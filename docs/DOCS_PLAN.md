@@ -42,6 +42,7 @@ docs/
   live/{cli,runtime,config,sessions,loop,bars,backfill,state,startup,recorder,capture,contracts,prod_audit,v1_check,v1c_check,v4_probe,v72_probe}.md
   live/broker/{base,sim,dryrun,shioaji,shadow}.md
   tests.md           ← consolidated suite overview
+  simtrade_operations.md ← task page: operating the owner + deployments (no module)
 ```
 
 - **Hub** ([README.md](README.md)) is the page read first: a Mermaid architecture
