@@ -77,8 +77,10 @@ the interpreter); that is normal.
 ## 4. Stopping cleanly
 
 1. **Ctrl-C each deployment first**: day, night, fullday. Wait for each to print
-   its summary block (feed, roll, relogin and alert counters, and
-   `traffic this run`) and exit.
+   its summary block (feed, roll, relogin, ledger and alert counters) and exit.
+   The same block is recorded at the end of its `session.jsonl`:
+   `session_end`, `feed_summary`, `roll_summary`, `relogin_summary`,
+   `ledger_summary`, `artifact_summary`.
 2. **Ctrl-C the owner last.** It checks its stop flag *between* serve passes, so
    it never stops halfway through placing an order.
 3. **Verify:** no `forecast_eval.live` process is left, and every
@@ -266,6 +268,19 @@ priming) reserved for the life of the process. A live forecast is batch 1 with a
 fixed context, so it reuses that reserved memory instead of asking for more.
 Other programs, however, see that memory as taken.
 
+**Why the peak is so large: warm-up sizes itself to the free VRAM.**
+`LiveRuntime._prime_emitter` ([runtime.py](live/runtime.md)) runs up to 900
+historical forecasts through `forecast_series_batch` with its default
+`batch_size="auto"`. That sizes the batch to **80 % of the VRAM free at that
+moment** (`Toto2Forecaster._auto_batch_size`), and nothing calls
+`torch.cuda.empty_cache()` afterwards. The deployment started first therefore
+claims most of the card, and the later ones over-commit it. Windows (WDDM)
+then pages whole processes out of dedicated VRAM, into shared system memory or
+out entirely. Read the **Total Committed** counter as well as Dedicated:
+dedicated alone hides the over-commit. The start-up order doesn't fix this,
+because whichever starts first wins. The fix is a code change: a fixed priming
+batch, and/or `empty_cache()` after priming.
+
 | Risk | Where it lands | How likely |
 |---|---|---|
 | The **other** program runs short of VRAM | that program fails or slows down | high if it needs more than what nvidia-smi reports free |
@@ -326,8 +341,13 @@ before the deployments'. What Shioaji does above 5 has never been measured.
 - **No exit rules, no stop-losses, no forced close** (`forced_close=False`).
   Positions ride through other sessions, nights and weekends.
 - **Four logins share the 500 MiB/day data allowance**; the cost of four tick
-  subscriptions is unmeasured. The owner warns below 50 MB but does not stop.
-  Read `traffic this run` on every clean stop.
+  subscriptions is unmeasured. A deployment checks the quota **only at
+  start-up** (it refuses below 50 MB); the owner samples it on its 30 s cadence
+  and warns below 50 MB but does not stop. **No per-run traffic figure exists:**
+  [cli.md](live/cli.md) describes a teardown `traffic this run` report and
+  `traffic_start` / `traffic_end` records, but `live/cli.py` does not
+  implement them (it imports `usage_bytes` and never calls it). Found
+  2026-10-03 during the pause test.
 - **Consoles print the account's `person_id`**, a national ID. Read output
   before pasting it anywhere.
 - **The host clock must run on exchange local time (TST).** The session and
@@ -352,6 +372,10 @@ that branch only.
 | day | `day_split_iter02` | band ±0.001, `min_prob` 0.65, stride 30 |
 | night | `night_iter10` | +0.00065 / −0.00045, `min_prob` 0.55, **long-only**, stride 30 |
 | fullday | `fullday_split_iter07` | band ±0.001, `min_prob` 0.50, stride 15 |
+
+**2026-10-03 09:15: running again after a clean pause/resume test (log
+below).** Same soak epochs; new run folders `live_<slug>_20261003_0912xx`. The
+snapshot that follows is from before the pause.
 
 **As of 2026-10-03 (Sat) 08:40:**
 
@@ -380,6 +404,9 @@ that branch only.
 | 2026-10-01 08:40 | one deployment's re-login timed out (`token_login`, 30 s); recovered on retry |
 | 2026-10-03 08:40 | status snapshot above; weekend pause being considered |
 | 2026-10-03 08:59 | VRAM 29.5 of 32.6 GB used, 2.6 GB free. Dedicated per process: fullday 11.5 GB, night 8.5 GB, day 5.5 GB (25.5 GB together, against ~4.4 GiB each measured cold in §2.7); the rest is desktop apps |
+| 2026-10-03 09:09 | **pause test, stop half: passed.** Ctrl-C in order day 09:09:26 → night 09:09:35 → fullday 09:09:42 → owner (last event 09:09:56). All `run_in_flight: false`, `consecutive_failures: 0`; soak epochs unchanged; every `session.jsonl` ends with the full teardown block; VRAM fell to 4.2 GB used. Run totals: day 1200 bars / 40 forecasts, night 3318 / 111, fullday 4518 / 302; 0 fills replayed or appended; relogins 9 each (day 1 failure, recovered) |
+| 2026-10-03 09:11–09:15 | **pause test, resume half: passed.** `--resume`, owner 09:11:50 → day 09:12:01 → night 09:12:28 → fullday 09:13:02. Soak epochs unchanged; `run_in_flight: true`, 0 failures, backfills_today 1 (new trading day); same account digest; all primed with 4 samples (fullday on its default 13-day window, 12 581 bars); subscribed `TXFJ6`; all flat; no new `fatal.jsonl` entry |
+| 2026-10-03 09:15 | **VRAM over-committed after the resume** (§6.8): 560 MB free. Dedicated / shared / committed: day 0.08 / 0 / 22.8 GB, night 19.4 / 3.4 / 22.8 GB, fullday 10.2 / 7.4 / 17.7 GB, i.e. 63 GB committed on a 32 GB card. Day is almost fully paged out. Effect on Monday's forecast latency unmeasured; committed figures were not read before the pause, so whether the 09-29 launch was the same is unknown |
 
 **Open questions:**
 
