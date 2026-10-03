@@ -370,9 +370,9 @@ that branch only.
 | night | `night_iter10` | +0.00065 / −0.00045, `min_prob` 0.55, **long-only**, stride 30 |
 | fullday | `fullday_split_iter07` | band ±0.001, `min_prob` 0.50, stride 15 |
 
-**2026-10-03 09:20: paused (all four stopped cleanly) for the warm-up VRAM fix
-(log below).** It passed a pause/resume test first. Resume with `--resume`
-once `simtrade_0929` carries the fix. The snapshot that follows is from before
+**2026-10-03 09:51: running, with the warm-up VRAM fix** (`simtrade_0929` @
+`7e57912`, `main` merged in). Same soak epochs; latest run folders
+`live_<slug>_20261003_0949xx/0950xx`. The snapshot that follows is from before
 the first pause.
 
 **As of 2026-10-03 (Sat) 08:40:**
@@ -407,6 +407,8 @@ the first pause.
 | 2026-10-03 09:15 | **VRAM over-committed after the resume** (§6.8): 560 MB free. Dedicated / shared / committed: day 0.08 / 0 / 22.8 GB, night 19.4 / 3.4 / 22.8 GB, fullday 10.2 / 7.4 / 17.7 GB, i.e. 63 GB committed on a 32 GB card. Day is almost fully paged out. Effect on Monday's forecast latency unmeasured; committed figures were not read before the pause, so whether the 09-29 launch was the same is unknown |
 | 2026-10-03 09:19 | paused again cleanly (Ctrl-C, owner last) for the fix |
 | 2026-10-03 09:21 | **warm-up VRAM fix on `main`**: priming at a fixed batch of 32 (`PRIME_BATCH_SIZE`) plus `empty_cache()` after it. Measured on the day bar cache, 900 boundaries: auto → batch 1024, 21.5 GiB held; 32 → 5.0 s, 4.61 GiB peak, 4.13 GiB after release; outputs equal to float noise. Not on `simtrade_0929` until `main` is merged into it |
+| 2026-10-03 09:26 | `main` merged into `simtrade_0929` (`7e57912`, no conflicts; `strategy/` and `live/config.py` untouched). Suite on the branch: 1501 passed, 11 skipped, 0 failed |
+| 2026-10-03 09:49–09:50 | **restart with the fix, `--resume`: passed.** Owner 09:49:34, then day 09:49:43, night 09:50:06, fullday 09:50:30. Soak epochs unchanged; all primed with 4 samples; all flat; no new `fatal.jsonl` entry. **VRAM: each deployment 4.8 GB dedicated / 5.0 GB committed, nothing paged out; 16.5 GB used, 15.7 GB free** (was 63 GB committed). Login-to-warm-up: day 17 s, night 18 s, fullday 15 s (fullday took 101 s before the fix) |
 
 **Open questions:**
 
