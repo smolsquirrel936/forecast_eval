@@ -341,7 +341,7 @@ loads the model or touches the GPU, and neither sends anything to the venue.
 | Answers | how all the soaks are doing right now: running, data, decisions, position, logins, hardware | one deployment's trading result: equity and drawdown, fills on the price line, signals against realized PnL, settings |
 | Command | `live.status_report` | `forecast_eval.reports <run_dir>` |
 | Reads | `outputs/`, `shioaji.log`, process list, Windows GPU counters | the run folder's CSVs and `params.json`, plus every `ticks.csv` of the soak |
-| Writes | `night/simtrade_status_report.html` only (and `--json` if given) | `<run_dir>/report.html` and `<run_dir>/report/*.png`; the price cache `outputs/prices_<slug>.csv` |
+| Writes | `night/simtrade_status_report_<YYYYMMDD_HHMMSS>.html` only (and `--json` if given); a new file per run | `<run_dir>/report.html` and `<run_dir>/report/*.png`; the price cache `outputs/prices_<slug>.csv` |
 | Time (2026-10-03) | about 6 s | about 1 s for a run with no trades yet |
 
 ### 8.1 The status page — `live/status_report.py`
@@ -349,11 +349,14 @@ loads the model or touches the GPU, and neither sends anything to the venue.
 ```powershell
 uv run --no-sync python -m forecast_eval.live.status_report
 # options: --outputs <dir> (default outputs), --log <path> (default shioaji.log),
-#          --output <html>, --json <file> to dump the data, --now <ISO> to pin the time
+#          --output <html> to choose the file, --json <file> to dump the data,
+#          --now <ISO> to pin the time (the filename stamp follows it)
 ```
 
 It prints the key findings to the console and writes one self-contained HTML
-page. The findings are fixed rules with thresholds, not commentary: VRAM ≥ 85 %,
+page, `simtrade_status_report_<YYYYMMDD_HHMMSS>.html` at the repo root, stamped
+with the report time. Each run keeps its own page, so earlier pages stay
+available for comparison. Nothing deletes them; clear old ones by hand. The findings are fixed rules with thresholds, not commentary: VRAM ≥ 85 %,
 commit charge ≥ 80 %, a heartbeat older than 5 min, any lost minute (a minute
 with a trade on the tape but no bar), failed or unconfirmed re-logins, and SDK
 errors. See [status_report.md](live/status_report.md) for where each number

@@ -5,7 +5,8 @@
 **Depends on:** [live/artifacts.py](artifacts.md) (`strategy_sha`), [live/sessions.py](sessions.md) (`MINUTES_PER_SESSION`), [environment.py](../environment.md) (session hours, `classify_session`).   **Used by:** the operator
 
 ```powershell
-# from the repo root (night/); writes simtrade_status_report.html there
+# from the repo root (night/); writes simtrade_status_report_<YYYYMMDD_HHMMSS>.html there,
+# stamped with the report time, so each run keeps its own page
 uv run --no-sync python -m forecast_eval.live.status_report
 # also dump the collected data; pin the report time for a reproducible build
 uv run --no-sync python -m forecast_eval.live.status_report --json status.json --now 2026-10-01T18:30:00
@@ -57,6 +58,7 @@ snapshot by nature.
 | Symbol | Kind | One-liner |
 |---|---|---|
 | `main(argv)` | function | CLI: collect, render, print the findings |
+| `default_output(now, root)` | function | the default page path, `simtrade_status_report_<YYYYMMDD_HHMMSS>.html`, stamped with the report time (so `--now` fixes the name too) |
 | `collect(outputs, log, now, *, processes, hardware, tz)` | function | every input as one JSON-able dict. `processes`/`hardware` are injectable |
 | `render(data, template)` | function | the HTML page, with the data embedded and `</` escaped |
 | `find_processes(procs)` | function | owner + one leaf process per `--strategy` |
