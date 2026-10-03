@@ -262,24 +262,21 @@ deployment then halts on the silence.
 ### 6.8 Other work on the machine while VRAM is nearly full
 
 Each deployment loads its own Toto2 copy onto the GPU; the owner uses none.
-**High VRAM use is normal here and is not itself a problem.** PyTorch's
-caching allocator keeps the peak it reached (mostly from the batched warm-up
-priming) reserved for the life of the process. A live forecast is batch 1 with a
-fixed context, so it reuses that reserved memory instead of asking for more.
-Other programs, however, see that memory as taken.
+**Expect about 4.2 GiB per deployment, about 13 GiB for three.** Warm-up
+priming runs at a fixed batch of 32 and then releases the GPU cache
+([runtime.md](live/runtime.md), `PRIME_BATCH_SIZE`). A live forecast is batch
+1 with a fixed context and needs nothing beyond the model (measured 104 ms,
+4.22 GiB).
 
-**Why the peak is so large: warm-up sizes itself to the free VRAM.**
-`LiveRuntime._prime_emitter` ([runtime.py](live/runtime.md)) runs up to 900
-historical forecasts through `forecast_series_batch` with its default
-`batch_size="auto"`. That sizes the batch to **80 % of the VRAM free at that
-moment** (`Toto2Forecaster._auto_batch_size`), and nothing calls
-`torch.cuda.empty_cache()` afterwards. The deployment started first therefore
-claims most of the card, and the later ones over-commit it. Windows (WDDM)
-then pages whole processes out of dedicated VRAM, into shared system memory or
-out entirely. Read the **Total Committed** counter as well as Dedicated:
-dedicated alone hides the over-commit. The start-up order doesn't fix this,
-because whichever starts first wins. The fix is a code change: a fixed priming
-batch, and/or `empty_cache()` after priming.
+**Code without that fix sizes the warm-up to the free VRAM.** Before
+`PRIME_BATCH_SIZE`, `_prime_emitter` ran its up-to-900 forecasts with
+`batch_size="auto"`, which takes **80 % of the VRAM free at that moment**, and
+nothing released it afterwards. The first deployment started claimed most of the
+card and the later ones over-committed it. MEASURED 2026-10-03: 63 GB committed
+on a 32 GB card, with one deployment paged off the GPU entirely. A checkout
+whose `live/runtime.py` lacks `PRIME_BATCH_SIZE` still behaves this way, so check
+before relying on the 4.2 GiB figure. Read Windows' **Total Committed** counter
+as well as Dedicated: dedicated alone hides an over-commit.
 
 | Risk | Where it lands | How likely |
 |---|---|---|
@@ -373,9 +370,10 @@ that branch only.
 | night | `night_iter10` | +0.00065 / −0.00045, `min_prob` 0.55, **long-only**, stride 30 |
 | fullday | `fullday_split_iter07` | band ±0.001, `min_prob` 0.50, stride 15 |
 
-**2026-10-03 09:15: running again after a clean pause/resume test (log
-below).** Same soak epochs; new run folders `live_<slug>_20261003_0912xx`. The
-snapshot that follows is from before the pause.
+**2026-10-03 09:20: paused (all four stopped cleanly) for the warm-up VRAM fix
+(log below).** It passed a pause/resume test first. Resume with `--resume`
+once `simtrade_0929` carries the fix. The snapshot that follows is from before
+the first pause.
 
 **As of 2026-10-03 (Sat) 08:40:**
 
@@ -407,6 +405,8 @@ snapshot that follows is from before the pause.
 | 2026-10-03 09:09 | **pause test, stop half: passed.** Ctrl-C in order day 09:09:26 → night 09:09:35 → fullday 09:09:42 → owner (last event 09:09:56). All `run_in_flight: false`, `consecutive_failures: 0`; soak epochs unchanged; every `session.jsonl` ends with the full teardown block; VRAM fell to 4.2 GB used. Run totals: day 1200 bars / 40 forecasts, night 3318 / 111, fullday 4518 / 302; 0 fills replayed or appended; relogins 9 each (day 1 failure, recovered) |
 | 2026-10-03 09:11–09:15 | **pause test, resume half: passed.** `--resume`, owner 09:11:50 → day 09:12:01 → night 09:12:28 → fullday 09:13:02. Soak epochs unchanged; `run_in_flight: true`, 0 failures, backfills_today 1 (new trading day); same account digest; all primed with 4 samples (fullday on its default 13-day window, 12 581 bars); subscribed `TXFJ6`; all flat; no new `fatal.jsonl` entry |
 | 2026-10-03 09:15 | **VRAM over-committed after the resume** (§6.8): 560 MB free. Dedicated / shared / committed: day 0.08 / 0 / 22.8 GB, night 19.4 / 3.4 / 22.8 GB, fullday 10.2 / 7.4 / 17.7 GB, i.e. 63 GB committed on a 32 GB card. Day is almost fully paged out. Effect on Monday's forecast latency unmeasured; committed figures were not read before the pause, so whether the 09-29 launch was the same is unknown |
+| 2026-10-03 09:19 | paused again cleanly (Ctrl-C, owner last) for the fix |
+| 2026-10-03 09:21 | **warm-up VRAM fix on `main`**: priming at a fixed batch of 32 (`PRIME_BATCH_SIZE`) plus `empty_cache()` after it. Measured on the day bar cache, 900 boundaries: auto → batch 1024, 21.5 GiB held; 32 → 5.0 s, 4.61 GiB peak, 4.13 GiB after release; outputs equal to float noise. Not on `simtrade_0929` until `main` is merged into it |
 
 **Open questions:**
 

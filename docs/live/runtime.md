@@ -107,6 +107,16 @@ bar. Held once, at start-up — the per-bar path stays on `broker_position()`.
   is what lets the replay spend them. The slice takes all available when the frame
   holds fewer, so a policy whose cache has not been seeded simply gets what it has
   — NIGHT's live-accumulated cache was 14 669 bars (388 boundaries) on 2026-09-02.
+- **Priming runs at a fixed batch of 32 (`PRIME_BATCH_SIZE`), then releases the
+  GPU cache.** `forecast_series_batch` defaults to `batch_size="auto"`, which
+  sizes the batch to 80 % of the VRAM free at that moment; PyTorch then keeps
+  that peak reserved for the life of the process. MEASURED 2026-10-03 (900
+  boundaries, ctx 3008): auto picked 1024 and held 21.5 GiB, so three
+  deployments together committed 63 GB on a 32 GB card. At 32 the replay takes
+  5.0 s against auto's 5.2 s and peaks at 4.61 GiB. `_release_gpu_cache` then
+  drops the process back to the model's ~4.1 GiB. Batch size changes outputs
+  only at float noise (|Δ return| ≤ 1.8e-7, |Δ prob_up| ≤ 2.2e-5). The torch
+  handle is read off the forecaster, so this module still never imports torch.
 - **An under-primed emitter refuses to start.** Below 3 samples the filter fails
   open; refusing is recoverable (widen the window), trading unfiltered is not.
 - **`warm_up` rejects bars from outside the policy**, and requires at least

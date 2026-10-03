@@ -75,6 +75,20 @@ ROLL_LADDER_MAX_TICKS = 25
 ROLL_LADDER_INTERVAL = 10.0
 
 
+# Tech: the fixed batch size `_prime_emitter` hands to
+#       `forecast_series_batch`, instead of the default `"auto"`.
+# Why:  "auto" sizes the batch to 80 % of the VRAM free *at that moment*, and
+#       PyTorch's caching allocator keeps the peak reserved for the life of the
+#       process. MEASURED 2026-10-03 (Toto-2.0-1B, ctx 3008, 900 boundaries, RTX
+#       5090): auto picked its cap of 1024 and held 21.5 GiB, so the first of
+#       three deployments claimed the card and the rest over-committed it to
+#       63 GB. Windows then paged one deployment's model off the GPU entirely. At
+#       32 the same replay takes 5.0 s (auto 5.2 s, 64 4.9 s, 16 5.9 s) and peaks
+#       at 4.61 GiB. Batch size changes outputs only at float noise (|d return|
+#       <= 1.8e-7, |d prob_up| <= 2.2e-5), so priming reads the same signals.
+PRIME_BATCH_SIZE = 32
+
+
 def ladder_ticks(attempt: int) -> int:
     """How far through the touch attempt `attempt` (1-based) is priced."""
     # Tech: start + step per attempt after the first, clamped at the cap.
@@ -745,10 +759,25 @@ class LiveRuntime:
         timestamps = list(bars["timestamp"])
         prices = [float(p) for p in bars["price"]]
         forecasts = self.forecaster.forecast_series_batch(
-            timestamps, prices, boundaries
+            timestamps, prices, boundaries, batch_size=PRIME_BATCH_SIZE
         )
+        self._release_gpu_cache()
         for f in forecasts:
             self.emitter.emit_signal(f)
+
+    def _release_gpu_cache(self) -> None:
+        # Tech: return the CUDA caching allocator's unused blocks to the driver,
+        #       when the forecaster has loaded torch and a GPU is present.
+        # Why:  the priming batch is the largest allocation this process will
+        #       ever make; live forecasts are batch 1 and need only the model's
+        #       ~4.2 GiB. Without this the batch's working set stays reserved
+        #       for the whole soak and is invisible to every other process on
+        #       the card. The torch handle is read off the forecaster (Toto2
+        #       keeps it on `_torch` after its lazy import) so this module still
+        #       never imports torch, and a CPU or test forecaster is a no-op.
+        torch = getattr(self.forecaster, "_torch", None)
+        if torch is not None and torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def _priming_required(self) -> bool:
         # Tech: priming only matters for an emitter that (a) keeps a rolling
