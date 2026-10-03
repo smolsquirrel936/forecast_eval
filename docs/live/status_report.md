@@ -22,15 +22,34 @@ snapshot by nature.
 ## Where each number comes from
 | Section | Source |
 |---|---|
-| Which deployments exist | each `soak_epoch_<slug>.json` in `--outputs`, matched to the newest `live_*` folder with the same `soak_id` |
+| Which deployments exist | each `soak_epoch_<slug>.json` in `--outputs`, matched to **every** `live_*` folder with the same `soak_id`, oldest first |
 | Running or stopped, PID | `python.exe` processes running `-m forecast_eval.live.cli --strategy X`. Only the leaf of the `uv` → venv shim → interpreter chain counts |
-| Sessions, bars, decisions, re-logins, alerts | the run folder's `session.jsonl` |
-| Ticks | the run folder's `ticks.csv` |
+| Sessions, bars, decisions, re-logins, alerts | every folder's `session.jsonl`, in order |
+| Ticks | every folder's `ticks.csv` |
+| Orders | every folder's `orders.csv`, summed |
+| Fills, trades, PnL, `params.json`, warm-up | the **newest** folder only: a `--resume` replays the soak's earlier fills into it, so summing would double-count |
 | Heartbeat, failures | `live_restart_<slug>.json` |
 | Owner's position view | `events_<slug>.jsonl` |
 | Successful logins, SDK errors | `shioaji.log` (“Stored new token” per PID, UTC converted to local time) |
 | VRAM / RAM per process | Windows `GPU Process Memory` counters + `Get-Process` (nvidia-smi shows N/A per process on WDDM) |
 | Knobs missing from `params.json` (`long_only`) | the package's `PARAMS` literal, parsed with `ast` |
+
+## A soak is every run folder, not the newest
+
+Each `--resume` restart opens a new run folder under the same `soak_id`. Until
+2026-10-03 the page read only the newest, so every count went back to zero at a
+restart. MEASURED that day after a weekend restart: 0 forecasts on the page,
+453 on disk. It now reads all of them, oldest first. Two details make the join
+correct:
+
+- **`bar_idx` restarts at 0 in every folder**, so a bar is keyed by
+  (folder, bar_idx). A forecast's realized return is the price `horizon` bars
+  later along the soak's whole bar series, so a horizon that crosses a restart
+  is still scored, against the next bars the model actually saw.
+- **Fills and trades come from the newest folder only.** `live/cli.py` seeds
+  the replayed ledger into each resumed run (`fills_replayed`), so the newest
+  `fills.csv`/`trades.csv` already hold the soak. Orders are not replayed and
+  are summed.
 
 ## What it deliberately does not do
 - **Never imports a strategy or the broker.** `PARAMS` is parsed, not

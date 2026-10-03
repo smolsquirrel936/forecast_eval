@@ -146,6 +146,71 @@ def test_collect_counts_sessions_ticks_decisions_and_logins(tmp_path, monkeypatc
     assert data["fatal"][0]["attributed"].startswith("night: soak soak_old")
 
 
+def _resumed(out):
+    """A `--resume` restart: a second run folder under the same soak id.
+
+    The new folder starts its own `bar_idx` at 0, re-seeds the soak's fills
+    (the ledger replay), and has no orders of its own yet."""
+    old = out / "live_night_20260930_080000"
+    new = out / "live_night_20261001_090000"
+    new.mkdir()
+    (new / "params.json").write_text((old / "params.json").read_text())
+    # the old folder: one order and its fill, plus a forecast on its LAST bar,
+    # whose 2-bar horizon can only be scored from the new folder's bars
+    (old / "orders.csv").write_text("timestamp,side\n2026-09-30T15:01:00,BUY\n", encoding="utf-8")
+    (old / "fills.csv").write_text("timestamp,side\n2026-09-30T15:01:05,BUY\n", encoding="utf-8")
+    with (old / "session.jsonl").open("a", encoding="utf-8") as f:
+        f.write("\n" + json.dumps({"event": "forecast", "bar_idx": 4, "timestamp": "2026-10-01T00:01:00",
+                                   "payload": {"predicted_return": -0.003, "prob_up": 0.1,
+                                               "last_price": 98.0, "predicted_price": 97.7}}) + "\n")
+    _write_jsonl(new / "session.jsonl", [
+        {"event": "warm_up", "bars": 77, "first": "c", "last": "d", "emitter_primed": 5},
+        {"event": "bar", "bar_idx": 0, "timestamp": "2026-10-01T15:00:00", "price": 97.0, "position": 0},
+        {"event": "bar", "bar_idx": 1, "timestamp": "2026-10-01T15:01:00", "price": 96.0, "position": 0},
+    ])
+    (new / "ticks.csv").write_text(
+        "timestamp,received,code,price,volume,simtrade\n"
+        "2026-10-01T15:00:10,2026-10-01T15:00:10.500000,TXF,97,1,0\n", encoding="utf-8")
+    (new / "orders.csv").write_text("timestamp,side\n", encoding="utf-8")
+    (new / "fills.csv").write_text("timestamp,side\n2026-09-30T15:01:05,BUY\n", encoding="utf-8")
+    (new / "trades.csv").write_text("entry_ts,net_pnl_points\n", encoding="utf-8")
+    return old, new
+
+
+def test_collect_covers_every_run_folder_of_the_soak(tmp_path, monkeypatch):
+    """MEASURED 2026-10-03: after a weekend `--resume` the page showed 0
+    forecasts, because it read only the newest folder; 453 were on disk."""
+    _fake_packages(tmp_path, monkeypatch)
+    out, log = _outputs(tmp_path)
+    old, new = _resumed(out)
+    (dep,) = sr.find_deployments(out)
+    assert dep.run_dir == new and dep.run_dirs == (old, new)
+    (r,) = sr.collect(out, log, NOW + timedelta(days=1), processes=_procs(), hardware=HW, tz=UTC)["runs"]
+    assert r["dir"] == new.name and r["dirs"] == [old.name, new.name]
+    assert [s["label"] for s in r["sessions"]] == ["NIGHT 09-30", "NIGHT 10-01"]
+    assert r["bars"] == 7 and r["ticks"]["total"] == 7
+    d = r["decisions"]
+    assert d["forecasts"] == 3                      # all from the old folder
+    assert len(d["rows"]) == 3
+    assert d["orders"] == 1                         # summed: 1 old + 0 new
+    assert d["fills"] == 1                          # newest only: it holds the replay
+    assert r["warm_up"]["emitter_primed"] == 5      # the newest run's warm-up
+
+
+def test_a_forecast_whose_horizon_crosses_a_restart_is_still_scored(tmp_path, monkeypatch):
+    """`bar_idx` restarts at 0 per folder: the old folder's bar 4 + 2 must land
+    on the new folder's bar 1 (96.0), not on the old folder's missing bar 6 or
+    on the new folder's bar_idx 6."""
+    _fake_packages(tmp_path, monkeypatch)
+    out, log = _outputs(tmp_path)
+    _resumed(out)
+    (r,) = sr.collect(out, log, NOW + timedelta(days=1), processes=_procs(), hardware=HW, tz=UTC)["runs"]
+    last = r["decisions"]["rows"][-1]
+    assert last["ts"] == "2026-10-01T00:01:00"
+    assert abs(last["realized"] - (96.0 / 98.0 - 1)) < 1e-12
+    assert (r["decisions"]["hit"], r["decisions"]["n_eval"]) == (3, 3)
+
+
 def test_findings_flag_gaps_failed_relogins_and_vram(tmp_path):
     out, log = _outputs(tmp_path)
     data = sr.collect(out, log, NOW, processes=_procs(), hardware=HW, tz=UTC)
