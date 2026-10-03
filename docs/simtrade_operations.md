@@ -364,17 +364,17 @@ comes from.
 
 Read it with these limits in mind:
 
-- **Counts cover the newest run folder of each soak only.** Sessions, ticks,
-  forecasts and the decision funnel come from the folder the deployment is
-  writing now, so **they restart from zero at every restart**. MEASURED
-  2026-10-03, minutes after a `--resume`: 0 sessions, 0 ticks, 0 forecasts for
-  all three. For the whole soak, look at the earlier `live_<slug>_*` folders
-  or their per-run reports.
+- **Counts cover the whole soak:** every `live_<slug>_*` folder with the
+  soak's id, oldest first, so a restart doesn't reset them. Fills, trades and
+  PnL come from the newest folder, which holds the replayed history
+  ([status_report.md](live/status_report.md)). Before 2026-10-03 only the
+  newest folder was read, and a fresh `--resume` showed 0 forecasts.
 - **"Up" is the soak's age, not the process's.** It counts from
-  `soak_epoch_<slug>.json`'s `started_at`, so it read "4d 1h" for processes
-  started ten minutes earlier.
-- **Logins** are counted per *current* PID from `shioaji.log`, so they also
-  reset at a restart.
+  `soak_epoch_<slug>.json`'s `started_at`, the same span the counts cover. It
+  read "4d 1h" for processes started ten minutes earlier.
+- **Logins** are still counted per *current* PID from `shioaji.log`, so the
+  login count resets at a restart. Re-login events and failures come from
+  `session.jsonl` and cover the soak.
 - **Hardware is a single snapshot** taken when the page is built; nothing keeps
   a history.
 - It never imports a strategy or the broker, and nothing the live processes run

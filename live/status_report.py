@@ -27,7 +27,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, tzinfo
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from ..environment import DAY_CLOSE, DAY_OPEN, NIGHT_CLOSE, NIGHT_OPEN, classify_session
 from .artifacts import strategy_sha
@@ -125,10 +125,11 @@ def session_of(ts: datetime) -> Optional[Dict[str, Any]]:
 @dataclass(frozen=True)
 class Deployment:
     slug: str
-    run_dir: Path
+    run_dir: Path                       # the newest folder: the one being written to
     params: Dict[str, Any]
     soak: Dict[str, Any]
     restart: Dict[str, Any]
+    run_dirs: Tuple[Path, ...] = ()     # every folder of the soak, oldest first
 
 
 def _read_json(path: Path) -> Optional[Dict[str, Any]]:
@@ -154,12 +155,16 @@ def _iter_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
 
 
 def find_deployments(outputs: Path) -> List[Deployment]:
-    # Tech: one deployment per `soak_epoch_<slug>.json`, matched to the newest
-    #       `live_*` run folder whose `params.json` carries the same `soak_id`.
+    # Tech: one deployment per `soak_epoch_<slug>.json`, matched to every
+    #       `live_*` run folder whose `params.json` carries the same `soak_id`,
+    #       oldest first; the newest is also kept as `run_dir`.
     # Why:  the soak id is the only key that ties the shared state files (named
     #       by slug — fullday's is `day_night`) to a run folder (named by
-    #       timestamp); a `--resume` restart writes a new folder under the same
-    #       id, so the newest folder is the one being written to.
+    #       timestamp). A `--resume` restart writes a new folder under the same
+    #       id, so the soak is ALL of them. Reading only the newest put every
+    #       count back to zero at each restart (MEASURED 2026-10-03: 0 forecasts
+    #       on the page, 453 on disk). The newest is the one being written to,
+    #       and the only one whose fills/trades cover the whole soak.
     by_soak: Dict[str, List[Path]] = defaultdict(list)
     for d in outputs.glob("live_*"):
         if d.is_dir():
@@ -172,10 +177,11 @@ def find_deployments(outputs: Path) -> List[Deployment]:
         soak = _read_json(epoch)
         if not soak or soak.get("soak_id") not in by_soak:
             continue
-        run_dir = max(by_soak[soak["soak_id"]], key=lambda d: d.name)
+        run_dirs = tuple(sorted(by_soak[soak["soak_id"]], key=lambda d: d.name))
+        run_dir = run_dirs[-1]
         params = _read_json(run_dir / "params.json") or {}
         restart = _read_json(outputs / f"live_restart_{slug}.json") or {}
-        out.append(Deployment(slug, run_dir, params, soak, restart))
+        out.append(Deployment(slug, run_dir, params, soak, restart, run_dirs))
     return out
 
 
@@ -219,8 +225,15 @@ def _rows(path: Path) -> List[Dict[str, str]]:
 def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]:
     """Everything the report shows about one deployment, as plain JSON-able data."""
     params, d = dep.params, dep.run_dir
+    dirs = list(dep.run_dirs or (d,))
     package = params.get("strategy_package") or dep.slug
-    events = list(_iter_jsonl(d / "session.jsonl"))
+    # Tech: every run folder's session.jsonl, oldest first, each record tagged
+    #       with the index of the folder it came from (`_run`).
+    # Why:  the soak is all of its folders (`find_deployments`). `bar_idx`
+    #       restarts at 0 in every folder, so a bar is identified by
+    #       (folder, bar_idx), never by bar_idx alone.
+    events = [{**e, "_run": i} for i, rd in enumerate(dirs)
+              for e in _iter_jsonl(rd / "session.jsonl")]
     started = datetime.fromisoformat(dep.soak["started_at"])
 
     # ---- bars and sessions
@@ -241,34 +254,35 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
              "lat": [], "max_gap": {}}
     tick_minutes = set()
     prev: Dict[str, datetime] = {}
-    try:
-        with open(d / "ticks.csv", encoding="utf-8", newline="") as f:
-            for r in csv.DictReader(f):
-                try:
-                    ts = datetime.fromisoformat(r["timestamp"])
-                    rc = datetime.fromisoformat(r["received"])
-                except (KeyError, ValueError):
-                    continue
-                ticks["total"] += 1
-                ticks["first"] = ticks["first"] or r["timestamp"]
-                ticks["last"] = r["timestamp"]
-                ticks["codes"][r.get("code", "")] += 1
-                ticks["volume"] += int(float(r.get("volume") or 0))
-                ticks["by_hour"][ts.strftime("%Y-%m-%dT%H:00")] += 1
-                ticks["lat"].append((rc - ts).total_seconds())
-                if r.get("simtrade") == "1":
-                    ticks["trial"] += 1
-                s = session_of(ts)
-                key = s["label"] if s else "outside"
-                ticks["by_session"][key] += 1
-                if s:
-                    tick_minutes.add(r["timestamp"][:16])
-                    if key in prev:
-                        gap = (ts - prev[key]).total_seconds()
-                        ticks["max_gap"][key] = max(ticks["max_gap"].get(key, 0.0), gap)
-                    prev[key] = ts
-    except OSError:
-        pass
+    for rd in dirs:
+        try:
+            with open(rd / "ticks.csv", encoding="utf-8", newline="") as f:
+                for r in csv.DictReader(f):
+                    try:
+                        ts = datetime.fromisoformat(r["timestamp"])
+                        rc = datetime.fromisoformat(r["received"])
+                    except (KeyError, ValueError):
+                        continue
+                    ticks["total"] += 1
+                    ticks["first"] = ticks["first"] or r["timestamp"]
+                    ticks["last"] = r["timestamp"]
+                    ticks["codes"][r.get("code", "")] += 1
+                    ticks["volume"] += int(float(r.get("volume") or 0))
+                    ticks["by_hour"][ts.strftime("%Y-%m-%dT%H:00")] += 1
+                    ticks["lat"].append((rc - ts).total_seconds())
+                    if r.get("simtrade") == "1":
+                        ticks["trial"] += 1
+                    s = session_of(ts)
+                    key = s["label"] if s else "outside"
+                    ticks["by_session"][key] += 1
+                    if s:
+                        tick_minutes.add(r["timestamp"][:16])
+                        if key in prev:
+                            gap = (ts - prev[key]).total_seconds()
+                            ticks["max_gap"][key] = max(ticks["max_gap"].get(key, 0.0), gap)
+                        prev[key] = ts
+        except OSError:
+            pass
 
     # Tech: per session, the minutes that had a trade but no bar.
     # Why:  a bar is only built for a minute with at least one print, so a bar
@@ -294,7 +308,13 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
     long_only = bool(pkg.get("long_only", False))
     buy, sell = params.get("buy_threshold"), params.get("sell_threshold")
     min_prob, horizon = params.get("min_prob"), params.get("horizon_bars") or 30
-    price_at = {b["bar_idx"]: b["price"] for b in bars}
+    # Tech: each bar's position in the soak's bar series, keyed (folder, bar_idx).
+    # Why:  the realized return is the price `horizon` bars after the forecast's
+    #       bar. Counting along the whole series rather than within one folder
+    #       lets a forecast whose horizon crosses a restart still be scored: the
+    #       bars after a restart are the next bars the model saw, the same splice
+    #       the live context makes from the bar cache.
+    bar_pos = {(b["_run"], b["bar_idx"]): i for i, b in enumerate(bars)}
     signals = {e["timestamp"]: e for e in events if e.get("event") == "signal"}
     rows, band_pass, prob_pass, hits, n_eval, abs_err = [], 0, 0, 0, 0, []
     for e in (e for e in events if e.get("event") == "forecast"):
@@ -309,7 +329,9 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
             pu is not None and (pu if direction == "BUY" else 1 - pu) >= min_prob))
         band_pass += crossed
         prob_pass += prob_ok
-        future = price_at.get(e["bar_idx"] + horizon)
+        i = bar_pos.get((e["_run"], e["bar_idx"]))
+        future = (bars[i + horizon]["price"]
+                  if i is not None and i + horizon < len(bars) else None)
         last = p.get("last_price")
         realized = (future / last - 1) if (future and last) else None
         if realized is not None and r != 0 and realized != 0:
@@ -321,7 +343,13 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
         rows.append({"ts": e["timestamp"], "ret": r, "prob": pu, "realized": realized,
                      "sig": s.get("direction", "HOLD"), "crossed": crossed})
     sig_counts = Counter(s.get("direction") for s in signals.values())
-    orders, fills, trades = (_rows(d / f) for f in ("orders.csv", "fills.csv", "trades.csv"))
+    # Tech: orders summed over every folder; fills and trades from the newest.
+    # Why:  a `--resume` seeds the soak's earlier fills into the new run
+    #       (`live/cli.py`, `fills_replayed`), so the newest folder's fills.csv
+    #       and trades.csv already cover the whole soak and summing them would
+    #       double-count. Orders are not replayed, so each folder holds only its own.
+    orders = [r for rd in dirs for r in _rows(rd / "orders.csv")]
+    fills, trades = (_rows(d / f) for f in ("fills.csv", "trades.csv"))
 
     # ---- positions: the deployment's view and the owner's
     pos = [b.get("position", 0) for b in bars]
@@ -338,12 +366,12 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
     verified = [e for e in events if e.get("event") == "verified"]
     alerts = Counter(f'{a.get("severity")}:{a.get("kind")}' for a in events
                      if a.get("event") == "alert")
-    warm = next((e for e in events if e.get("event") == "warm_up"), {})
+    warm = next((e for e in reversed(events) if e.get("event") == "warm_up"), {})
     hb = dep.restart.get("last_heartbeat")
     lat = ticks.pop("lat")
 
     return {
-        "slug": dep.slug, "package": package, "dir": d.name,
+        "slug": dep.slug, "package": package, "dir": d.name, "dirs": [x.name for x in dirs],
         "started": started.isoformat(), "uptime_h": (now - started).total_seconds() / 3600,
         "heartbeat": hb,
         "heartbeat_age_s": max(0.0, (now - datetime.fromisoformat(hb)).total_seconds()) if hb else None,

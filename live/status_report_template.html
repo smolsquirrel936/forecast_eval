@@ -367,7 +367,7 @@ function renderBasic() {
     ? " (unchanged since start)" : ` <b>— package changed since start (now <code>${esc(r.params.package_sha_now)}</code>)</b>`;
   table("tb-basic", ["", ...RUNS.map(runKey)], [
     ["Status", ...RUNS.map(r => r.running ? `Running (PID ${r.pid})` : "<b>Stopped</b> — no live process found")],
-    ["Run folder", ...RUNS.map(r => `<code>${esc(r.dir)}</code>`)],
+    ["Run folder", ...RUNS.map(r => `<code>${esc(r.dir)}</code>` + ((r.dirs || []).length > 1 ? ` <span class="small">(+${r.dirs.length - 1} earlier in this soak)</span>` : ""))],
     ["Started", ...RUNS.map(r => fdt(r.started))],
     ["Uptime", ...RUNS.map(r => dur(r.uptime_h))],
     ["Trades sessions", ...RUNS.map(r => esc(r.params.sessions.join(" + ")))],
@@ -660,7 +660,7 @@ function renderHardware() {
 }
 
 function renderSources() {
-  $("sources").innerHTML = `<p>Run folders under <code>${esc(D.outputs)}</code>: ${RUNS.map(r => `<code>${esc(r.dir)}/</code>`).join(", ")}. From each: <code>session.jsonl</code> (bars, forecasts, signals, re-logins, alerts, feed checks), <code>ticks.csv</code>, <code>orders/fills/trades.csv</code>, <code>params.json</code>. Strategy knobs not in <code>params.json</code> (such as <code>long_only</code>) are read from the package's <code>PARAMS</code> in <code>wiring.py</code>; the package hash is compared with the run's to show whether it changed since start.</p>
+  $("sources").innerHTML = `<p>Run folders under <code>${esc(D.outputs)}</code>, every folder of each soak, oldest first: ${RUNS.map(r => (r.dirs || [r.dir]).map(x => `<code>${esc(x)}/</code>`).join(", ")).join("; ")}. From each: <code>session.jsonl</code> (bars, forecasts, signals, re-logins, alerts, feed checks), <code>ticks.csv</code>, <code>orders.csv</code>; <code>fills.csv</code>, <code>trades.csv</code> and <code>params.json</code> from the newest folder only, because a <code>--resume</code> replays the soak's earlier fills into it. Strategy knobs not in <code>params.json</code> (such as <code>long_only</code>) are read from the package's <code>PARAMS</code> in <code>wiring.py</code>; the package hash is compared with the run's to show whether it changed since start.</p>
   <p>Shared state: <code>live_restart_&lt;slug&gt;.json</code> (heartbeat, failures), <code>soak_epoch_&lt;slug&gt;.json</code> (start time, retired soaks), <code>events_&lt;slug&gt;.jsonl</code> (the owner's position stream), <code>fatal.jsonl</code>. Live processes are matched by their <code>--strategy</code> argument.</p>
   <p>Logins: <code>shioaji.log</code> lines “Stored new token” per PID, converted from UTC to local time. Hardware: Windows <code>GPU Process Memory</code> counters, <code>Get-Process</code>, <code>Win32_OperatingSystem</code> and <code>nvidia-smi</code>, read once when the page was generated.</p>
   <p>Hit rate compares the sign of <code>predicted_return</code> with the realised return from the forecast bar's price to the price <i>horizon</i> bars later. Forecasts whose horizon has not finished are not counted. Findings are fixed rules: VRAM ≥ 85% or commit ≥ 80% warns, and a heartbeat older than 5 minutes warns.</p>`;
