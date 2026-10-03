@@ -12,8 +12,8 @@ not linked).
 > This is a **task page**, not a 1:1 module page, so it is listed beside
 > `tests.md` in `test_docs_coverage.py`'s consolidated set.
 >
-> Sections 1–8 are **general**: true for any run of this shape. Section 9,
-> [Current status](#9-current-status), is **deliberately separate**: a dated
+> Sections 1–9 are **general**: true for any run of this shape. Section 10,
+> [Current status](#10-current-status), is **deliberately separate**: a dated
 > snapshot of the run in progress, which goes stale. Edit it in place and date
 > every entry. Don't let run-specific facts leak into the general sections.
 
@@ -331,7 +331,97 @@ The re-login spike can briefly mean up to 7 connections against Shioaji's
 about 30 s before the old one drops. The owner goes first so its spike clears
 before the deployments'. What Shioaji does above 5 has never been measured.
 
-## 8. Standing cautions
+## 8. Reports while the simtrade runs
+
+Two reports can be generated at any time while all four processes run. Neither
+loads the model or touches the GPU, and neither sends anything to the venue.
+
+| | Status page | Per-run report |
+|---|---|---|
+| Answers | how all the soaks are doing right now: running, data, decisions, position, logins, hardware | one deployment's trading result: equity and drawdown, fills on the price line, signals against realized PnL, settings |
+| Command | `live.status_report` | `forecast_eval.reports <run_dir>` |
+| Reads | `outputs/`, `shioaji.log`, process list, Windows GPU counters | the run folder's CSVs and `params.json`, plus every `ticks.csv` of the soak |
+| Writes | `night/simtrade_status_report_<YYYYMMDD_HHMMSS>.html` only (and `--json` if given); a new file per run | `<run_dir>/report.html` and `<run_dir>/report/*.png`; the price cache `outputs/prices_<slug>.csv` |
+| Time (2026-10-03) | about 6 s | about 1 s for a run with no trades yet |
+
+### 8.1 The status page — `live/status_report.py`
+
+```powershell
+uv run --no-sync python -m forecast_eval.live.status_report
+# options: --outputs <dir> (default outputs), --log <path> (default shioaji.log),
+#          --output <html> to choose the file, --json <file> to dump the data,
+#          --now <ISO> to pin the time (the filename stamp follows it)
+```
+
+It prints the key findings to the console and writes one self-contained HTML
+page, `simtrade_status_report_<YYYYMMDD_HHMMSS>.html` at the repo root, stamped
+with the report time. Each run keeps its own page, so earlier pages stay
+available for comparison. Nothing deletes them; clear old ones by hand. The findings are fixed rules with thresholds, not commentary: VRAM ≥ 85 %,
+commit charge ≥ 80 %, a heartbeat older than 5 min, any lost minute (a minute
+with a trade on the tape but no bar), failed or unconfirmed re-logins, and SDK
+errors. See [status_report.md](live/status_report.md) for where each number
+comes from.
+
+Read it with these limits in mind:
+
+- **Counts cover the newest run folder of each soak only.** Sessions, ticks,
+  forecasts and the decision funnel come from the folder the deployment is
+  writing now, so **they restart from zero at every restart**. MEASURED
+  2026-10-03, minutes after a `--resume`: 0 sessions, 0 ticks, 0 forecasts for
+  all three. For the whole soak, look at the earlier `live_<slug>_*` folders
+  or their per-run reports.
+- **"Up" is the soak's age, not the process's.** It counts from
+  `soak_epoch_<slug>.json`'s `started_at`, so it read "4d 1h" for processes
+  started ten minutes earlier.
+- **Logins** are counted per *current* PID from `shioaji.log`, so they also
+  reset at a restart.
+- **Hardware is a single snapshot** taken when the page is built; nothing keeps
+  a history.
+- It never imports a strategy or the broker, and nothing the live processes run
+  imports it, so generating it cannot change a running soak.
+
+### 8.2 The per-run report — `reports.py`
+
+Pick the deployment's newest run folder, then render it:
+
+```powershell
+$run = (Get-ChildItem outputs -Directory -Filter 'live_night_2*' | Sort-Object Name | Select-Object -Last 1).FullName
+uv run --no-sync python -m forecast_eval.reports $run
+```
+
+Use `live_day_2*` / `live_day_night_2*` for the other two. The trailing `2`
+keeps `live_day_*` from also matching `live_day_night_*`. Open
+`<run_dir>\report.html`.
+
+How a running folder feeds it:
+
+- **The live process refreshes the CSVs** (`fills`, `orders`, `forecasts`,
+  `signals`, `trades`) at most **once a minute**, and only when something
+  changed ([artifacts.md](live/artifacts.md)). The report is therefore up to a
+  minute behind, and during 05:00–08:45 and weekends nothing changes at all. If
+  a render fails on a CSV caught mid-write, run it again.
+- **The price line spans the whole soak**, not just this folder
+  ([prices.md](live/prices.md)): every `ticks.csv` of the soak, one row a
+  minute. Finished segments are cached in `outputs/prices_<slug>.csv`; the live
+  one is re-read each time.
+- **Fills and trades include earlier segments** after a `--resume`, because the
+  [ledger](live/ledger.md) replays them into the new run. Signals and forecasts
+  are this folder's only.
+- **A clean stop writes the final report itself** (`report=True` at teardown,
+  [cli.py](live/cli.md)), overwriting any copy rendered by hand. It is the same
+  renderer, so nothing is lost.
+- A stopped run's folder already holds its shutdown report. Re-rendering it works
+  the same way.
+
+### 8.3 Not while running: `tools/session_artifacts.py`
+
+[session_artifacts](tools/session_artifacts.md) rebuilds artifacts from
+`session.jsonl` for runs that ended **before** live runs wrote their own. It
+refuses a folder that already has `fills`/`trades`/`signals` CSVs, which every
+current run does. Its `--seed-ledger` appends to the live fill ledger, which
+**must never** happen while a deployment is writing to it.
+
+## 9. Standing cautions
 
 - **One account, one book.** The owner nets every deployment, so the account
   can hold up to one lot per deployment in the same direction.
@@ -353,11 +443,11 @@ before the deployments'. What Shioaji does above 5 has never been measured.
   the 2026-09-29 simtrade (STRATEGY_SPLIT_PLAN §23 lifted the one-instance rule
   for 2 × 1 lot × 10 minutes).
 
-## 9. Current status
+## 10. Current status
 
 > **Snapshot, not reference.** Everything in this section describes one run at
 > one time. Update it in place, date every entry, and move anything that turns
-> out to be generally true up into §§1–8.
+> out to be generally true up into §§1–9.
 
 **Run:** `simtrade_0929`, branch `simtrade_0929` (local, not pushed), launched
 2026-09-29 08:20–08:25 into a fresh `outputs/` with `--fresh-start`. Settings
@@ -370,9 +460,9 @@ that branch only.
 | night | `night_iter10` | +0.00065 / −0.00045, `min_prob` 0.55, **long-only**, stride 30 |
 | fullday | `fullday_split_iter07` | band ±0.001, `min_prob` 0.50, stride 15 |
 
-**2026-10-03 09:20: paused (all four stopped cleanly) for the warm-up VRAM fix
-(log below).** It passed a pause/resume test first. Resume with `--resume`
-once `simtrade_0929` carries the fix. The snapshot that follows is from before
+**2026-10-03 09:51: running, with the warm-up VRAM fix** (`simtrade_0929` @
+`7e57912`, `main` merged in). Same soak epochs; latest run folders
+`live_<slug>_20261003_0949xx/0950xx`. The snapshot that follows is from before
 the first pause.
 
 **As of 2026-10-03 (Sat) 08:40:**
@@ -407,6 +497,8 @@ the first pause.
 | 2026-10-03 09:15 | **VRAM over-committed after the resume** (§6.8): 560 MB free. Dedicated / shared / committed: day 0.08 / 0 / 22.8 GB, night 19.4 / 3.4 / 22.8 GB, fullday 10.2 / 7.4 / 17.7 GB, i.e. 63 GB committed on a 32 GB card. Day is almost fully paged out. Effect on Monday's forecast latency unmeasured; committed figures were not read before the pause, so whether the 09-29 launch was the same is unknown |
 | 2026-10-03 09:19 | paused again cleanly (Ctrl-C, owner last) for the fix |
 | 2026-10-03 09:21 | **warm-up VRAM fix on `main`**: priming at a fixed batch of 32 (`PRIME_BATCH_SIZE`) plus `empty_cache()` after it. Measured on the day bar cache, 900 boundaries: auto → batch 1024, 21.5 GiB held; 32 → 5.0 s, 4.61 GiB peak, 4.13 GiB after release; outputs equal to float noise. Not on `simtrade_0929` until `main` is merged into it |
+| 2026-10-03 09:26 | `main` merged into `simtrade_0929` (`7e57912`, no conflicts; `strategy/` and `live/config.py` untouched). Suite on the branch: 1501 passed, 11 skipped, 0 failed |
+| 2026-10-03 09:49–09:50 | **restart with the fix, `--resume`: passed.** Owner 09:49:34, then day 09:49:43, night 09:50:06, fullday 09:50:30. Soak epochs unchanged; all primed with 4 samples; all flat; no new `fatal.jsonl` entry. **VRAM: each deployment 4.8 GB dedicated / 5.0 GB committed, nothing paged out; 16.5 GB used, 15.7 GB free** (was 63 GB committed). Login-to-warm-up: day 17 s, night 18 s, fullday 15 s (fullday took 101 s before the fix) |
 
 **Open questions:**
 

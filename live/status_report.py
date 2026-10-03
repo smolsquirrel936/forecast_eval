@@ -693,27 +693,40 @@ def render(data: Mapping[str, Any], template: Path = TEMPLATE) -> str:
     return template.read_text(encoding="utf-8").replace("__STATUS_DATA__", payload)
 
 
+def default_output(now: datetime, root: Optional[Path] = None) -> Path:
+    # Tech: `simtrade_status_report_<YYYYMMDD_HHMMSS>.html` at the repo root,
+    #       stamped with the report time.
+    # Why:  one fixed name meant every run overwrote the last, so a page could
+    #       not be compared with an earlier one. The stamp is the report time
+    #       rather than the wall clock, so `--now` gives the same name as well as
+    #       the same page, and the names sort in time order.
+    return (root or REPO_ROOT) / f"simtrade_status_report_{now:%Y%m%d_%H%M%S}.html"
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--outputs", type=Path, default=REPO_ROOT / "outputs",
                     help="folder holding the run folders and soak_epoch_<slug>.json (default: outputs/)")
     ap.add_argument("--log", type=Path, default=REPO_ROOT / "shioaji.log",
                     help="the shioaji SDK log (default: shioaji.log at the repo root)")
-    ap.add_argument("--output", type=Path, default=REPO_ROOT / "simtrade_status_report.html",
-                    help="where to write the HTML (default: simtrade_status_report.html at the repo root)")
+    ap.add_argument("--output", type=Path, default=None,
+                    help="where to write the HTML (default: simtrade_status_report_<YYYYMMDD_HHMMSS>.html "
+                         "at the repo root, stamped with the report time)")
     ap.add_argument("--json", type=Path, default=None, help="also write the collected data as JSON")
     ap.add_argument("--now", type=datetime.fromisoformat, default=None,
                     help="report time (ISO, local); default now. Fixes uptime/ages for a reproducible build")
     args = ap.parse_args(argv)
 
-    data = collect(args.outputs, args.log, args.now or datetime.now().replace(microsecond=0))
-    args.output.write_text(render(data), encoding="utf-8")
+    now = args.now or datetime.now().replace(microsecond=0)
+    output = args.output or default_output(now)
+    data = collect(args.outputs, args.log, now)
+    output.write_text(render(data), encoding="utf-8")
     if args.json:
         args.json.write_text(json.dumps(data, default=str, indent=1, sort_keys=True), encoding="utf-8")
     for f in data["findings"]:
         mark = {"ok": "ok  ", "warn": "WARN", "info": "info"}[f["level"]]
         print(f"[{mark}] {re.sub(r'<[^>]+>', '', html.unescape(f['html']))}")
-    print(f"\nreport: {args.output}")
+    print(f"\nreport: {output}")
     return 0
 
 

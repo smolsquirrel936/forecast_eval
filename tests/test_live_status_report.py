@@ -181,3 +181,35 @@ def test_main_writes_the_page_and_json(tmp_path, monkeypatch):
                     "--json", str(js), "--now", (NOW + timedelta(0)).isoformat()]) == 0
     assert page.read_text(encoding="utf-8").startswith("<!doctype html>")
     assert json.loads(js.read_text(encoding="utf-8"))["generated"] == NOW.isoformat()
+
+
+def test_default_output_is_stamped_with_the_report_time(tmp_path):
+    """One fixed name meant every run overwrote the last page."""
+    assert sr.default_output(NOW, tmp_path) == tmp_path / "simtrade_status_report_20261001_183000.html"
+    later = sr.default_output(NOW + timedelta(seconds=1), tmp_path)
+    assert later != sr.default_output(NOW, tmp_path)
+    assert sorted([later.name, sr.default_output(NOW, tmp_path).name])[0].endswith("183000.html")
+
+
+def test_main_without_output_writes_the_stamped_page(tmp_path, monkeypatch):
+    """The stamp follows --now, so a pinned build gets a pinned name too."""
+    out, log = _outputs(tmp_path)
+    monkeypatch.setattr(sr, "list_processes", _procs)
+    monkeypatch.setattr(sr, "read_hardware", lambda pids: HW)
+    monkeypatch.setattr(sr, "REPO_ROOT", tmp_path)
+    assert sr.main(["--outputs", str(out), "--log", str(log), "--now", NOW.isoformat()]) == 0
+    page = tmp_path / "simtrade_status_report_20261001_183000.html"
+    assert page.read_text(encoding="utf-8").startswith("<!doctype html>")
+    assert not (tmp_path / "simtrade_status_report.html").exists()
+
+
+def test_explicit_output_still_wins(tmp_path, monkeypatch):
+    out, log = _outputs(tmp_path)
+    monkeypatch.setattr(sr, "list_processes", _procs)
+    monkeypatch.setattr(sr, "read_hardware", lambda pids: HW)
+    monkeypatch.setattr(sr, "REPO_ROOT", tmp_path)
+    page = tmp_path / "mine.html"
+    assert sr.main(["--outputs", str(out), "--log", str(log), "--output", str(page),
+                    "--now", NOW.isoformat()]) == 0
+    assert page.exists()
+    assert list(tmp_path.glob("simtrade_status_report_*.html")) == []
