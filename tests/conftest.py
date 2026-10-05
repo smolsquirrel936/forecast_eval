@@ -37,7 +37,7 @@ def cheap_strategy(monkeypatch):
         # The band is fixed at what `LiveConfig` used to default to for every
         # policy, NOT read from `params(session)`. These cases assert on a
         # forecast that crosses it, and day's package band (0.001) is wider than
-        # night's (0.00045) — reading the package would make the same generated
+        # night's (0.0004) — reading the package would make the same generated
         # frame emit BUY under one policy and HOLD under the other, which is a
         # property of the strategy, not of the assembly under test.
         p = {**strategy_wiring.params(session), **overrides}

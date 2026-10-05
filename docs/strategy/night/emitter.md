@@ -24,10 +24,11 @@ probability `prob_up`, and derives the conviction `strength` the Trader sizes on
 - The shared original is **frozen and hash-guarded** by
   `tests/test_strategy_isolation.py`. Edit that file and all three sessions move
   at once — copy into your package instead.
-- Constructed by [wiring.py](wiring.md) at NIGHT's pinned band (±0.00045 / `min_prob` 0.5). The four
-  knobs `real_data.py` never exposed — `short_window`, `min_trend_ticks`,
-  `path_momentum`, `trend_filter` — stay at this class's own defaults
-  (3 / 3.0 / True / True), which is what every recorded run used.
+- Constructed by [wiring.py](wiring.md) at NIGHT's band (±0.0004 / `min_prob` 0.6,
+  `night_iter30`). The four knobs `real_data.py` never exposed — `short_window`,
+  `min_trend_ticks`, `path_momentum`, `trend_filter` — stay at this class's own
+  defaults (3 / **10.0** / True / True). `min_trend_ticks` is the one this
+  package diverged on: `night_iter05` moved its default from the shared 3.0.
 - Stateful: `_short_prices` is a rolling deque, so a fresh instance per run is
   required. `wiring.make_strategy()` builds one each call for that reason.
 

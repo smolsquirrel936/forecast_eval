@@ -121,9 +121,10 @@ def test_a_deployment_reads_its_band_from_its_own_package():
     assert night["buy_threshold"] != day["buy_threshold"]
     assert night["min_prob"] != day["min_prob"]
     # ...and the model itself was never re-tuned, so these must still agree.
+    # `stride_bars` is not among them: it is a cadence, and night_iter30 tuned
+    # night's to 15 (day stays 30).
     assert night["checkpoint"] == day["checkpoint"]
     assert night["context_length"] == day["context_length"]
-    assert night["stride_bars"] == day["stride_bars"]
     assert night["horizon_bars"] == day["horizon_bars"]
 
 

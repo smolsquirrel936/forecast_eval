@@ -228,13 +228,13 @@ def test_the_rebuilt_params_are_the_live_ones_key_for_key(name):
 
     cfg = config_named(name)
     if name == "night" and not cfg.is_tuned:
-        # SIMTRADE_0929: night_iter10's band is asymmetric (+0.00065/-0.00045)
-        # and its pin unprovenanced. `describe()` prints one `band=+-x` and
-        # UNTUNED/nan, so a rebuilt report reads sell as -0.00065 and the source
-        # as "UNTUNED"; live's params.json carries the true values. Known,
-        # recorded in strategy/README.md, not fixed on this branch.
-        pytest.skip("night's asymmetric band and unprovenanced pin cannot "
-                    "round-trip through the one-line describe() summary")
+        # SIMTRADE_0929: night's pin is unprovenanced. `describe()` prints
+        # UNTUNED/nan, so a rebuilt report reads the source as "UNTUNED";
+        # live's params.json carries None. night_iter30's band is symmetric
+        # (+-0.0004), so the band itself now round-trips -- only the source
+        # does not (measured 2026-10-05). Not fixed on this branch.
+        pytest.skip("night's unprovenanced pin cannot round-trip through the "
+                    "one-line describe() summary")
     pkg = cfg.strategy_package
     live = live_params(cfg, strategy_params=wiring.params(pkg),
                        strategy_origins={k: pkg for k in wiring.params(pkg)},

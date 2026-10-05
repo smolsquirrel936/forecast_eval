@@ -44,38 +44,45 @@ places orders on.** `live/config.py` holds only the provenance record.
   and 5.1186 are the same strategy scored on different windows; neither is a
   forecast of the other.
 
-## Night — `night_iter10`
+## Night — `night_iter30`
 
 | Knob | Value |
 |---|---|
-| band | buy **+0.00065** / sell −0.00045 |
-| `min_prob` | **0.55** |
-| `min_trend_ticks` | **12** (class default 3) |
-| `long_only` | **True** — a SELL while flat opens nothing; a SELL while long still closes |
-| `stride_bars` | 30 |
+| band | buy +0.0004 / sell −0.0004 |
+| `min_prob` | **0.6** |
+| `min_trend_ticks` | **10** — the emitter's class default in this package (shared default 3) |
+| `stride_bars` | **15** |
+| sides | long and short |
 
-- **Source:** `autoresearch_night_0918` @ `6159a4c`, plus `4bf33063c` (fixes the
-  iter08 knob test to pin the threading, not the value). The branch forked from
-  `ff3a601`, six commits behind `main`; applied here as one commit whose code is
-  identical to the branch apart from `main`'s docstring hash lines.
-- **Score:** Calmar **6.5793**, 144 trades, on the **whole** night eval window
-  (the unsplit loop — there is no held-out tail).
+- **Source:** `autoresearch_night_1004` @ `4cbc1e6`. `strategy/night/` is copied
+  from that commit file for file; the branch forked from this branch at
+  `887bc5d`. Replaced `night_iter10` (`autoresearch_night_0918` @ `6159a4c`,
+  long-only, Calmar 6.5793) on 2026-10-05.
+- **Score:** Calmar **7.2974**, 376 trades, net +29 107 points, max drawdown
+  −3 989, on the **whole** night eval window (warmup 6000; the unsplit loop —
+  there is no held-out tail).
 - **Rationale (the keeps, in order):**
 
   | iter | change | Calmar |
   |---|---|---|
-  | 01 | baseline | 3.4962 (235 trades) |
-  | 02 | `long_only` — the baseline's 88 shorts lost 3 248 pts while its 147 longs made 26 894 | 4.5025 |
-  | 05 | buy band 0.00045 → 0.0006 — drops marginal entries whose re-entry paths were the drag | 5.3176 |
-  | 06 | `min_prob` 0.5 → 0.55 — cuts entries with `dir_prob` in [0.5, 0.55) | 5.4405 |
-  | 07 | buy band → 0.00065 | 5.9531 |
-  | 08–10 | `min_trend_ticks` 3 → 20 → 15 → 12 — the trend filter demands a real early→late move | 6.2542 → 6.4202 → 6.5793 |
+  | 01 | baseline — `PINNED`'s old settings (±0.00045, `min_prob` 0.5, stride 30) | 1.1731 (310 trades) |
+  | 02 | `min_prob` 0.5 → 0.6 | 3.0996 |
+  | 05 | `min_trend_ticks` 3 → 10 (emitter default) — the trend filter demands a real early→late move | 4.0294 |
+  | 13 | stride 30 → 15 — a new forecast stream, not like-for-like | 5.5250 |
+  | 30 | band ±0.00045 → ±0.0004 | 7.2974 |
 
-  Discarded along the way: stride 15 (iter03), conviction sizing to 3 lots
-  (iter04), horizon 60 with √2 bands (iter11).
-- **Live source record:** `PINNED` now has `source_commit`/`source_calmar`
-  `None` (the row is in `results_night.tsv`, not `results.tsv`); the banner
-  prints `UNTUNED calmar=nan` and `source_note` names the commit.
+  Discarded along the way: long-only (iter26, 4.0624 — dropping shorts raised
+  the drawdown; two-sided shorts were acting as fast exits from longs), stride
+  10, horizon 15 and 60, context 1504, a time stop and two fixed stop-losses,
+  and a quantile fan gate.
+- **Live source record:** `PINNED` has `source_commit`/`source_calmar` `None`
+  (the row is in `autoresearch_night_1004`'s `results_night.tsv`, not
+  `results.tsv`); the banner prints `UNTUNED calmar=nan` and `source_note` names
+  the commit.
+- **Mid-soak swap.** Night's soak (`soak_20260929_082008_180784`) ran
+  `night_iter10` until this change. Its earlier run folders record the old
+  `strategy_sha`, which `live/status_report.py` shows as differing from the
+  package on disk.
 
 ## Fullday — `fullday_split_iter07`
 
@@ -113,10 +120,11 @@ places orders on.** `live/config.py` holds only the provenance record.
    (TRAIN_TEST_SPLIT_PLAN §4.4). This simtrade is their first out-of-sample
    exposure.
 3. **Night was tuned and scored on the same bars** — every bar the Calmar covers
-   was seen by the search that chose the settings. Eight hand-picked steps is how
-   overfitting looks, and nothing here rules it out.
-4. **Night is long-only.** It bets the tuning years' uptrend continues; in a
-   sustained decline it can only sit flat or exit longs.
+   was seen by the search that chose the settings. Five keeps out of thirty
+   tries is how overfitting looks, and nothing here rules it out.
+4. **Night trades both sides** since `night_iter30` (it was long-only under
+   `night_iter10`). Its shorts lost points on their own in the search (−3 338 on
+   iter13) but cutting them cost more drawdown than it saved.
 5. **Fullday's probability gate is nearly idle at 0.50.** It still rejects a
    signal whose own direction has probability under one half (`emitter.py:180`),
    but moving 0.55 → 0.50 left the trade count at 134 — the loop's "gate
@@ -133,15 +141,16 @@ places orders on.** `live/config.py` holds only the provenance record.
 9. **Data allowance.** Four logins subscribe the same tick stream; what that
    costs against the 500 MiB/day allowance is unmeasured (§18.13). The owner
    warns below 50 MB but does not stop.
-10. **Night's banner understates its settings.** `LiveConfig.describe()` prints
-    `trend=` from the emitter's signature default and one `band=±x`, so night's
-    console banner reads `trend=3.0 band=±0.00065` while the stack trades
-    `min_trend_ticks` 12 and +0.00065 / −0.00045 (verified 2026-09-29 by building
-    it). Live's `params.json` records the true values. A report rebuilt offline by
-    `tools/session_artifacts.py` inherits the error (sell −0.00065).
-11. **Fullday's warm-up is shorter.** At stride 15 the default is 13 calendar
-    days (night 30, day 84). Priming needs 3 non-HOLD signals in the window; if
-    fullday stops with `emitter priming incomplete`, re-run it with
+10. **Night's banner is accurate again** (`night_iter30`). `LiveConfig.describe()`
+    prints `trend=` from the emitter's signature default and one `band=±x`;
+    under `night_iter10` that read `trend=3.0 band=±0.00065` against a stack
+    trading 12 and +0.00065 / −0.00045. iter30 keeps `min_trend_ticks` in the
+    emitter's default (10.0) and has a symmetric band, so the banner now matches
+    what trades. `min_trend_ticks` is still absent from `params.json`.
+11. **Fullday's and night's warm-ups are shorter.** At stride 15 the defaults
+    are 13 calendar days for fullday and 18 for night (day 84; night was 30 at
+    stride 30). Priming needs 3 non-HOLD signals in the window; if
+    either stops with `emitter priming incomplete`, re-run it with
     `--warmup-days 30`. It refuses before trading, so a retry is safe.
 12. **Re-logins and the 5-connection cap (accepted 2026-09-29).** Shioaji
     allows 5 connections per `person_id`; the owner plus three deployments hold

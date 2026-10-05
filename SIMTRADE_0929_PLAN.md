@@ -47,6 +47,8 @@ What differed from the plan, all recorded in `strategy/README.md`:
 
 The three Calmars were scored on different windows and are **not comparable**.
 
+**2026-10-05: night replaced by `night_iter30`** (`4cbc1e6`, branch `autoresearch_night_1004`): band ±0.0004, `min_prob` 0.6, `min_trend_ticks` 10 (emitter default), stride 15, **two-sided**; Calmar 7.2974, 376 trades (whole data). The night row above and the night steps below describe what ran until then. Current settings: `strategy/README.md`.
+
 ## 2. Steps
 
 ### Step 1 — Back up `outputs/`

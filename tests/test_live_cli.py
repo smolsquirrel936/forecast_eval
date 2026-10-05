@@ -333,7 +333,8 @@ def test_warmup_window_defaults_wide_enough_for_priming():
     deployment, since DAY's shorter sessions need a wider window for the same
     number of boundaries, not the same one."""
     assert cli.build_parser().parse_args([]).warmup_days is None
-    assert config_named("night").warmup_days_default() >= 30
+    # SIMTRADE_0929 night_iter30: night's own `>= 30` days line is gone -- at
+    # stride 15 it needs 18 days for the same boundaries, which the loop checks.
     for name, cfg in CONFIGS.items():
         got = cfg.warmup_days_default()
         # >= 21 night sessions of boundaries (21 * 840 bars at NIGHT's stride
@@ -501,8 +502,9 @@ def test_warmup_days_default_follows_the_selected_config_not_pinned():
     Argparse evaluates defaults when the parser is *built*, before --config has
     been read, so a baked `default=PINNED.warmup_days_default()` is always
     NIGHT's 30. A DAY run inheriting 30 reaches ~109 emitter boundaries and about
-    4 non-HOLD samples against `_check_primed`'s floor of 3."""
-    for argv, expected in ([], 30), (["--config", "day"], 84):
+    4 non-HOLD samples against `_check_primed`'s floor of 3. (NIGHT's own default
+    is 18 since night_iter30 moved its stride to 15.)"""
+    for argv, expected in ([], 18), (["--config", "day"], 84):
         args = cli.build_parser().parse_args(argv)
         # unresolved at parse time -- that is the point
         assert args.warmup_days is None

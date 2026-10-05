@@ -107,7 +107,7 @@ def _flag(text, name):
 # ---- provenance -------------------------------------------------------------
 
 # SIMTRADE_0929: the NIGHT pin carries no provenance (its package trades
-# night_iter10, a row only `results_night.tsv` records), so every assertion that
+# night_iter30, a row only `results_night.tsv` records), so every assertion that
 # checks PINNED against its `results.tsv` row is inapplicable -- the same reason
 # the parametrized guards below skip fullday. Not enforcement: live/cli.py has
 # no provenance gate (LIVE_STRATEGY_ROUTING_PLAN D1).
@@ -207,7 +207,7 @@ def test_risk_shape_matches_the_backtest():
 
 def test_cadence_and_context_match_the_tuned_run():
     assert _params(PINNED)["context_length"] == 3008
-    assert _params(PINNED)["stride_bars"] == 30
+    assert _params(PINNED)["stride_bars"] == 15   # night_iter13, kept by iter30
     assert _params(PINNED)["horizon_bars"] == 30
 
 
@@ -303,16 +303,18 @@ def test_warmup_days_default_is_policy_derived_not_a_flat_constant():
     silent about it: at DAY's 300 bars/session it reaches only 109 boundaries,
     expected ~4 non-HOLD samples against the 3-sample floor `_check_primed`
     refuses below. Reproduces the pinned run's own numbers exactly."""
-    assert PINNED.warmup_days_default() == 30   # unchanged from the old default
-    # The cadence now comes from the DAY package, which declares the same 3008 /
-    # 30 as NIGHT -- so this still isolates the policy's bars-per-session as the
-    # only thing that moved.
+    # SIMTRADE_0929 night_iter30: NIGHT's stride is 15, so its default is 18
+    # (3008 + 15*500 bars), not the old 30 -- the derivation following the
+    # package is the point of D2.
+    assert PINNED.warmup_days_default() == 18
+    # The cadence comes from the DAY package (3008 / 30), so DAY still
+    # reproduces the plan's own number.
     day_cfg = LiveConfig(
         source_commit=PINNED.source_commit, source_calmar=PINNED.source_calmar,
         source_dataset=PINNED.source_dataset, source_note=PINNED.source_note,
         policy=SessionPolicy.day(),
     )
-    assert (_params(day_cfg)["context_length"], _params(day_cfg)["stride_bars"])         == (_params(PINNED)["context_length"], _params(PINNED)["stride_bars"])
+    assert (_params(day_cfg)["context_length"], _params(day_cfg)["stride_bars"]) == (3008, 30)
     assert day_cfg.warmup_days_default() == 84   # DAY_SESSION_PLAN quoted ~85
 
 

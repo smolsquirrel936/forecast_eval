@@ -9,12 +9,6 @@ PER-SESSION COPY (STRATEGY_SPLIT_PLAN S1). Verbatim copy of
 ``tests/test_strategy_isolation.py`` pins it), with only the relative-import depth
 changed. It is this package's to edit; the shared original is frozen and
 hash-guarded by ``tests/test_strategy_isolation.py``. Diverge freely here.
-
-Diverged at ``night_iter02``: the ``long_only`` knob. When set, a SELL that
-arrives while flat opens no short — it is treated as HOLD (any pending order
-is still cancelled first, §4.4). SELL while long still closes, so the
-long-side exit path is untouched. ``long_only=False`` (the default) is
-byte-identical to the shared copy.
 """
 from datetime import datetime
 from typing import Literal, Optional
@@ -35,7 +29,6 @@ class Trader:
         aggression_ticks: int = 3,
         max_position: int = 1,
         max_aggression_ticks: Optional[int] = None,
-        long_only: bool = False,
     ):
         # Tech: hold the execution handle and order-placement parameters, and
         #       initialize position/entry tracking to flat.
@@ -56,13 +49,6 @@ class Trader:
         self.aggression_ticks = aggression_ticks
         self.max_position = max_position
         self.max_aggression_ticks = max_aggression_ticks
-        # Tech: night_iter02 divergence — when True, SELL while flat is a no-op
-        #       (entry veto), not a short entry. See on_signal.
-        # Why:  on the evaluated night window the short book was a net loser
-        #       (baseline 88 shorts, −3 248 pts vs 147 longs, +26 894 pts), so
-        #       this session stops opening the losing side while keeping the
-        #       close-only semantics the no-flip rule already provides.
-        self.long_only = long_only
         self.position = 0  # signed contracts; +long / -short
         self.entry_price: float = 0.0
         self.entry_bar_idx: int = -1
@@ -109,16 +95,6 @@ class Trader:
         # Why:  HOLD is a real decision (stand aside), not a no-op — its cancel is
         #       the whole point, so we return without submitting anything.
         if direction == "HOLD":
-            return None
-
-        # Tech: night_iter02 long-only veto — a SELL arriving while flat would
-        #       open a short; with long_only set, stand aside instead. The
-        #       cancel above has already run, so this behaves exactly like HOLD.
-        # Why:  same rationale as the knob — the short side of this session's
-        #       baseline was a net loser, so it is not allowed to open positions.
-        #       SELL-while-long deliberately still reaches the state machine
-        #       below (a close, never an entry), so exiting longs is unchanged.
-        if self.long_only and direction == "SELL" and self.position == 0:
             return None
 
         # Tech: capture the reference price; entries use a confidence-scaled offset

@@ -39,7 +39,7 @@ class ThresholdEmitter(SignalEmitter):
         min_prob: Optional[float] = None,
         full_confidence_prob: float = 0.9,
         short_window: int = 3,
-        min_trend_ticks: float = 3.0,
+        min_trend_ticks: float = 10.0,
         path_momentum: bool = True,
         trend_filter: bool = True,
     ):

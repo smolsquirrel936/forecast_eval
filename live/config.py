@@ -215,8 +215,10 @@ class LiveConfig:
 
 # Tech: SIMTRADE_0929 — the NIGHT deployment's provenance is cleared
 #       (`source_commit`/`source_calmar` None), because its package now trades
-#       `night_iter10` (`6159a4c`, branch `autoresearch_night_0918`, whole-data
-#       Calmar 6.5793, 144 trades), a row that lives only in `results_night.tsv`.
+#       `night_iter30` (`4cbc1e6`, branch `autoresearch_night_1004`, whole-data
+#       Calmar 7.2974, 376 trades), a row that lives only in that branch's
+#       `results_night.tsv`. It replaced `night_iter10` (`6159a4c`, Calmar
+#       6.5793) on 2026-10-05.
 # Why:  SIMTRADE_0929_PLAN step 5. `results.tsv` has no row for these settings,
 #       so the 4282d33 pin below would name a strategy this deployment no longer
 #       trades. None is the honest value (the same one FULL-DAY used); the source
@@ -268,11 +270,11 @@ PINNED = LiveConfig(
     source_calmar=None,
     source_dataset=r"\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_night.csv",
     source_note=(
-        "SIMTRADE_0929: night_iter10 (6159a4c, autoresearch_night_0918) + "
-        "knob-test fix 4bf33063c; Calmar 6.5793 on the WHOLE eval window "
-        "(no held-out tail), 144 trades; recorded in results_night.tsv only, "
-        "not results.tsv. buy +0.00065 / sell -0.00045, min_prob 0.55, "
-        "min_trend_ticks 12, long_only"
+        "SIMTRADE_0929: night_iter30 (4cbc1e6, autoresearch_night_1004); "
+        "Calmar 7.2974 on the WHOLE eval window (no held-out tail), 376 "
+        "trades; recorded in that branch's results_night.tsv only, not "
+        "results.tsv. band +-0.0004, min_prob 0.6, min_trend_ticks 10, "
+        "stride 15, two-sided"
     ),
     policy=SessionPolicy.night(),
 )

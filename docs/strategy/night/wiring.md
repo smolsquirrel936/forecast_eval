@@ -12,7 +12,7 @@ factory. This is the file a search for this session edits first.
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
-| `PARAMS` | dict | the twelve shared default knobs `--strategy night` resolves against, plus this session's own `long_only` |
+| `PARAMS` | dict | the twelve shared default knobs `--strategy night` resolves against |
 | `make_strategy(*, warmup_bars, tick_size=1.0, **overrides)` | function | the session's strategy stack |
 
 ## Return contract
@@ -26,35 +26,26 @@ factory. This is the file a search for this session edits first.
 | `params` | dict | the resolved knobs, for the run banner and `params.json` |
 
 ## Provenance
-`PINNED` (commit `4282d33`) — band ±0.00045 / `min_prob` 0.5, measured at **fee
-0.00015** (the harness default then; it is 0.0002 now), warmup 538 790. The row's
-figures are in `results.tsv` and in `live/config.py:PINNED`. **No Calmar carries
-out of it as a bar to beat** (DAYNIGHT_TOTO2_RESET_PLAN §6 Q4): `results_night.tsv`
-starts empty and the loop's `iter01` sets the first best.
+`night_iter30` (`4cbc1e6`, branch `autoresearch_night_1004`) — band ±0.0004,
+`min_prob` 0.6, `stride_bars` 15, and the emitter's `min_trend_ticks` default
+moved 3.0 → 10.0. Calmar **7.2974**, 376 trades, on the **whole** night eval window
+(warmup 6000, no held-out tail); the row is in that branch's `results_night.tsv`,
+not `results.tsv`, so `live/config.py:PINNED` carries no `source_commit`. The
+search started from `PINNED`'s old settings (`4282d33`, band ±0.00045 /
+`min_prob` 0.5), which its `iter01` scored at 1.1731.
 
 ## Key points / gotchas
-- **Starting at the pinned config is what makes the split checkable.**
-  `--strategy night` must reproduce the recorded run exactly (gate G1), so
-  any deviation is a bug in the split rather than a strategy change.
 - An unknown `**overrides` key **raises** rather than being ignored. A silently
   dropped override would run the pinned value while the command line said
   otherwise — the class of mismatch `live/config.py` was written to end.
 - `warmup_bars` and `tick_size` come from the run, not the strategy; everything
   else defaults from `PARAMS` and is beaten by an explicit CLI flag.
 - Four emitter knobs are deliberately **not** in `PARAMS` — `short_window`,
-  `min_trend_ticks`, `path_momentum`, `trend_filter`. `real_data.py` never
-  exposed them, so every recorded run used the emitter's class defaults; leaving
-  them there is what reproduces those runs.
-- **`night_iter02` added a session-declared knob beyond the shared twelve**:
-  `long_only` (default `True`), threaded into [trader.py](trader.md)'s entry
-  veto. `--param long_only=False` on the evaluation command restores short
-  entries without an edit.
-- **`night_iter08` declared the first of the formerly-absent emitter knobs**:
-  `min_trend_ticks` (20.0) is now in `PARAMS` and threaded into the built
-  emitter, so it lands in `params.json` and `--param` reaches it. The other
-  three emitter-class knobs (`short_window`, `path_momentum`, `trend_filter`)
-  remain on the copied emitter's defaults; moving them means editing
-  [emitter.py](emitter.md).
+  `min_trend_ticks`, `path_momentum`, `trend_filter`. They stay at
+  [emitter.py](emitter.md)'s class defaults, so a search that moves one edits
+  that file: `night_iter05` moved `min_trend_ticks` 3.0 → 10.0 there. Being out
+  of `PARAMS`, `--param` cannot reach it and `params.json` does not record it;
+  the live banner and `meta` header do (`describe()` reads the class default).
 
 ## Related
 [strategy/night/wiring.md](wiring.md) · [strategy/wiring.py](../wiring.md) · [strategy/base.py](../base.md) · [STRATEGY_SPLIT_PLAN.md](../../../STRATEGY_SPLIT_PLAN.md)

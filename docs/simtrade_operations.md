@@ -460,6 +460,8 @@ that branch only.
 | night | `night_iter10` | +0.00065 / −0.00045, `min_prob` 0.55, **long-only**, stride 30 |
 | fullday | `fullday_split_iter07` | band ±0.001, `min_prob` 0.50, stride 15 |
 
+**2026-10-05: night replaced by `night_iter30`** (`4cbc1e6`, branch `autoresearch_night_1004`): band ±0.0004, `min_prob` 0.6, `min_trend_ticks` 10 (emitter default), stride 15, **two-sided**; Calmar 7.2974, 376 trades (whole data). The night row above, and the observations below dated before it, describe `night_iter10`. Current settings: `strategy/README.md`.
+
 **2026-10-03 09:51: running, with the warm-up VRAM fix** (`simtrade_0929` @
 `7e57912`, `main` merged in). Same soak epochs; latest run folders
 `live_<slug>_20261003_0949xx/0950xx`. The snapshot that follows is from before
