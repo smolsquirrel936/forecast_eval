@@ -29,7 +29,9 @@ tests run with the package absent — the same arrangement `ShioajiBroker` uses.
 from __future__ import annotations
 
 import threading
-from typing import Any, Callable, Dict, Iterable, List, Optional
+import time
+from collections import deque
+from typing import Any, Callable, Deque, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 
@@ -46,6 +48,17 @@ from .owner import COVER, Leg, OrderBook, plan_legs
 #       signal: it is reported, because deciding what to do about an absent
 #       deployment holding a lot is a risk call, not a mechanical one.
 DEFAULT_DEPLOYMENT_TIMEOUT = 180.0
+
+# Tech: how long a venue-vs-book difference that orders in flight can explain
+#       may last before the running reconcile calls it a failure.
+# Why:  MEASURED 2026-10-06 (simtrade_0929): order 14AD46 filled at 09:14:04.5,
+#       the reconcile at ~09:14:07 read the venue at +1 against a book still at
+#       0, and the owner stopped before the deal callback arrived — stranding a
+#       lot no ledger held. `list_positions` catches up in ~0.1 s (§18.10) but
+#       deal callbacks have taken 12 s and 42 s to book (§23.7), so any check
+#       inside that window sees the venue ahead. 120 s is about 3x the slowest
+#       booking seen; an unexplainable difference still fails at once.
+DEFAULT_RECONCILE_GRACE = 120.0
 
 
 def _load_sj() -> Any:
@@ -86,6 +99,8 @@ class OwnerProcess:
         tick_size: float = 1.0,
         flatten_aggression_ticks: int = 5,
         deployment_timeout: float = DEFAULT_DEPLOYMENT_TIMEOUT,
+        reconcile_grace: float = DEFAULT_RECONCILE_GRACE,
+        clock: Callable[[], float] = time.monotonic,
         recorder: Any = None,
         on_anomaly: Optional[Callable[[str], None]] = None,
     ) -> None:
@@ -106,6 +121,18 @@ class OwnerProcess:
         self.tick_size = tick_size
         self.flatten_aggression_ticks = flatten_aggression_ticks
         self.deployment_timeout = deployment_timeout
+        # Tech: the reconcile's grace state — when the current in-flight
+        #       difference was first seen, the deals booked recently, the line
+        #       the CLI prints while waiting, and the freeze reason.
+        # Why:  see `reconcile` and `freeze`. `_recent` is a deque because the
+        #       venue's callback thread appends while the main loop prunes and
+        #       reads; append/popleft are atomic, and a reader takes a snapshot.
+        self.reconcile_grace = reconcile_grace
+        self._clock = clock
+        self._mismatch_since: Optional[float] = None
+        self._recent: Deque[Tuple[float, int]] = deque()
+        self.reconcile_note: Optional[str] = None
+        self.frozen: Optional[str] = None
         # Tech: the observers are assigned BEFORE the book is constructed.
         # Why:  the default book is given `self._anomaly` as its callback, and
         #       that method reads `self.anomalies` and `self.recorder`. Building
@@ -131,6 +158,26 @@ class OwnerProcess:
             for slug in self.slugs}
         for stream in self._out.values():
             stream.resume_seq()
+        # Tech: consume every intent already on disk without acting on it, and
+        #       keep the count per deployment.
+        # Why:  a fresh stream reads from byte 0, so a restarted owner used to
+        #       place every intent a deployment had EVER sent — after 2026-10-06
+        #       that would have re-sent fullday's 09:13 BUY on the first pass.
+        #       An intent the owner did not act on while it was running is stale:
+        #       its deployment has halted on the silence (`ClientBroker`) and
+        #       re-decides on `--resume`. A corrupt history line is reported as
+        #       the same anomaly `poll` raises: `read_new` has already moved
+        #       past it, so swallowing the error would lose the only report.
+        self.skipped_intents: Dict[str, int] = {}
+        for slug, stream in self._in.items():
+            try:
+                self.skipped_intents[slug] = len(stream.read_new())
+            except ValueError as exc:
+                self.skipped_intents[slug] = 0
+                self._anomaly(f"{slug}: {exc}")
+        if self.recorder is not None:
+            self.recorder.record("owner_intents_skipped",
+                                 skipped=dict(self.skipped_intents))
         # Tech: one lock over every outbound stream.
         # Why:  fills are written from the venue's callback thread while
         #       positions and heartbeats are written from the owner's own loop.
@@ -222,6 +269,15 @@ class OwnerProcess:
         #       (§18.9). Rebuilding an `OrderEvent` keeps the leg carrying what
         #       the deployment actually asked for, so a fill can be reported
         #       against the intent rather than against the leg it became.
+        if self.recorder is not None:
+            self.recorder.record("owner_intent", slug=slug, intent=intent)
+        # Tech: a frozen owner answers every submit with `rejected`.
+        # Why:  see `freeze`. The rejection is what halts the asking deployment
+        #       (`ClientBroker`), so a deployment stops when it next tries to
+        #       trade — not before, while it is merely holding.
+        if self.frozen is not None:
+            self._emit(slug, "rejected", reason=f"owner frozen: {self.frozen}")
+            return
         try:
             order = OrderEvent(
                 timestamp=pd.Timestamp(intent["timestamp"]),
@@ -271,11 +327,20 @@ class OwnerProcess:
             self._anomaly(f"{slug}: place_order raised: {exc!r}")
             self._emit(slug, "rejected", reason=f"place_order raised: {exc!r}")
             return
-        self.book.register(
+        working = self.book.register(
             slug, order, leg, trade=trade,
             order_id=_dig(trade, "order", "id"),
             ordno=_dig(trade, "order", "ordno"),
         )
+        # Tech: record which deployment each venue order belongs to.
+        # Why:  `ordno -> slug` lived only in memory, so when the owner stopped
+        #       on 2026-10-06 nothing on disk said whose order 14AD46 was — it
+        #       had to be inferred from the one intent stream that had spoken.
+        if self.recorder is not None:
+            self.recorder.record(
+                "owner_placed", slug=slug, side=order.side, price=price,
+                octype=leg.octype, quantity=leg.quantity,
+                order_id=working.order_id, ordno=working.ordno)
 
     def _cancel(self, slug: str) -> None:
         # Tech: flag this deployment's legs and ask the venue to cancel each.
@@ -353,6 +418,9 @@ class OwnerProcess:
         order = msg.get("order") or {}
         ordno = order.get("ordno")
         oid = order.get("id")
+        if self.recorder is not None:
+            self.recorder.record("owner_order_event", op_type=op_type,
+                                 op_code=op_code, ordno=ordno, order_id=oid)
 
         working = self.book.match(oid, ordno)
         if op_code != "00":
@@ -401,6 +469,13 @@ class OwnerProcess:
         if booked is None:
             return
         slug, fill = booked
+        # Tech: remember when this deal moved the book, and by how much.
+        # Why:  the other side of the race `reconcile` tolerates — a deal booked
+        #       a moment before `list_positions` catches up puts the book AHEAD
+        #       of the venue, and the leg is already finished by then.
+        self._recent.append((self._clock(),
+                             fill.quantity if fill.side == "BUY"
+                             else -fill.quantity))
         self._emit(slug, "fill", timestamp=fill.timestamp.isoformat(),
                    side=fill.side, fill_price=fill.fill_price,
                    quantity=fill.quantity, fee=fill.fee)
@@ -435,7 +510,11 @@ class OwnerProcess:
                        avg_price=self.book.entry_for(slug))
 
     def reconcile(self) -> Optional[bool]:
-        """Compare the account's booked net against the venue. None = cannot ask."""
+        """Compare the account's booked net against the venue. None = cannot ask.
+
+        True also covers a difference that orders still in flight explain, for
+        up to `reconcile_grace` seconds; `reconcile_note` then says so.
+        """
         # Tech: read `list_positions` for our contract, compare against
         #       `OrderBook.account_net`, and raise an anomaly on a disagreement.
         # Why:  this is the check §16 could only approximate from three files on
@@ -454,13 +533,79 @@ class OwnerProcess:
             return None
         venue = net_position(positions, contract_codes(self.contract))
         booked = self.book.account_net
-        if venue != booked:
+        split = {s: self.book.net_for(s) for s in self.slugs}
+        if venue == booked:
+            if self._mismatch_since is not None and self.recorder is not None:
+                self.recorder.record("owner_reconcile_settled", net=venue)
+            self._mismatch_since = None
+            self.reconcile_note = None
+            return True
+
+        # Tech: a difference that orders in flight can explain is "pending" until
+        #       it has lasted `reconcile_grace`; anything else fails at once.
+        # Why:  DEFAULT_RECONCILE_GRACE — the venue reports a fill before its
+        #       deal callback books it, so a check in that window is not a
+        #       desync. The grace is bounded because a callback that never comes
+        #       IS one (§23.6 measured closes that filled and were never booked).
+        now = self._clock()
+        if self._in_flight_explains(venue - booked, now):
+            if self._mismatch_since is None:
+                self._mismatch_since = now
+            waited = now - self._mismatch_since
+            if waited <= self.reconcile_grace:
+                self.reconcile_note = (
+                    f"account mirror {booked} != venue {venue}, explained by "
+                    f"orders in flight — waiting {waited:.0f}s of "
+                    f"{self.reconcile_grace:.0f}s")
+                if self.recorder is not None:
+                    self.recorder.record("owner_reconcile_pending",
+                                         booked=booked, venue=venue,
+                                         waited=waited, per_deployment=split)
+                return True
             self._anomaly(
-                f"account mirror {booked} != venue {venue} "
-                f"(per deployment: "
-                f"{ {s: self.book.net_for(s) for s in self.slugs} })")
+                f"account mirror {booked} != venue {venue} for {waited:.0f}s, "
+                f"past the {self.reconcile_grace:.0f}s grace for fills in "
+                f"flight (per deployment: {split})")
             return False
-        return True
+        self._anomaly(
+            f"account mirror {booked} != venue {venue} "
+            f"(per deployment: {split})")
+        return False
+
+    def _in_flight_explains(self, diff: int, now: float) -> bool:
+        # Tech: True when `diff` (venue minus book) fits inside the unbooked
+        #       remainder of working legs on its side, plus deals booked within
+        #       the grace on the opposite side.
+        # Why:  the two halves of one race. Venue AHEAD: a working leg filled
+        #       and its deal has not arrived — 2026-10-06's +1 against a BUY leg
+        #       with 1 remaining. Venue BEHIND: a deal was booked and
+        #       `list_positions` has not caught up (~0.1 s, §18.10). A
+        #       difference larger than both together is something no order of
+        #       ours explains, and must not be waited out.
+        while self._recent and now - self._recent[0][0] > self.reconcile_grace:
+            self._recent.popleft()
+        sign = 1 if diff > 0 else -1
+        in_flight = sum(w.remaining for w in self.book.all_working()
+                        if (1 if w.order.side == "BUY" else -1) == sign)
+        lagging = sum(abs(s) for _, s in list(self._recent)
+                      if (1 if s > 0 else -1) == -sign)
+        return abs(diff) <= in_flight + lagging
+
+    def freeze(self, reason: str) -> None:
+        """Stop placing orders; keep hearing deals and publishing positions."""
+        # Tech: latch the first reason; every later submit is answered with
+        #       `rejected` (`_submit`). Cancels still reach the venue.
+        # Why:  2026-10-06 — the owner EXITED on a failed reconcile, which
+        #       logged out the only session that could hear the fill it was
+        #       arguing about. Freezing keeps the old rule (no order is sized
+        #       against a disputed net) without dropping the deal stream. Cancels
+        #       pass because they can only reduce what is working. Never
+        #       unfrozen in-process: like `SafetyRails`, a dispute is resolved by
+        #       a person and a restart, not by the next agreeing sample.
+        if self.frozen is None:
+            self.frozen = reason
+            if self.recorder is not None:
+                self.recorder.record("owner_frozen", reason=reason)
 
     def stale_deployments(self) -> List[str]:
         # Tech: deployments that have not written an intent within the timeout.

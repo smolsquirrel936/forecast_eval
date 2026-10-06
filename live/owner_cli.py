@@ -51,9 +51,11 @@ from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+from forecast_eval.live.artifacts import git_commit, git_dirty  # noqa: E402
 from forecast_eval.live.contracts import resolve_txf            # noqa: E402
 from forecast_eval.live.ledger import per_deployment_nets       # noqa: E402
 from forecast_eval.live.owner_process import OwnerProcess       # noqa: E402
+from forecast_eval.live.recorder import Recorder                # noqa: E402
 from forecast_eval.live.relogin import (ReloginScheduler,        # noqa: E402
                                         session_open_anchors)
 from forecast_eval.live.startup import usage_bytes              # noqa: E402
@@ -118,6 +120,14 @@ def _relogin_tick(relogin: Any, now: datetime) -> None:
               f"{relogin.token_age(now)})")
 
 DEFAULT_SLUGS = ("day", "night", "day_night")
+
+# Tech: the owner's own audit trail, appended beside the ledgers in `--out`.
+# Why:  until 2026-10-07 the owner had none — its anomalies went to a console
+#       and nowhere else, so the 2026-10-06 stop had to be reconstructed from
+#       gaps in `events_*.jsonl` and token releases in `shioaji.log`. One file
+#       for every run, appended (`Recorder` writes a `meta` line per start),
+#       because the owner has no per-run folder to put it in.
+OWNER_LOG_NAME = "owner_session.jsonl"
 
 # Tech: the traffic headroom below which the owner starts warning, in bytes.
 # Why:  STRATEGY_SPLIT_PLAN §18.13. `RestartGuard.check_usage` already refuses to
@@ -242,6 +252,10 @@ def main(argv=None) -> int:
     #       the only guarantee there is, and an entry point with no reachable
     #       path to a production account cannot be argued into one.
     api = sj.Shioaji(simulation=True)
+    recorder = Recorder(out_parent / OWNER_LOG_NAME, simulation=True,
+                        meta={"process": "owner", "slugs": list(args.slugs),
+                              "git_commit": git_commit(),
+                              "git_dirty": git_dirty()})
     try:
         accounts = api.login(api_key=cred.api_key, secret_key=cred.secret_key)
         login_at = datetime.now()
@@ -282,7 +296,11 @@ def main(argv=None) -> int:
             api, contract, directory=out_parent, slugs=args.slugs,
             fee_rate=args.fee_rate, tick_size=args.tick_size,
             flatten_aggression_ticks=args.flatten_aggression_ticks,
+            recorder=recorder,
         )
+        skipped = {s: n for s, n in owner.skipped_intents.items() if n}
+        if skipped:
+            print(f"intents already on disk, not replayed: {skipped}")
 
         # Tech: seed from the ledgers, then check that sum against the venue
         #       BEFORE serving anything.
@@ -294,6 +312,8 @@ def main(argv=None) -> int:
         nets = seed_nets(out_parent, args.slugs)
         owner.seed_from(nets)
         print(f"seeded from ledgers: {nets}  account={owner.book.account_net:+d}")
+        recorder.record("owner_seeded", nets=nets,
+                        account=owner.book.account_net)
 
         agreed = owner.reconcile()
         if agreed is False:
@@ -333,6 +353,8 @@ def main(argv=None) -> int:
 
         return _serve(owner, args, api, relogin)
     finally:
+        recorder.record("owner_stop")
+        recorder.close()
         try:
             api.logout()
         except Exception:                               # noqa: BLE001
@@ -375,6 +397,7 @@ def _serve(owner: OwnerProcess, args: Any, api: Any = None,
             pass                                        # not the main thread
 
     last_reconcile = 0.0
+    agreed_since_freeze = False
     while not stopping["now"]:
         owner.poll()
         if relogin is not None:
@@ -383,18 +406,34 @@ def _serve(owner: OwnerProcess, args: Any, api: Any = None,
         now = time.monotonic()
         if now - last_reconcile >= args.reconcile_seconds:
             last_reconcile = now
-            if owner.reconcile() is False:
-                # Tech: a disagreement stops the owner rather than being logged.
+            agreed = owner.reconcile()
+            if agreed is False and owner.frozen is None:
+                # Tech: a disagreement FREEZES the owner — no new orders — and
+                #       the loop keeps serving.
                 # Why:  the account net is what every subsequent leg is sized
-                #       against, so continuing to place orders on a number the
-                #       venue disputes is how one desync becomes many. This is
-                #       the same rule `SafetyRails.on_reconcile` follows and the
-                #       same reason it never auto-corrects: "close the position"
-                #       is undefined when the size is in dispute.
-                print("\n  *** RECONCILIATION FAILED — STOPPING ***",
+                #       against, so placing on a number the venue disputes is how
+                #       one desync becomes many; same rule as
+                #       `SafetyRails.on_reconcile`, which never auto-corrects.
+                #       Until 2026-10-07 this RETURNED, and the logout cut the deal
+                #       stream while a fill was still on its way (2026-10-06,
+                #       `DEFAULT_RECONCILE_GRACE`). Frozen, the owner still books
+                #       that fill and tells its deployment.
+                owner.freeze(owner.anomalies[-1])
+                print("\n  *** RECONCILIATION FAILED — OWNER FROZEN ***",
                       file=sys.stderr)
                 print(f"      {owner.anomalies[-1]}", file=sys.stderr)
-                return 6
+                print("      No new orders are placed; a deployment that submits "
+                      "is rejected and halts.\n      Deals are still booked and "
+                      "positions still published. Reconcile by hand, then\n"
+                      "      Ctrl-C the deployments and this owner, and restart.",
+                      file=sys.stderr)
+            elif agreed is True and owner.frozen is not None:
+                if not agreed_since_freeze:
+                    agreed_since_freeze = True
+                    print("  the venue and the book agree again — still frozen; "
+                          "restart the owner to trade.", file=sys.stderr)
+            elif agreed is True and owner.reconcile_note:
+                print(f"  reconcile pending: {owner.reconcile_note}")
             # Tech: read the traffic meter on the same cadence as the venue
             #       reconcile, and warn below the floor.
             # Why:  §18.13 — `usage()` itself costs bytes, so it rides the
@@ -423,9 +462,12 @@ def _serve(owner: OwnerProcess, args: Any, api: Any = None,
                       f"still open and still counted.")
 
         if args.once:
-            return 0
+            break
         time.sleep(args.poll_seconds)
-    return 0
+    # Tech: a frozen owner exits 6 when it is finally stopped.
+    # Why:  6 already means "the book and the venue disagreed"; the code is how
+    #       a wrapper or a later reader tells a clean stop from a frozen one.
+    return 6 if owner.frozen is not None else 0
 
 
 if __name__ == "__main__":

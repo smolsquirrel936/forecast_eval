@@ -78,6 +78,24 @@ version skew — the owner may add a message type before the deployments are
 redeployed. The second is a bug, and booking a fill with a missing price would be
 worse than stopping.
 
+## A restart reads only what the owner says next
+
+A fresh `JsonlStream` reads from byte 0. A restarted deployment therefore
+re-booked every `fill` the owner had ever sent it, on top of the ledger replay
+`--resume` already does, which doubles the position. It also halted on any old
+`rejected`. The constructor now consumes the history (`skipped_events`, recorded
+by [cli.py](../cli.md) as `wire_history_skipped`) and applies only the
+**newest `position`**, because `adopt_position` asks before the owner's next
+once-a-second report. Liveness still reads the file's newest `ts`, so a stale
+report still reads as a silent owner.
+
+**What this gives up:** a fill the owner booked while this deployment was down
+is not re-delivered. `adopt_position` still takes the size from the owner's
+`position`, and the ledger replay then disagrees with it, so `cli.py` books one
+synthetic opening fill instead (`fills_replay_refused`). The ledger still lacks
+that row, though, and the owner's *next* start-up seeds from the ledger and
+refuses. It is loud and never doubled.
+
 ## Corruption is translated exactly once
 
 `JsonlStream.read_new` **raises** on a complete-but-unparseable line, because

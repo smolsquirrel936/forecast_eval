@@ -69,12 +69,18 @@ class _FakeOwner:
 
     deployment_timeout = 180.0
 
-    def __init__(self, reconcile=(True,), stale=()):
+    def __init__(self, reconcile=(True,), stale=(), note=None):
         self.polls = 0
         self.reconciles = 0
         self._reconcile = list(reconcile)
         self._stale = list(stale)
         self.anomalies = ["mirror 1 != venue 2"]
+        self.frozen = None
+        self.reconcile_note = note
+
+    def freeze(self, reason):
+        if self.frozen is None:
+            self.frozen = reason
 
     def poll(self):
         self.polls += 1
@@ -103,13 +109,61 @@ def test_serve_polls_before_it_reconciles():
     assert owner.reconciles == 1
 
 
-def test_a_failed_reconciliation_stops_the_owner(capsys):
-    """The account net sizes every subsequent leg; continuing multiplies a desync."""
+def test_a_failed_reconciliation_freezes_the_owner(capsys):
+    """The account net sizes every subsequent leg; placing on it multiplies a desync."""
     owner = _FakeOwner(reconcile=(False,))
-    assert _serve(owner, _Args()) == 6
+    assert _serve(owner, _Args()) == 6, "a frozen owner still exits 6 when stopped"
+    assert owner.frozen == "mirror 1 != venue 2"
     err = capsys.readouterr().err
-    assert "RECONCILIATION FAILED" in err
+    assert "RECONCILIATION FAILED — OWNER FROZEN" in err
     assert "mirror 1 != venue 2" in err
+
+
+def _serve_passes(owner, passes, **kw):
+    """Run `_serve` for exactly `passes` passes, reconciling on every one."""
+    original = owner.poll
+
+    def _counting_poll():
+        original()
+        if owner.polls > passes:
+            raise KeyboardInterrupt
+
+    owner.poll = _counting_poll
+    with pytest.raises(KeyboardInterrupt):
+        _serve(owner, _Args(once=False, **kw))
+
+
+def test_a_frozen_owner_keeps_serving():
+    """2026-10-06: the owner RETURNED on a failed reconcile, and the logout cut
+    the deal stream while the fill it was disputing was still on its way.
+    Frozen, it keeps polling — booking deals and publishing positions."""
+    owner = _FakeOwner(reconcile=(False, False, False))
+    _serve_passes(owner, 3)
+    assert owner.polls == 4, "the loop went on past the failure"
+    assert owner.reconciles == 3
+
+
+def test_the_freeze_banner_prints_once_and_keeps_the_first_reason(capsys):
+    owner = _FakeOwner(reconcile=(False, False))
+    _serve_passes(owner, 2)
+    assert capsys.readouterr().err.count("OWNER FROZEN") == 1
+    assert owner.frozen == "mirror 1 != venue 2"
+
+
+def test_agreement_after_a_freeze_is_reported_and_does_not_unfreeze(capsys):
+    """Like SafetyRails: a dispute is settled by a person and a restart."""
+    owner = _FakeOwner(reconcile=(False, True, True))
+    _serve_passes(owner, 3)
+    assert owner.frozen is not None
+    assert capsys.readouterr().err.count("agree again") == 1
+
+
+def test_a_pending_reconcile_is_printed(capsys):
+    owner = _FakeOwner(note="account mirror 0 != venue 1, explained by orders "
+                            "in flight — waiting 3s of 120s")
+    assert _serve(owner, _Args()) == 0
+    assert ("reconcile pending: account mirror 0 != venue 1"
+            in capsys.readouterr().out)
 
 
 def test_a_venue_that_will_not_answer_does_not_stop_the_owner():

@@ -288,6 +288,12 @@ the state matters — `soak_epoch.json` is the one that does, since a later
 wrong" should not be a search. Its records carry no deployment field, though, so
 once two deployments run a `startup_refused` there cannot be attributed to one.
 
+**A `crashed` record names the file and the line.** Its message is
+`repr(exc)` plus ` [file: …]` when the exception carries a filename, and
+`where` holds the innermost frame; the full traceback goes to stderr. Two
+restarts on 2026-10-06 15:13 died on `PermissionError(13, 'Permission denied')`.
+`repr` drops an `OSError`'s filename, so nothing recorded which file it was.
+
 ## `--broker client` — running under the owner (§18)
 
 The deployment keeps its Forecaster, Trader, Portfolio, rails, ledger and PnL.

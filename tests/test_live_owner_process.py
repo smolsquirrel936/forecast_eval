@@ -8,6 +8,7 @@ import pytest
 
 from forecast_eval.events import MarketEvent, OrderEvent
 from forecast_eval.live.broker.client import ClientBroker
+from forecast_eval.live.intents import JsonlStream, event_path
 from forecast_eval.live.owner import COVER, NEW, OrderBook
 from forecast_eval.live.owner_process import OwnerProcess
 
@@ -415,6 +416,227 @@ def test_reconcile_ignores_a_foreign_contract(tmp_path):
     owner, _ = _owner(tmp_path,
                       api=_FakeAPI(positions=[_Row(9, "Buy", code="MXFI6")]))
     assert owner.reconcile() is True
+
+
+# ---- the grace for fills in flight (2026-10-06) ----------------------------
+
+class _Clock:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+
+def _working_buy(tmp_path, api, clock, slug="day"):
+    """An owner with one BUY 1 leg placed for `slug` and not yet filled."""
+    owner, _ = _owner(tmp_path, api=api, clock=clock)
+    ClientBroker(tmp_path, slug).submit(
+        OrderEvent(timestamp=TS, side="BUY", limit_price=100.0, intent="OPEN",
+                   quantity=1), current_price=100.0)
+    owner.poll()
+    assert len(api.placed) == 1
+    return owner
+
+
+def test_a_fill_the_venue_reports_before_its_deal_is_waited_out(tmp_path):
+    """The 2026-10-06 sequence: 14AD46 filled at 09:14:04.5, the reconcile at
+    ~09:14:07 read venue +1 against a book at 0, and the owner stopped before
+    the deal arrived. A working BUY leg explains +1, so it is pending."""
+    clock, api = _Clock(), _FakeAPI(positions=[_Row(1, "Buy")])
+    owner = _working_buy(tmp_path, api, clock)
+    clock.t = 2.5
+    assert owner.reconcile() is True
+    assert owner.anomalies == []
+    assert "explained by orders in flight" in owner.reconcile_note
+
+    clock.t = 40.0                       # §23.7 measured a 42 s booking
+    _deal(owner, "NO1", side="Buy", qty=1)
+    assert owner.reconcile() is True
+    assert owner.reconcile_note is None, "settled once the deal is booked"
+
+
+def test_an_explained_difference_fails_once_the_grace_runs_out(tmp_path):
+    """A deal callback that never comes is a real desync (§23.6)."""
+    clock, api = _Clock(), _FakeAPI(positions=[_Row(1, "Buy")])
+    owner = _working_buy(tmp_path, api, clock)
+    assert owner.reconcile() is True
+    clock.t = 120.0
+    assert owner.reconcile() is True, "the grace is inclusive"
+    clock.t = 121.0
+    assert owner.reconcile() is False
+    assert "past the 120s grace" in owner.anomalies[-1]
+    assert "'day': 0" in owner.anomalies[-1]
+
+
+def test_a_difference_on_the_wrong_side_fails_at_once(tmp_path):
+    """A working BUY cannot explain the venue being SHORT of the book."""
+    clock, api = _Clock(), _FakeAPI(positions=[_Row(1, "Sell")])
+    owner = _working_buy(tmp_path, api, clock)
+    assert owner.reconcile() is False
+    assert "mirror 0 != venue -1" in owner.anomalies[-1]
+
+
+def test_a_difference_larger_than_the_working_legs_fails_at_once(tmp_path):
+    clock, api = _Clock(), _FakeAPI(positions=[_Row(2, "Buy")])
+    owner = _working_buy(tmp_path, api, clock)
+    assert owner.reconcile() is False
+
+
+def test_a_venue_still_catching_up_to_a_booked_deal_is_waited_out(tmp_path):
+    """The other side of the race: booked first, `list_positions` ~0.1 s
+    behind (§18.10). The leg is finished by then, so only the booked deal
+    explains it — and only for the grace."""
+    clock, api = _Clock(), _FakeAPI(positions=[])
+    owner = _working_buy(tmp_path, api, clock)
+    _deal(owner, "NO1", side="Buy", qty=1)
+    clock.t = 0.1
+    assert owner.reconcile() is True
+    assert owner.anomalies == []
+    clock.t = 200.0
+    assert owner.reconcile() is False, "a deal the venue never shows is a desync"
+
+
+def test_the_grace_restarts_after_the_venue_agrees(tmp_path):
+    clock, api = _Clock(), _FakeAPI(positions=[_Row(1, "Buy")])
+    owner = _working_buy(tmp_path, api, clock)
+    assert owner.reconcile() is True               # pending from t=0
+    clock.t = 100.0
+    api.positions = []
+    assert owner.reconcile() is True               # agrees: the timer resets
+    clock.t = 110.0
+    api.positions = [_Row(1, "Buy")]
+    assert owner.reconcile() is True               # pending from t=110
+    clock.t = 200.0
+    assert owner.reconcile() is True, "90 s into a new wait, not 200 s"
+
+
+def test_start_up_has_no_grace(tmp_path):
+    """A fresh owner has nothing in flight, so a seed the venue disputes is
+    still refused at once — the start-up check is unchanged."""
+    owner, _ = _owner(tmp_path, api=_FakeAPI(positions=[_Row(1, "Buy")]),
+                      clock=_Clock())
+    owner.seed_from({"day": 0, "night": 0})
+    assert owner.reconcile() is False
+
+
+# ---- freezing --------------------------------------------------------------
+
+def test_a_frozen_owner_rejects_new_submits(tmp_path):
+    owner, api = _owner(tmp_path)
+    owner.freeze("account mirror 0 != venue 1")
+    day = ClientBroker(tmp_path, "day")
+    day.submit(OrderEvent(timestamp=TS, side="BUY", limit_price=100.0,
+                          intent="OPEN", quantity=1), current_price=100.0)
+    owner.poll()
+    assert api.placed == []
+    events = [e["kind"] for e in JsonlStream(event_path(tmp_path, "day"))._read_all()]
+    assert "rejected" in events
+    day.poll_fills(MarketEvent(timestamp=TS, price=100.0, volume=1,
+                               session="DAY"))
+    assert day.has_pending() is False, "the rejection reaches the deployment"
+
+
+def test_a_frozen_owner_still_books_a_deal_and_tells_its_deployment(tmp_path):
+    """The point of freezing instead of exiting: the fill in flight lands."""
+    owner, api = _owner(tmp_path)
+    day = ClientBroker(tmp_path, "day")
+    day.submit(OrderEvent(timestamp=TS, side="BUY", limit_price=100.0,
+                          intent="OPEN", quantity=1), current_price=100.0)
+    owner.poll()
+    owner.freeze("account mirror 0 != venue 1")
+    _deal(owner, "NO1", side="Buy", qty=1)
+    owner.publish_positions()
+    (fill,) = day.poll_fills(MarketEvent(timestamp=TS, price=100.0, volume=1,
+                                         session="DAY"))
+    assert fill.quantity == 1
+    assert day.broker_position() == 1
+
+
+def test_a_frozen_owner_still_cancels(tmp_path):
+    """A cancel can only reduce what is working."""
+    owner, api = _owner(tmp_path)
+    day = ClientBroker(tmp_path, "day")
+    day.submit(OrderEvent(timestamp=TS, side="BUY", limit_price=100.0,
+                          intent="OPEN", quantity=1), current_price=100.0)
+    owner.poll()
+    owner.freeze("x")
+    day.cancel()
+    owner.poll()
+    assert len(api.cancelled) == 1
+
+
+def test_the_first_freeze_reason_is_kept(tmp_path):
+    owner, _ = _owner(tmp_path)
+    owner.freeze("first")
+    owner.freeze("second")
+    assert owner.frozen == "first"
+
+
+# ---- restarts do not replay the wire ---------------------------------------
+
+def test_a_restarted_owner_does_not_place_old_intents(tmp_path):
+    """A fresh stream reads from byte 0: after 2026-10-06 the restarted owner
+    would have re-sent fullday's 09:13 BUY on its first pass."""
+    ClientBroker(tmp_path, "day").submit(
+        OrderEvent(timestamp=TS, side="BUY", limit_price=100.0, intent="OPEN",
+                   quantity=1), current_price=100.0)
+    owner, api = _owner(tmp_path)
+    owner.poll()
+    assert api.placed == []
+    assert owner.skipped_intents == {"day": 1, "night": 0}
+
+
+def test_intents_written_after_the_owner_starts_are_placed(tmp_path):
+    day = ClientBroker(tmp_path, "day")
+    day.submit(OrderEvent(timestamp=TS, side="BUY", limit_price=100.0,
+                          intent="OPEN", quantity=1), current_price=100.0)
+    owner, api = _owner(tmp_path)
+    day.submit(OrderEvent(timestamp=TS, side="SELL", limit_price=101.0,
+                          intent="CLOSE", quantity=1), current_price=101.0)
+    owner.poll()
+    assert [p.action for p, _ in api.placed] == ["Sell"]
+
+
+# ---- the owner's trail -----------------------------------------------------
+
+class _ListRecorder:
+    def __init__(self):
+        self.records = []
+
+    def record(self, event, **fields):
+        self.records.append((event, fields))
+
+    def of(self, event):
+        return [f for e, f in self.records if e == event]
+
+
+def test_each_placement_is_recorded_with_its_deployment(tmp_path):
+    """On 2026-10-06 nothing on disk said whose order 14AD46 was."""
+    rec = _ListRecorder()
+    owner, api = _owner(tmp_path, recorder=rec)
+    ClientBroker(tmp_path, "night").submit(
+        OrderEvent(timestamp=TS, side="BUY", limit_price=100.0, intent="OPEN",
+                   quantity=1), current_price=100.0)
+    owner.poll()
+    (placed,) = rec.of("owner_placed")
+    assert placed["slug"] == "night"
+    assert placed["ordno"] == "NO1" and placed["order_id"] == "OID1"
+
+
+def test_a_pending_and_a_failed_reconcile_are_recorded(tmp_path):
+    rec = _ListRecorder()
+    clock, api = _Clock(), _FakeAPI(positions=[_Row(1, "Buy")])
+    owner, _ = _owner(tmp_path, api=api, clock=clock, recorder=rec)
+    ClientBroker(tmp_path, "day").submit(
+        OrderEvent(timestamp=TS, side="BUY", limit_price=100.0, intent="OPEN",
+                   quantity=1), current_price=100.0)
+    owner.poll()
+    owner.reconcile()
+    clock.t = 500.0
+    owner.reconcile()
+    assert rec.of("owner_reconcile_pending")
+    assert rec.of("owner_process_anomaly")
 
 
 # ---- liveness --------------------------------------------------------------
