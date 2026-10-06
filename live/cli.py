@@ -836,6 +836,8 @@ def main(argv=None) -> int:
             #       the owner is neither.
             broker = ClientBroker(out.parent, cfg.policy.cache_slug(),
                                   rails=rails)
+            recorder.record("wire_history_skipped",
+                            events=broker.skipped_events)
         elif args.broker == "dryrun":
             broker = DryRunBroker(execution, recorder=recorder)
         else:
@@ -1533,7 +1535,21 @@ def main(argv=None) -> int:
         #       no halt record, no clean shutdown, and nothing else that would
         #       ever mention it. The type name goes in `detail` so a transport can
         #       group crashes without parsing the message.
-        alerter.fatal("crashed", repr(exc), error_type=type(exc).__name__)
+        #
+        #       Tech: the message carries the OSError's filename and the alert
+        #             the innermost frame; the traceback goes to stderr.
+        #       Why:  2026-10-06 15:13 — two restarts died on
+        #             `PermissionError(13, 'Permission denied')`, and `repr`
+        #             drops the filename, so nothing recorded WHICH file.
+        import traceback
+        frames = traceback.extract_tb(exc.__traceback__)
+        where = (f"{frames[-1].filename}:{frames[-1].lineno} in {frames[-1].name}"
+                 if frames else None)
+        filename = getattr(exc, "filename", None)
+        message = repr(exc) + (f" [file: {filename}]" if filename else "")
+        traceback.print_exc()
+        alerter.fatal("crashed", message, error_type=type(exc).__name__,
+                      where=where)
         exit_code = 1
     finally:
         try:

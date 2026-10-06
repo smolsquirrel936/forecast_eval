@@ -47,6 +47,59 @@ confident zero, the same rule `broker_position()` follows. On a mismatch the
 anomaly names the per-deployment split, because "mirror 2 != venue 3" without
 knowing who holds what is a message you cannot act on.
 
+### A fill in flight is not a desync — `DEFAULT_RECONCILE_GRACE` (120 s)
+
+**MEASURED 2026-10-06** (`simtrade_0929`): fullday's BUY `14AD46` filled at
+09:14:04.5. The reconcile at about 09:14:07 read the venue at +1 against a book
+still at 0, and the owner stopped. Its logout cut the deal stream, so the fill
+never reached `fills_day_night.csv`, and the next start-up refused with
+"account mirror 0 != venue 1". `list_positions` catches up in about 0.1 s
+(§18.10), but deal callbacks have taken 12 s and 42 s to book (§23.7). Any
+check inside that window sees the venue ahead of the book.
+
+`reconcile()` therefore returns True, with `reconcile_note` set, for a
+difference that orders in flight can explain:
+
+| venue vs book | explained by |
+|---|---|
+| venue **ahead** | the unbooked remainder of working legs on that side (the 10-06 case) |
+| venue **behind** | deals booked within the grace on the other side (`list_positions` still catching up) |
+
+The wait is bounded at `reconcile_grace`, inclusive. After that it fails,
+because a callback that never comes *is* a desync (§23.6). A difference
+neither of those can explain fails at once, as before. A fresh owner has nothing
+in flight, so the **start-up check is unchanged**. `clock` is injectable for
+the tests.
+
+### `freeze()` — stop placing, keep listening
+
+On a failed reconcile the CLI calls `freeze(reason)`. From then on every submit
+is answered with `rejected`, which halts the deployment that asked. Cancels
+still reach the venue, because they can only reduce what is working. Deals are
+still booked and forwarded, and positions are still published. That is the
+difference from the old exit: the fill being disputed still lands. The first
+reason is latched, and nothing unfreezes in-process; as with
+[state.py](state.md)'s rails, a dispute is settled by a person and a restart.
+
+## A restart does not replay the intent streams
+
+A fresh `JsonlStream` reads from byte 0, so a restarted owner used to place
+**every intent a deployment had ever sent**. After 10-06 it would have re-sent
+fullday's 09:13 BUY on its first pass. The constructor now consumes what is
+already on disk without acting on it and keeps the count in `skipped_intents`.
+An intent the owner did not act on while it ran is stale: its deployment
+halted on the silence and re-decides on `--resume`. A corrupt history line is
+reported as the same anomaly `poll` raises. The deployment side does the same
+([broker/client.py](broker/client.md)).
+
+## The trail
+
+With a `recorder`, the owner writes `owner_intent`, `owner_placed` (slug, side,
+price, octype, `order_id`, `ordno`), `owner_order_event`, `owner_deal` (from
+the book), `owner_reconcile_pending` / `_settled`, `owner_frozen`,
+`owner_intents_skipped` and every anomaly. `owner_placed` is the record that
+was missing on 10-06: nothing on disk said whose order `14AD46` was.
+
 **Each deployment is told its OWN size, never the account's.** That is the
 category error §14 measured and §16 removed, and a test pins it: day +1 and
 night −1 are reported as +1 and −1 while the account is flat.

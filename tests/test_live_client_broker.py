@@ -264,6 +264,37 @@ def test_an_unknown_event_kind_is_ignored_not_fatal(tmp_path):
 
 # ---- restart ---------------------------------------------------------------
 
+def test_a_restarted_client_does_not_rebook_old_events(tmp_path):
+    """A fresh stream reads from byte 0: a `--resume` would re-book every fill
+    the owner ever sent, on top of the ledger replay, and halt on any old
+    rejection. Only the newest position is kept, for `adopt_position`."""
+    owner = _owner(tmp_path)
+    owner.append("fill", timestamp=TS.isoformat(), side="BUY",
+                 fill_price=100.0, quantity=1, fee=0.1)
+    owner.append("done")
+    owner.append("rejected", reason="old")
+    owner.append("position", signed_qty=0, avg_price=0.0)
+    owner.append("position", signed_qty=1, avg_price=100.0)
+    rails = _Rails()
+    c = _client(tmp_path, rails=rails)
+    assert c.skipped_events == 5
+    assert c.poll_fills(_market()) == []
+    assert rails.halts == []
+    assert c.broker_position() == 1
+    assert c.broker_position_detail().avg_price == 100.0
+
+
+def test_events_after_a_restart_are_read(tmp_path):
+    owner = _owner(tmp_path)
+    owner.append("fill", timestamp=TS.isoformat(), side="BUY",
+                 fill_price=100.0, quantity=1, fee=0.1)
+    c = _client(tmp_path)
+    owner.append("fill", timestamp=TS.isoformat(), side="SELL",
+                 fill_price=101.0, quantity=1, fee=0.1)
+    (fill,) = c.poll_fills(_market())
+    assert fill.side == "SELL"
+
+
 def test_a_restarted_client_continues_the_intent_sequence(tmp_path):
     first = _client(tmp_path)
     first.submit(_order(), current_price=100.0)

@@ -91,6 +91,30 @@ class ClientBroker(Broker):
         self._venue_position: Optional[int] = None
         self._venue_detail: Optional[HeldPosition] = None
         self._urgent = False
+        self.skipped_events = self._skip_history()
+
+    def _skip_history(self) -> int:
+        # Tech: consume every event already on disk, apply only the newest
+        #       `position`, and return how many were skipped.
+        # Why:  a fresh stream reads from byte 0, so a restarted deployment would
+        #       re-book every `fill` the owner ever sent it — on top of the
+        #       ledger replay `--resume` already does, doubling the position —
+        #       and halt on any old `rejected`. Its history is the ledger's job.
+        #       The last `position` is kept because `adopt_position` asks for it
+        #       before the owner's next once-a-second report; liveness reads the
+        #       file's newest `ts` (`_owner_is_gone`), so a stale report still
+        #       reads as a silent owner. A corrupt line halts here, as `_drain`
+        #       would: `read_new` has already moved past it, so swallowing the
+        #       error would lose the only report of it.
+        try:
+            history = self._in.read_new()
+        except ValueError as exc:
+            self._anomaly(str(exc))
+            return 0
+        positions = [e for e in history if e.get("kind") == "position"]
+        if positions:
+            self._apply_position(positions[-1])
+        return len(history)
 
     # ---- Broker interface --------------------------------------------------
 

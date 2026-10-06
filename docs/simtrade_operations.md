@@ -51,6 +51,7 @@ production account.
 | `intents_<slug>.jsonl` / `events_<slug>.jsonl` | the [wire](live/intents.md): client → owner intents; owner → client fills and `position` events (one a second) | the running pair |
 | `live_<slug>_<timestamp>/` | one run's artifacts: `orders`, `fills`, `trades`, `signals`, `forecasts`, `ticks`, `params.json`, `session.jsonl` | review |
 | `fatal.jsonl` | every fatal alert, all deployments in one file, **with no deployment field** | review |
+| `owner_session.jsonl` | the owner's trail, appended across runs: placements with their `ordno` and slug, deals, order events, pending/failed reconciles, freezes, anomalies (since 2026-10-07) | review |
 
 **Never move, clean or rename `outputs/` while a soak continues.** `--resume`
 and the owner's start-up reconciliation both depend on the files above.
@@ -155,6 +156,12 @@ artifacts are split across folders; the soak epoch is what ties them together.
 against the venue and **refuses (exit 6) on a disagreement**. Where the venue
 won't answer, it warns and starts on the ledgers alone.
 
+**Neither side replays the wire** (since 2026-10-07). A restarted owner skips
+the intents already in `intents_<slug>.jsonl` and prints how many. A restarted
+deployment skips the old `events_<slug>.jsonl` and keeps only the owner's latest
+`position`. Before that, an owner restart re-placed every intent ever sent, and
+a deployment restart re-booked every fill on top of its ledger replay.
+
 ## 6. Scenarios
 
 ### 6.1 Weekend or overnight pause, account flat
@@ -253,11 +260,15 @@ print `HALTED: <reason>`:
 | 3 | deployment | RestartGuard refused: backoff, 10 backfills per trading day, or quota under 50 MB | wait; the cap resets at 08:00 |
 | 4 | deployment | **a FLATTEN halt's close did not fill**: a position is open with nothing watching it | the most serious state; act at once |
 | 5 | either | refused before the first bar: flags, a non-flat `--fresh-start`, an unadoptable position | read the message |
-| 6 | owner | ledgers and venue disagree at start-up | reconcile by hand (§6.2) |
+| 6 | owner | ledgers and venue disagreed: refused at start-up, or a running owner **froze** and was then stopped | reconcile by hand (§6.2, §6.9) |
 | 7 | owner | `subscribe_trade` refused, so it cannot hear fills | don't start the deployments; retry the owner |
 
-A **running** owner whose 30 s reconciliation fails stops as well, and every
-deployment then halts on the silence.
+A **running** owner whose 30 s reconciliation fails **freezes**
+(`RECONCILIATION FAILED — OWNER FROZEN`). It places nothing and rejects every
+submit, so each deployment halts when it next tries to trade. It keeps booking
+deals and publishing positions until you Ctrl-C it. A difference that orders
+in flight explain is not a failure for up to 120 s; it prints
+`reconcile pending: …`.
 
 ### 6.8 Other work on the machine while VRAM is nearly full
 
@@ -311,6 +322,30 @@ nvidia-smi --query-gpu=memory.used,memory.free --format=csv
 
 The instance name carries the PID. Ignore `dwm`: its counter includes other
 processes' shared surfaces and can read above the card's total.
+
+### 6.9 A fill the ledgers never got (owner refuses with exit 6)
+
+The 2026-10-06 shape: an order filled at the venue, but the fill never reached
+its deployment's `fills_<slug>.csv`. The start-up then refuses with
+`account mirror N != venue M`.
+
+1. **Stop everything** (§4). Run
+   `flatten --dry-run --show-orders --out-parent outputs` (read-only). It lists
+   this session's orders with `ordno`, side, price and `dealt`, plus the
+   account's position.
+2. **Find whose order it was.** On code from 2026-10-07 on, read `owner_placed`
+   in `owner_session.jsonl` (it carries `ordno` and `slug`). Before that, the
+   only record is the deployment whose `intents_<slug>.jsonl` holds a matching
+   submit.
+3. **Add the row by hand** to that deployment's `fills_<slug>.csv`, with that
+   deployment's current `soak_id`
+   (`timestamp,side,fill_price,quantity,fee,soak_id`; fee = price × 0.0002 ×
+   qty). Keep a copy of the file first.
+4. Restart as in §5 with `--resume`. The owner's seed now matches the venue,
+   and the deployment adopts the lot from its ledger.
+
+Or flatten instead (§6.2) and leave the ledgers alone. Expect §6.2's known
+gap: the ledgers still claim lots the venue no longer holds.
 
 ## 7. The daily timeline
 
@@ -500,7 +535,15 @@ the first pause.
 | 2026-10-03 09:26 | `main` merged into `simtrade_0929` (`7e57912`, no conflicts; `strategy/` and `live/config.py` untouched). Suite on the branch: 1501 passed, 11 skipped, 0 failed |
 | 2026-10-03 09:49–09:50 | **restart with the fix, `--resume`: passed.** Owner 09:49:34, then day 09:49:43, night 09:50:06, fullday 09:50:30. Soak epochs unchanged; all primed with 4 samples; all flat; no new `fatal.jsonl` entry. **VRAM: each deployment 4.8 GB dedicated / 5.0 GB committed, nothing paged out; 16.5 GB used, 15.7 GB free** (was 63 GB committed). Login-to-warm-up: day 17 s, night 18 s, fullday 15 s (fullday took 101 s before the fix) |
 
+| 2026-10-06 09:13–09:16 | **owner stopped on an in-flight fill; day and fullday halted.** Fullday's first order, BUY `14AD46` @49887 (intent 09:13:02), filled @49884 at 09:14:04.5. The owner's 30 s reconcile at ~09:14:07 read venue +1 against book 0, before the deal callback arrived, and the owner exited 6. Its logout (`shioaji.log`, pid 20596, 09:14:07.09) cut the deal stream, so the fill reached no ledger. Day and fullday halted at 09:16:02 on `owner silent for 115s`. Night idled and was stopped cleanly at 13:48 |
+| 2026-10-06 ~13:50–16:00 | restart attempts on uncommitted fixes (since discarded). Start-up refused `account mirror 0 != venue 1`. Two day restarts at 15:13 crashed on `PermissionError(13)`, file unrecorded. The row `2026-10-06 09:14:04.511207,BUY,49884.0,1,9.9768,soak_20260929_082029_100149` was added by hand to `fills_day_night.csv` at 14:45 |
+| 2026-10-07 | venue confirmed: one order, `14AD46` Buy 1 @49887, Filled dealt=1; account +1. Hand-added row kept. **Fix on `main`:** 120 s grace for fills in flight, freeze instead of exit, no wire replay on restart (owner and deployments), `owner_session.jsonl`, crash records name the file. `owner_ack_day_night.json` is a leftover of the discarded fix; no code reads it |
+
 **Open questions:**
+
+- **The 2026-10-06 `PermissionError`** on the day restart came from uncommitted
+  code, and nothing recorded which file. If a restart on committed code hits it,
+  the `crashed` record and the console traceback now name the file.
 
 - **No orders in four days across three deployments.** Day's `min_prob` 0.65
   gate and night's long-only rule are the first suspects; fullday's 302 HOLDs

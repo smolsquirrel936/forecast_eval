@@ -96,11 +96,29 @@ verify: the owner holds no quote feed.
 | `--poll-seconds` (1.0) | drain intents, place, cancel, republish positions |
 | `--reconcile-seconds` (30.0) | the venue call, on a slower cadence because it costs one |
 
-**A failed reconciliation stops the owner** rather than logging and continuing —
-the same rule [state.py](state.md)'s `on_reconcile` follows, and for the same
-reason it never auto-corrects: "close the position" is undefined when the size is
-in dispute. Here it is sharper still, because the disputed number is what sizes
-every subsequent leg.
+**A failed reconciliation freezes the owner** instead of logging and
+continuing. That is the same rule [state.py](state.md)'s `on_reconcile` follows,
+and for the same reason it never auto-corrects: "close the position" is
+undefined when the size is in dispute. Here it is sharper still, because the
+disputed number is what sizes every subsequent leg. Frozen, it places nothing
+and rejects every submit, which halts the deployment that asked. It keeps
+booking deals and publishing positions until Ctrl-C, then exits **6**. It prints
+the banner once, and once more if the venue and the book come to agree; that
+does not unfreeze it.
+
+**Until 2026-10-07 it returned instead**, and the logout cut the deal stream.
+On 2026-10-06 that stranded fullday's fill: the reconcile ran 2.5 s after the
+fill, before its deal arrived. A difference that orders in flight explain is
+now *pending* for up to 120 s, printed as `reconcile pending: …`
+([owner_process.md](owner_process.md), "A fill in flight is not a desync").
+
+**The start-up check still refuses** (exit 6): a fresh owner has nothing in
+flight. It also reports `intents already on disk, not replayed: {…}` when the
+streams hold history, which it no longer places.
+
+**The owner keeps a trail**: `owner_session.jsonl` in `--out`, appended across
+runs, with a `meta` line at each start and `owner_stop` at each exit. Before
+that file existed, its anomalies went only to the console.
 
 **A stale deployment is reported, not acted on.** What to do about an absent
 deployment holding a lot is a risk decision (§7.4), not a mechanical one —
