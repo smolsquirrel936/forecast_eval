@@ -193,7 +193,7 @@ Pick one.
 > and writes its closing fills to **no** ledger. After a flatten, the
 > `fills_<slug>.csv` files still claim the lots while the venue is flat, so the
 > owner's start-up reconciliation
-> ([owner_cli.py](../live/owner_cli.py) `main`, after `seed_nets`) should refuse
+> ([owner_cli.py](../live/owner_cli.py) `main`, after `seed_positions`) should refuse
 > with exit 6. `--fresh-start` on the deployments doesn't change the owner's
 > seed, because it counts every epoch. `strategy/README.md`'s "flatten, then
 > `--fresh-start`" predates the owner for this purpose. Until this path has been
@@ -540,6 +540,7 @@ the first pause.
 | 2026-10-06 09:13–09:16 | **owner stopped on an in-flight fill; day and fullday halted.** Fullday's first order, BUY `14AD46` @49887 (intent 09:13:02), filled @49884 at 09:14:04.5. The owner's 30 s reconcile at ~09:14:07 read venue +1 against book 0, before the deal callback arrived, and the owner exited 6. Its logout (`shioaji.log`, pid 20596, 09:14:07.09) cut the deal stream, so the fill reached no ledger. Day and fullday halted at 09:16:02 on `owner silent for 115s`. Night idled and was stopped cleanly at 13:48 |
 | 2026-10-06 ~13:50–16:00 | restart attempts on uncommitted fixes (since discarded). Start-up refused `account mirror 0 != venue 1`. Two day restarts at 15:13 crashed on `PermissionError(13)`, file unrecorded. The row `2026-10-06 09:14:04.511207,BUY,49884.0,1,9.9768,soak_20260929_082029_100149` was added by hand to `fills_day_night.csv` at 14:45 |
 | 2026-10-07 | venue confirmed: one order, `14AD46` Buy 1 @49887, Filled dealt=1; account +1. Hand-added row kept. **Fix on `main`:** 120 s grace for fills in flight, freeze instead of exit, no wire replay on restart (owner and deployments), `owner_session.jsonl`, crash records name the file. `owner_ack_day_night.json` is a leftover of the discarded fix; no code reads it |
+| 2026-10-07 08:00–08:02 | restart with the fix, `--resume`: owner skipped fullday's old intent, seeded `day_night` +1, agreed with the venue. **But fullday adopted "+1 @ 0.00"**: the owner's seed carried no entry price, so it published `avg_price` 0.0. That defect predates the fix and first showed on this resume while holding. Fixed on `main` (`seed_positions`); owner and fullday restarted to re-adopt @49884 |
 
 **Open questions:**
 

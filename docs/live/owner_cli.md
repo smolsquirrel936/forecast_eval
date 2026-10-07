@@ -29,6 +29,13 @@ deployment's own `fills_<slug>.csv` ([ledger.py](ledger.md)) instead, and a slug
 with no ledger seeds **flat** — a deployment that has never traded is normal, not
 unknown.
 
+**`seed_positions` seeds the entry price as well as the size**, using
+`ledger.open_position`, the same reducer `--resume` replays with. The owner
+publishes both, and `adopt_position` seeds the Trader and the Portfolio from
+them. Until 2026-10-07 the seed was a bare count (`seed_nets`), so a held lot
+was published at `avg_price` 0.0. Fullday's `--resume` that morning adopted its
++1 "@ 0.00"; closing it would have booked about +50 000 points.
+
 **Then it reconciles the sum against the venue before serving anything, and
 refuses on a disagreement.** The owner's whole authority rests on `account_net`
 being right: it is what `plan_legs` sizes every `Cover` against
