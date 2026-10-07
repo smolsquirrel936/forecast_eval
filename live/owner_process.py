@@ -43,7 +43,8 @@ from .owner import COVER, Leg, OrderBook, plan_legs
 #       intents from it.
 # Why:  the mirror image of `ClientBroker`'s owner timeout, and generous for the
 #       same reason — a deployment that is flat and quiet still heartbeats every
-#       bar, so a minute of silence is already abnormal, but a false "it is gone"
+#       30 s (`ClientBroker.maybe_heartbeat`), so 180 s is six missed beats, but
+#       a false "it is gone"
 #       must not strand a position nobody is managing. Nothing is closed on this
 #       signal: it is reported, because deciding what to do about an absent
 #       deployment holding a lot is a risk call, not a mechanical one.

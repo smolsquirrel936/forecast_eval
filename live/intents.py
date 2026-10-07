@@ -32,6 +32,13 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Tech: how much of a stream's end `age_seconds` reads to find the newest record.
+# Why:  one record is ~50-200 bytes, so 64 KiB holds hundreds of them. Reading
+#       the whole file instead grew without bound: the owner asks every 30 s per
+#       deployment, each deployment asks about the owner's stream (38 MB and
+#       437 000 lines by 2026-10-07), and deployments heartbeat every 30 s.
+AGE_TAIL_BYTES = 64 * 1024
+
 
 def intent_path(directory: Any, slug: str) -> Path:
     """`intents_<slug>.jsonl` — the deployment writes, the owner reads."""
@@ -181,8 +188,41 @@ class JsonlStream:
         #       from having gone quiet and must not read as age zero. Floored
         #       because two processes' clocks are not identical and a small
         #       negative age is noise, not a message from the future.
-        records = self._read_all()
-        if not records:
+        #
+        #       Tech: the newest record is the LAST complete line, read from the
+        #             file's tail (`AGE_TAIL_BYTES`); the whole file is read only
+        #             when the tail holds no complete line.
+        #       Why:  each file has exactly one writer appending in order, so the
+        #             last line is the newest — and the cost stays flat however
+        #             long a soak runs.
+        last = self._last_record()
+        if last is None:
             return None
-        newest = max(float(r.get("ts", 0.0)) for r in records)
-        return max(0.0, time.time() - newest)
+        return max(0.0, time.time() - float(last.get("ts", 0.0)))
+
+    def _last_record(self) -> Optional[Dict[str, Any]]:
+        # Tech: parse the last complete, non-blank line in the file's tail;
+        #       fall back to `_read_all` when the tail starts mid-file and holds
+        #       no whole line.
+        # Why:  see `age_seconds`. The first line of a tail that starts mid-file
+        #       may be cut, so it is never parsed; a trailing partial line has no
+        #       newline yet and is not a record, the same rule as `read_new`.
+        if not self.path.exists():
+            return None
+        with self.path.open("rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            start = max(0, size - AGE_TAIL_BYTES)
+            fh.seek(start)
+            blob = fh.read()
+        complete = blob[:blob.rfind(b"\n") + 1]
+        lines = complete.decode("utf-8", errors="replace").splitlines()
+        if start > 0:
+            lines = lines[1:]
+        for line in reversed(lines):
+            if line.strip():
+                return self._parse(line)
+        if start > 0:
+            records = self._read_all()
+            return records[-1] if records else None
+        return None

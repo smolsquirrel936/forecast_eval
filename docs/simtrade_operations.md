@@ -71,7 +71,7 @@ the interpreter); that is normal.
 | Is anything held? | last line of `events_<slug>.jsonl` | `"kind":"position","signed_qty":0` means flat |
 | Has it ever filled? | `fills_<slug>.csv` | absent means never |
 | Has it traded? | `live_<slug>_<ts>/orders.csv`, `trades.csv` | a 40–110 byte file is a header only |
-| Is it alive? | `last_heartbeat` in `live_restart_<slug>.json` | seconds old |
+| Is it alive? | `last_heartbeat` in `live_restart_<slug>.json`; to the owner, the last `heartbeat` in `intents_<slug>.jsonl` (every 30 s, since 2026-10-07) | seconds old; under 30 s |
 | What did it last do? | tail of `live_<slug>_<ts>/session.jsonl` | a `bar`, `relogin` or `verified` event |
 | Is a session open? | the clock | DAY 08:45–13:45, NIGHT 15:00–05:00, weekdays. Saturday 00:00–05:00 is still Friday's night session |
 
@@ -539,6 +539,7 @@ the first pause.
 | 2026-10-06 ~13:50–16:00 | restart attempts on uncommitted fixes (since discarded). Start-up refused `account mirror 0 != venue 1`. Two day restarts at 15:13 crashed on `PermissionError(13)`, file unrecorded. The row `2026-10-06 09:14:04.511207,BUY,49884.0,1,9.9768,soak_20260929_082029_100149` was added by hand to `fills_day_night.csv` at 14:45 |
 | 2026-10-07 | venue confirmed: one order, `14AD46` Buy 1 @49887, Filled dealt=1; account +1. Hand-added row kept. **Fix on `main`:** 120 s grace for fills in flight, freeze instead of exit, no wire replay on restart (owner and deployments), `owner_session.jsonl`, crash records name the file. `owner_ack_day_night.json` is a leftover of the discarded fix; no code reads it |
 | 2026-10-07 08:00–08:02 | restart with the fix, `--resume`: owner skipped fullday's old intent, seeded `day_night` +1, agreed with the venue. **But fullday adopted "+1 @ 0.00"**: the owner's seed carried no entry price, so it published `avg_price` 0.0. That defect predates the fix and first showed on this resume while holding. Fixed on `main` (`seed_positions`); owner and fullday restarted to re-adopt @49884 |
+| 2026-10-07 08:12–08:13 | all four restarted on the entry fix: owner seeded `day_night` +1 @ 49884.00; fullday adopted +1 @ 49884.00, ledger replay agreed. Owner kept printing `no intents from ['day_night'] for 180s`: nothing ever called `heartbeat()`. **Heartbeat timer on `main`** (every 30 s from the clock block; `age_seconds` reads only the file's tail). Running processes pick it up at their next restart |
 
 **Open questions:**
 

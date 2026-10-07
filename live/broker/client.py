@@ -42,6 +42,14 @@ from .base import Broker, HeldPosition
 #       healthy deployment, which is its own kind of outage.
 DEFAULT_OWNER_TIMEOUT = 90.0
 
+# Tech: how often a running deployment tells the owner it is alive.
+# Why:  the owner reports a deployment silent for `DEFAULT_DEPLOYMENT_TIMEOUT`
+#       (180 s). Until 2026-10-07 nothing called `heartbeat()`, so the owner
+#       timed a deployment from its last ORDER, and fullday was "silent for
+#       180s" every 30 s from the moment its 10-06 BUY went quiet. 30 s gives
+#       six beats per timeout: one late or lost beat never reads as gone.
+DEFAULT_HEARTBEAT_SECONDS = 30.0
+
 
 class ClientBroker(Broker):
     """Submits intents to the owning process; receives fills back."""
@@ -63,6 +71,7 @@ class ClientBroker(Broker):
         rails: Any = None,
         on_anomaly: Optional[Callable[[str], None]] = None,
         owner_timeout: float = DEFAULT_OWNER_TIMEOUT,
+        heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
     ) -> None:
         # Tech: open both halves of the wire, resume the outbound sequence past
         #       anything already on disk, and hold the optional observers.
@@ -78,6 +87,8 @@ class ClientBroker(Broker):
         self.rails = rails
         self.on_anomaly = on_anomaly
         self.owner_timeout = owner_timeout
+        self.heartbeat_seconds = heartbeat_seconds
+        self._last_beat: Optional[float] = None
 
         # Tech: this deployment's view of its own working order, its undelivered
         #       fills, and the last position the owner reported for it.
@@ -288,9 +299,26 @@ class ClientBroker(Broker):
         # Tech: tell the owner this deployment is still alive.
         # Why:  the owner has the same silence problem in reverse — a deployment
         #       that died holding a position is not one whose intents should be
-        #       waited for. Called by the loop each bar; separate from `submit`
-        #       so a deployment that is flat and quiet still counts as present.
+        #       waited for. Separate from `submit` so a deployment that is flat
+        #       and quiet still counts as present; `maybe_heartbeat` paces it.
         self._out.append("heartbeat")
+
+    def maybe_heartbeat(self, now: float) -> bool:
+        """Write a heartbeat if `heartbeat_seconds` have passed since the last."""
+        # Tech: beat on the first call, then whenever `now` (seconds, any
+        #       monotonic-enough clock) is `heartbeat_seconds` past the last
+        #       beat. Returns whether it wrote.
+        # Why:  `live/cli.py` calls this from its once-a-second clock block,
+        #       which runs inside and outside sessions — so the owner hears a
+        #       live deployment through the dead hours too, and only a process
+        #       that stopped (crashed, halted, killed) goes quiet. Pacing lives
+        #       here, not in the loop, so it is testable without one.
+        if (self._last_beat is not None
+                and now - self._last_beat < self.heartbeat_seconds):
+            return False
+        self.heartbeat()
+        self._last_beat = now
+        return True
 
     def _owner_is_gone(self) -> bool:
         # Tech: True when the owner has never spoken, or not within the timeout.

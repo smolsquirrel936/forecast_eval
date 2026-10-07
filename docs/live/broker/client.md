@@ -48,6 +48,14 @@ rules follow, each with a test:
   unknown (REFUSE). An unreachable owner is the second: the account exists and may
   be holding, we simply cannot see it.
 
+**The other direction: `maybe_heartbeat`.** [cli.py](../cli.md)'s
+once-a-second clock block calls it, and it writes a `heartbeat` intent every
+`DEFAULT_HEARTBEAT_SECONDS` (30 s), starting on the first call. The clock block
+runs outside sessions too, so the owner hears a live deployment through the dead
+hours. Only a process that stopped goes quiet, and the owner's 180 s timeout
+allows six beats. Before 2026-10-07 nothing called `heartbeat()`, and the
+owner timed deployments from their last order instead.
+
 90 s is generous on purpose. A false "owner is gone" halts a healthy deployment,
 which is its own outage — and §18.10 measured a fill taking up to **12.8 s** to
 arrive, so short timeouts here would be wrong.
