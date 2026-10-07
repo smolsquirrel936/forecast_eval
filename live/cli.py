@@ -1431,6 +1431,12 @@ def main(argv=None) -> int:
                 last_clock = now
                 rt.on_clock(datetime.now())
                 guard.heartbeat(datetime.now())
+                # Tech: tell the owner this deployment is alive, every 30 s.
+                # Why:  `ClientBroker.maybe_heartbeat` — without it the owner
+                #       timed a deployment from its last order and reported a
+                #       healthy, quiet one as silent every 30 s.
+                if isinstance(broker, ClientBroker):
+                    broker.maybe_heartbeat(now)
                 # Tech: refresh the artifact set; the writer throttles on its own
                 #       interval and skips when no list has grown.
                 # Why:  a soak runs for weeks, so "the files are written at the

@@ -321,3 +321,47 @@ def test_heartbeat_is_written_even_when_flat_and_quiet(tmp_path):
     c.heartbeat()
     (record,) = JsonlStream(intent_path(tmp_path, "day")).read_new()
     assert record["kind"] == "heartbeat"
+
+
+# ---- the heartbeat timer ---------------------------------------------------
+
+def _beats(tmp_path, slug="day"):
+    return [r for r in JsonlStream(intent_path(tmp_path, slug))._read_all()
+            if r["kind"] == "heartbeat"]
+
+
+def test_the_first_clock_tick_beats_at_once(tmp_path):
+    """The owner should hear a deployment as soon as its loop runs."""
+    c = _client(tmp_path)
+    assert c.maybe_heartbeat(1000.0) is True
+    assert len(_beats(tmp_path)) == 1
+
+
+def test_beats_are_paced_by_heartbeat_seconds(tmp_path):
+    """The clock block runs every second; the owner needs one beat per 30 s."""
+    c = _client(tmp_path)
+    for second in range(0, 91):                     # 0..90 s inclusive
+        c.maybe_heartbeat(1000.0 + second)
+    assert len(_beats(tmp_path)) == 4, "at 0, 30, 60 and 90 s"
+
+
+def test_a_beating_deployment_is_never_stale_to_the_owner(tmp_path):
+    """2026-10-07: nothing called heartbeat(), so the owner timed fullday from
+    its last ORDER and printed it as silent every 30 s."""
+    from forecast_eval.live.owner_process import OwnerProcess
+
+    owner = OwnerProcess(None, None, directory=tmp_path, slugs=["day"],
+                         account="ACC", deployment_timeout=60.0)
+    path = intent_path(tmp_path, "day")
+    path.write_text(json.dumps({"seq": 1, "ts": 0.0, "kind": "submit"}) + "\n",
+                    encoding="utf-8")
+    assert owner.stale_deployments() == ["day"], "an old order alone is stale"
+    import time
+    _client(tmp_path).maybe_heartbeat(time.monotonic())
+    assert owner.stale_deployments() == []
+
+
+def test_the_heartbeat_interval_is_well_inside_the_owners_timeout():
+    from forecast_eval.live.broker.client import DEFAULT_HEARTBEAT_SECONDS
+    from forecast_eval.live.owner_process import DEFAULT_DEPLOYMENT_TIMEOUT
+    assert DEFAULT_DEPLOYMENT_TIMEOUT >= 3 * DEFAULT_HEARTBEAT_SECONDS

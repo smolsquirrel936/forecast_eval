@@ -161,5 +161,11 @@ on this signal** — deciding what to do about an absent deployment holding a lo
 a risk call (§7.4), not a mechanical one. A deployment that has *never* spoken is
 not stale: absent at start-up is not the same as having gone away.
 
+**A live deployment heartbeats every 30 s**, inside and outside its sessions
+([broker/client.md](broker/client.md), `maybe_heartbeat`). 180 s of silence is
+therefore six missed beats: the process has stopped. Until 2026-10-07 nothing
+called `heartbeat()`, so a deployment was timed from its last *order*. From 10-06
+on, fullday was reported as silent every 30 s while running normally.
+
 ## Related
 [live/owner.py](owner.md) · [live/broker/client.py](broker/client.md) · [live/intents.py](intents.md) · [live/broker/shioaji.py](broker/shioaji.md) · [STRATEGY_SPLIT_PLAN.md](../../STRATEGY_SPLIT_PLAN.md)

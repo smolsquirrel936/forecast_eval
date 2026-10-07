@@ -187,3 +187,41 @@ def test_age_seconds_floors_a_clock_skewed_future_record(tmp_path):
         json.dumps({"seq": 1, "ts": _t.time() + 30, "kind": "a"}) + "\n",
         encoding="utf-8")
     assert JsonlStream(path).age_seconds() == 0.0
+
+
+def test_age_seconds_reads_a_stream_longer_than_its_tail(tmp_path):
+    """The owner's events stream was 38 MB by 2026-10-07; only the tail is read,
+    and the newest record is still the one that counts."""
+    from forecast_eval.live.intents import AGE_TAIL_BYTES
+    import time as _t
+    path = tmp_path / "w.jsonl"
+    old = json.dumps({"seq": 1, "ts": _t.time() - 3600, "kind": "position",
+                      "pad": "x" * 200}) + "\n"
+    newest = json.dumps({"seq": 2, "ts": _t.time(), "kind": "position"}) + "\n"
+    path.write_text(old * (2 * AGE_TAIL_BYTES // len(old)) + newest,
+                    encoding="utf-8")
+    age = JsonlStream(path).age_seconds()
+    assert age is not None and age < 5.0
+
+
+def test_age_seconds_never_parses_a_line_the_tail_cut(tmp_path):
+    """A tail that starts mid-line must not be read as a corrupt record."""
+    from forecast_eval.live.intents import AGE_TAIL_BYTES
+    import time as _t
+    path = tmp_path / "w.jsonl"
+    line = json.dumps({"seq": 1, "ts": _t.time() - 3600, "kind": "a",
+                       "pad": "y" * 97}) + "\n"
+    body = line * (AGE_TAIL_BYTES // len(line) + 3)
+    path.write_text(body, encoding="utf-8")
+    age = JsonlStream(path).age_seconds()
+    assert age is not None and age > 3000
+
+
+def test_age_seconds_ignores_a_trailing_partial_line(tmp_path):
+    import time as _t
+    path = tmp_path / "w.jsonl"
+    path.write_text(
+        json.dumps({"seq": 1, "ts": _t.time() - 3600, "kind": "a"}) + "\n"
+        + '{"seq": 2, "ts": ', encoding="utf-8")
+    age = JsonlStream(path).age_seconds()
+    assert age is not None and age > 3000

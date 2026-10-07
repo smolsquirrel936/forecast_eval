@@ -77,6 +77,12 @@ Two further details, each pinned by a test:
   gone quiet, and a reader must be able to tell them apart.
 - **A future timestamp floors to `0.0`.** Two processes' clocks are not
   identical; a small negative age is skew, not a message from the future.
+- **Only the tail is read** (`AGE_TAIL_BYTES`, 64 KiB). Each file has one writer
+  appending in order, so the newest record is the last complete line. The first
+  line of a tail that starts mid-file may be cut, so it is never parsed. Before
+  2026-10-07 the whole file was parsed on every call. On the owner's 38 MB
+  events stream that took 645 ms against 5 ms for the tail, and deployments now
+  heartbeat every 30 s, so the files keep growing.
 
 ## `resume_seq` before the first append on an existing file
 

@@ -128,7 +128,7 @@ Four things, in this order, and the ordering is not arbitrary:
 
 | | | |
 |---|---|---|
-| 1 | `rt.on_clock` + `guard.heartbeat` | close a quiet bar, prove we are alive |
+| 1 | `rt.on_clock` + `guard.heartbeat` (+ `ClientBroker.maybe_heartbeat` under `--broker client`, every 30 s) | close a quiet bar, prove we are alive, to the restart guard and to the owner |
 | 2 | [`relogin.check`](relogin.md) | **never** gated on the session policy — its anchors sit in the pre-open quiet, which is by definition outside every session |
 | 3 | `_check_schedule` | the [scheduled contract roll](roll.md); also ungated, for the same reason |
 | 3b | `rt.advance_roll_ladder` | re-prices an unfilled roll leg 5 ticks higher, at most every 10 s |
