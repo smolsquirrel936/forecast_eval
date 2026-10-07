@@ -349,3 +349,110 @@ def test_a_non_simulation_client_aborts(monkeypatch, creds):
     _install_fake(monkeypatch, api)
     assert probe.main(["--mode", "offhours", "--settle-seconds", "0"]) == 2
     assert "login" not in api.calls
+
+
+# ---- reassert mode ---------------------------------------------------------
+
+
+class ReassertApi(FakeApi):
+    """Order callbacks die on a `force_refresh` login and come back only on the
+    rung named by `restore_on` — so a test can say which fix the probe finds."""
+
+    def __init__(self, restore_on=None):
+        super().__init__(connections_per_login=1)
+        self.restore_on = restore_on
+        self._order_cb = None
+        self.deaf = False
+
+    def login(self, **kw):
+        out = super().login(**kw)
+        if kw.get("force_refresh"):
+            self.deaf = True
+            self.futopt_account = FakeAccount()     # a new object, same account
+        elif self.restore_on == "fresh" and "logout" in self.calls:
+            self.deaf = False
+        return out
+
+    def set_order_callback(self, cb):
+        self._note("set_order_callback")
+        self._order_cb = cb
+        if self.restore_on == "callback":
+            self.deaf = False
+
+    def subscribe_trade(self, account):
+        self._note("subscribe_trade")
+        if self.restore_on == "new_account" and account is self.futopt_account:
+            self.deaf = False
+        return True
+
+    def snapshots(self, *a, **kw):
+        self._note("snapshots")
+        return [types.SimpleNamespace(close=20000.0)]
+
+    def place_order(self, contract, order):
+        self._note("place_order")
+        if not self.deaf and self._order_cb is not None:
+            self._order_cb("FORDER", {})            # New
+            self._order_cb("FORDER", {})            # Cancel
+        return object()
+
+    def update_status(self, *a, **kw):
+        self._note("update_status")
+
+    def cancel_order(self, trade):
+        self._note("cancel_order")
+
+    def list_trades(self):
+        return []
+
+
+def _run_reassert(monkeypatch, api, capsys):
+    fake = types.ModuleType("shioaji")
+    fake.__version__ = "1.7.2-fake"
+    fake.Shioaji = lambda **kw: api
+    fake.FuturesOrder = lambda **kw: kw
+    fake.Action = types.SimpleNamespace(Buy="Buy")
+    fake.FuturesPriceType = types.SimpleNamespace(LMT="LMT")
+    fake.OrderType = types.SimpleNamespace(ROD="ROD")
+    fake.FuturesOCType = types.SimpleNamespace(New="New")
+    monkeypatch.setitem(sys.modules, "shioaji", fake)
+    monkeypatch.setattr(probe, "resolve_txf", lambda api, name: (
+        types.SimpleNamespace(code="TXFR1", target_code="TXFJ6"), "TXFR1"))
+    monkeypatch.setattr(probe.time, "sleep", lambda s: None)
+    assert probe.main(["--mode", "reassert", "--settle-seconds", "0"]) == 0
+    return capsys.readouterr().out
+
+
+def test_reassert_stops_at_the_first_rung_that_restores_the_callback(
+        monkeypatch, creds, capsys):
+    """The minimal fix is the first rung heard — later rungs must not run, or
+    R4's logout would be credited with what R3 already did."""
+    api = ReassertApi(restore_on="new_account")
+    out = _run_reassert(monkeypatch, api, capsys)
+    assert "R3_subscribe_trade_new_account is the first step" in out
+    assert api.calls.count("place_order") == 4   # baseline, R1, R2, R3
+    last_order = len(api.calls) - 1 - api.calls[::-1].index("place_order")
+    assert "logout" not in api.calls[:last_order], "R4's logout ran"
+
+
+def test_reassert_says_so_when_nothing_restores_it(monkeypatch, creds, capsys):
+    out = _run_reassert(monkeypatch, ReassertApi(restore_on=None), capsys)
+    assert "NOTHING restores the order callback in-process" in out
+
+
+def test_reassert_credits_a_fresh_session(monkeypatch, creds, capsys):
+    out = _run_reassert(monkeypatch, ReassertApi(restore_on="fresh"), capsys)
+    assert "R4_logout_then_login is the first step" in out
+
+
+def test_reassert_without_a_baseline_claims_nothing(monkeypatch, creds, capsys):
+    """Closed market: no baseline callbacks, so no rung can be judged."""
+    api = ReassertApi(restore_on="new_account")
+    api.place_order = lambda contract, order: object()   # never heard
+    out = _run_reassert(monkeypatch, api, capsys)
+    assert "inconclusive — no baseline callbacks" in out
+    assert "login_force" not in api.calls
+
+
+def test_r_verdict_flags_a_duplicating_rung():
+    assert "DUPLICATED" in probe._r_verdict("R1_set_order_callback", 2, 4)

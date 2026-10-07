@@ -91,19 +91,33 @@ def owner_relogin_anchors():
 def make_relogin(api: Any, cred: Any, account: Any, owner: Any):
     """The owner's re-login action: refresh the token, re-take what it drops."""
     def _relogin() -> None:
-        # Tech: a refreshing login, then re-subscribe the account's deal stream
-        #       and re-attach the order callback; raise if the subscription is
-        #       refused.
-        # Why:  `force_refresh=True` because a plain `login()` is a measured
-        #       NO-OP that leaves the token expiring (relogin_probe Q1/Q8). It
-        #       rebuilds the connection, and callbacks die with the old one (Q3),
-        #       so without the re-attach the owner would place orders and hear
-        #       no deals. A refused `subscribe_trade` raises so the scheduler
+        # Tech: log out, log in plainly, then subscribe the NEW session's
+        #       account to the deal stream and re-attach the order callback;
+        #       raise if the subscription is refused.
+        # Why:  MEASURED 2026-10-08 (relogin_probe --mode reassert). After a
+        #       `force_refresh=True` login no re-assertion brings the order
+        #       callback back — not `set_order_callback`, not `subscribe_trade`
+        #       with the old account or the new one: 0 callbacks on each. The
+        #       2026-10-07 owner re-logged in that way at 14:52 and never heard
+        #       the 22:16 night fill. Logout then a plain login opens a genuinely
+        #       new session ("Session up") and was heard, 2 of 2, not doubled.
+        #       A plain `login()` WITHOUT the logout is still the measured no-op
+        #       (Q1/Q8). A refused `subscribe_trade` raises so the scheduler
         #       counts a failed attempt and retries inside the window, instead of
         #       settling on a session that cannot hear fills (§18.14).
-        api.login(api_key=cred.api_key, secret_key=cred.secret_key,
-                  force_refresh=True)
-        if account is not None and api.subscribe_trade(account) is False:
+        #
+        #       The logout is best-effort: one that raises (a token already dead)
+        #       must not stop the login that replaces it. The subscription takes
+        #       `api.futopt_account` read after the login, the form the probe
+        #       measured; `account` stays the owner's for placing and
+        #       reconciling, as it did across 2026-10-07's re-login.
+        try:
+            api.logout()
+        except Exception:                               # noqa: BLE001 — see Why
+            pass
+        api.login(api_key=cred.api_key, secret_key=cred.secret_key)
+        fresh = getattr(api, "futopt_account", None) or account
+        if fresh is not None and api.subscribe_trade(fresh) is False:
             raise RuntimeError("subscribe_trade returned False after re-login")
         owner.attach()
     return _relogin

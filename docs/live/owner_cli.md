@@ -89,9 +89,18 @@ already open. Going three minutes first means the owner's spike has cleared
 before theirs begin — it adds nothing to that collision — and the process every
 deployment depends on is refreshed before any of them.
 
-**What the re-login re-takes.** `force_refresh=True` (a plain `login()` is a
-measured no-op), then `subscribe_trade(account)` and `OwnerProcess.attach()` —
-callbacks die with the old connection (Q3). A refused `subscribe_trade` raises,
+**What the re-login re-takes.** `logout()`, a plain `login()`, then
+`subscribe_trade(api.futopt_account)` with the new session's account, and
+`OwnerProcess.attach()`. Until 2026-10-08 it was `login(force_refresh=True)` +
+`subscribe_trade(account)` + `attach()`, and on 2026-10-07 that left the owner
+deaf from its 14:52 re-login on: the 22:16 night fill was never booked and the
+owner froze at 22:18. `relogin_probe --mode reassert` then measured that **no**
+re-assertion restores the order callback after a `force_refresh` login (0
+callbacks for each of `set_order_callback`, `subscribe_trade(old account)` and
+`subscribe_trade(new account)`), while logout + plain login + both was heard (2
+of 2). The logout is best-effort, so a token that is already dead still gets
+replaced. A plain `login()` *without* the logout is still the measured no-op
+(Q1/Q8). A refused `subscribe_trade` raises,
 so the scheduler counts a failed attempt and retries inside the window rather
 than settling on a session that cannot hear fills. There is no tick half to the
 verify: the owner holds no quote feed.

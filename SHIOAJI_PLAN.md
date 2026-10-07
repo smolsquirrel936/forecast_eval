@@ -2758,6 +2758,35 @@ The practical consequences:
 at 11:56. The load-bearing number is the **50 after**, which is unambiguous
 against run 4's zero.)*
 
+##### RUN 6 — 2026-10-08 00:32, night session — RE-ASSERTION DOES NOT WORK
+
+The RUN 4 conclusion above ("re-register and it comes back") was never
+measured. On 2026-10-07 every process re-logged in with `force_refresh=True` and
+re-asserted (the owner: `subscribe_trade(account)` + `set_order_callback`), and
+**none heard the 22:16 night fill** — the owner froze at 22:18 on a mismatch of
+2 against the venue's 1. `relogin_probe --mode reassert` then climbed a
+cumulative ladder after one `force_refresh` login, one passive probe order per
+rung:
+
+| Rung | Order callbacks (baseline 2) |
+|---|---|
+| R1 `set_order_callback` | **0** |
+| R2 + `subscribe_trade(account from the first login)` | **0** |
+| R3 + `subscribe_trade(api.futopt_account after the re-login)` | **0** |
+| R4 `logout()` + plain `login()` + R1 + R3 | **2** — not doubled |
+
+Only R4 printed "Session up", and `force_refresh` handed back a new account
+object (`R0_same_account_object False`). **After `force_refresh` the order
+stream cannot be recovered in-session; logout then a plain login can.** The
+owner's re-login is now that (`owner_cli.make_relogin`). The deployments' closure
+is unchanged by decision: the probe did not count ticks, their `force_refresh`
+tick path is the one measured working, and under `--broker client` they never
+read order callbacks. Under `--broker shioaji` a deployment is therefore still
+deaf to its own fills after a re-login — open until the R4 tick count is
+measured. Unmeasured too: that logout + login resets the 24 h token clock (it is
+the path a fresh process takes; `usage()` in the verify still catches a dead
+token).
+
 ##### This sharpens the reconnect risk considerably
 
 If callbacks die with the connection, then **any** replacement of it drops them —
