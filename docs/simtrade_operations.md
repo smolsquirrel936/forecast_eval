@@ -248,7 +248,7 @@ print `HALTED: <reason>`:
 | Reason (as printed) | Meaning | Action |
 |---|---|---|
 | `no market data for …s (limit …s)` | the feed stayed silent past the 900 s backstop, unhealed by [FeedWatch](live/feedwatch.md) | look for a network or Shioaji outage, then restart with `--resume` |
-| `position mirror X != venue Y` | the deployment's position and the owner's `net_for(slug)` disagree | **do not restart blindly**: compare `fills_<slug>.csv`, `events_<slug>.jsonl` and the venue |
+| `position mirror X != venue Y` | the deployment's own position and the owner's `net_for(slug)` disagree. On code before 2026-10-07 09:00, X was the sum of **every** ledger, so a peer's lot alone triggered it | **do not restart blindly**: compare `fills_<slug>.csv`, `events_<slug>.jsonl` and the venue |
 | `order rejected op_code=…` | the venue rejected an order | read the `op_msg` after it |
 | `order rate … exceeds cap …` | a submit storm | treat it as a bug; read `orders.csv` before restarting |
 
@@ -542,6 +542,8 @@ the first pause.
 | 2026-10-07 | venue confirmed: one order, `14AD46` Buy 1 @49887, Filled dealt=1; account +1. Hand-added row kept. **Fix on `main`:** 120 s grace for fills in flight, freeze instead of exit, no wire replay on restart (owner and deployments), `owner_session.jsonl`, crash records name the file. `owner_ack_day_night.json` is a leftover of the discarded fix; no code reads it |
 | 2026-10-07 08:00–08:02 | restart with the fix, `--resume`: owner skipped fullday's old intent, seeded `day_night` +1, agreed with the venue. **But fullday adopted "+1 @ 0.00"**: the owner's seed carried no entry price, so it published `avg_price` 0.0. That defect predates the fix and first showed on this resume while holding. Fixed on `main` (`seed_positions`); owner and fullday restarted to re-adopt @49884 |
 | 2026-10-07 08:12–08:13 | all four restarted on the entry fix: owner seeded `day_night` +1 @ 49884.00; fullday adopted +1 @ 49884.00, ledger replay agreed. Owner kept printing `no intents from ['day_night'] for 180s`: nothing ever called `heartbeat()`. **Heartbeat timer on `main`** (every 30 s from the clock block; `age_seconds` reads only the file's tail). Running processes pick it up at their next restart |
+| 2026-10-07 08:35–08:39 | restart on the heartbeat code. Day's first start died at once on `OMP: Error #135: Cannot set thread affinity mask` (Intel OpenMP vs Process Lasso narrowing the deployments to the V-Cache CCD, `0x0000FFFF`, mid-start-up); the retry was refused by the 60 s backoff, the next one ran. If it recurs: `$env:KMP_AFFINITY = "disabled"` |
+| 2026-10-07 08:45 | **day halted on its first bar: `position mirror 1 != venue 0`.** Under `--broker client` the rail compared §16's account-wide ledger sum (+1, fullday's lot) against the owner's per-deployment `net_for('day')` (0). Latent since the owner shipped; first fired because a ledger was non-zero. Night would have halted the same way at 15:00, and fullday the moment a peer held anything. Fixed on `main` (`reconcile_ledger_dir`: no ledger sum under the owner); all three deployments restarted |
 
 **Open questions:**
 

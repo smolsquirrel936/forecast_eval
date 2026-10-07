@@ -303,6 +303,21 @@ def _rails_config(args: Any, cfg: Any) -> RailsConfig:
     )
 
 
+def reconcile_ledger_dir(broker: str, out_parent: Any) -> Any:
+    """The `ledger_dir` for `LiveRuntime`: the shared ledgers, or None."""
+    # Tech: None under `--broker client`, `out_parent` for every other broker.
+    # Why:  the two sides of `on_reconcile` must describe the same thing.
+    #       `ShioajiBroker.broker_position()` returns the ACCOUNT's book, so the
+    #       mirror must be the account too — §16's sum of every ledger. Under
+    #       the owner, `ClientBroker.broker_position()` returns THIS
+    #       deployment's `net_for(slug)` (owner_process.py, "two
+    #       reconciliations"), so the mirror must be its own position. Passing
+    #       the sum there is §14's category error again: MEASURED 2026-10-07
+    #       08:45, day halted on its first bar with "position mirror 1 != venue
+    #       0" — the 1 was fullday's lot.
+    return None if broker == "client" else out_parent
+
+
 def _broker_banner(args: Any, contract_note: str) -> str:
     # Tech: one line stating whether this run can send orders, and how.
     # Why:  §5 requires the mode to be unmistakable in the log and on the
@@ -844,16 +859,19 @@ def main(argv=None) -> int:
             broker = SimBroker(execution)
 
         # Tech: `ledger_dir` is the directory the per-deployment `fills_*.csv`
-        #       ledgers share — the same `out.parent` `ledger_path` writes into.
-        # Why:  STRATEGY_SPLIT_PLAN §16. It makes the loop reconcile the venue
-        #       against the SUM of what every deployment recorded, rather than
-        #       against this deployment's own position. On one account those two
-        #       differ the moment a second deployment holds anything, and the
-        #       rail halts both for a disagreement that is not a desync (§14).
+        #       ledgers share — the same `out.parent` `ledger_path` writes into
+        #       — or None under `--broker client` (`reconcile_ledger_dir`).
+        # Why:  STRATEGY_SPLIT_PLAN §16. Against the account's own book it makes
+        #       the loop reconcile the venue against the SUM of what every
+        #       deployment recorded, rather than against this deployment's own
+        #       position. On one account those two differ the moment a second
+        #       deployment holds anything, and the rail halts both for a
+        #       disagreement that is not a desync (§14). The owner already
+        #       answers per deployment, so there the own position is the match.
         rt = LiveRuntime(cfg, broker=broker, recorder=recorder, rails=rails,
                          strategy_overrides=strategy_overrides,
                          simulation=True, tick_capture=capture, alerter=alerter,
-                         ledger_dir=out.parent)
+                         ledger_dir=reconcile_ledger_dir(args.broker, out.parent))
         print(rt.rails.banner())
         print(_broker_banner(args, contract_note))
         print(cfg.describe(strategy_params))

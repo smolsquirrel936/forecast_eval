@@ -237,6 +237,52 @@ def test_a_missing_ledger_reproduces_the_previous_behaviour(tmp_path):
     assert not rails.halted, "flat mirror vs flat venue"
 
 
+# ---- under the owner the operand is the deployment's own (2026-10-07) ------
+
+def _runtime_supplier(ledger_dir):
+    """What `LiveRuntime._expected_account_position` does with `ledger_dir`."""
+    return lambda: (None if ledger_dir is None
+                    else account_net_position(ledger_dir))
+
+
+def test_only_the_client_broker_drops_the_ledger_sum(tmp_path):
+    from forecast_eval.live.cli import reconcile_ledger_dir
+    assert reconcile_ledger_dir("client", tmp_path) is None
+    for broker in ("shioaji", "dryrun", "sim"):
+        assert reconcile_ledger_dir(broker, tmp_path) == tmp_path, broker
+
+
+def test_a_flat_deployment_under_the_owner_survives_a_peers_lot(tmp_path):
+    """MEASURED 2026-10-07 08:45: day (flat) halted on its first bar with
+    "position mirror 1 != venue 0". The 1 was fullday's lot from the ledger
+    sum; the 0 was the owner's `net_for('day')`. Under the owner both sides
+    must be this deployment's own."""
+    from forecast_eval.live.cli import reconcile_ledger_dir
+    _ledger(tmp_path, "day_night", [("BUY", 1)])
+
+    rails = SafetyRails(RailsConfig(), simulation=True)
+    _loop(rails, venue=0,
+          expected_position=_runtime_supplier(tmp_path)).on_bar(
+        MarketEvent(T0, 100.0, 1, "DAY"))
+    assert rails.halted, "the old wiring reproduces the 08:45 halt"
+
+    rails = SafetyRails(RailsConfig(), simulation=True)
+    _loop(rails, venue=0, expected_position=_runtime_supplier(
+        reconcile_ledger_dir("client", tmp_path))).on_bar(
+        MarketEvent(T0, 100.0, 1, "DAY"))
+    assert not rails.halted
+
+
+def test_under_the_owner_a_real_desync_still_halts(tmp_path):
+    """The owner says this deployment holds a lot its Trader does not."""
+    from forecast_eval.live.cli import reconcile_ledger_dir
+    rails = SafetyRails(RailsConfig(), simulation=True)
+    _loop(rails, venue=1, expected_position=_runtime_supplier(
+        reconcile_ledger_dir("client", tmp_path))).on_bar(
+        MarketEvent(T0, 100.0, 1, "DAY"))
+    assert rails.halted
+
+
 # ---- the two things the tests above ASSUME rather than prove ----------------
 
 def test_what_FillLedger_writes_is_what_the_sum_reads(tmp_path):
