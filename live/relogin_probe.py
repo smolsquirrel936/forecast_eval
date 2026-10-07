@@ -21,13 +21,19 @@ Seven questions, in the order they must be asked:
       of raising would leave that window inert — passing forever while the token
       is already gone.
 
-**Two modes, because five of the seven need a live tape and two do not.**
+**Three modes, because five of the seven need a live tape and two do not.**
 
     --mode offhours    Q6 + Q7 only. Bare login, no subscription, no orders.
                        ~10 seconds, runnable any time, including a weekend.
     --mode session     all seven. Needs live ticks, so run it inside a session —
                        the DAY session (08:45-13:45) serves as well as the night
                        one, since this tests SDK mechanics, not strategy.
+    --mode reassert    R1-R4: after a `force_refresh` re-login, which re-assertion
+                       brings the order callback BACK? Q3 measured only that it
+                       is lost. 2026-10-07 the shipped re-assertion (callback +
+                       `subscribe_trade`) left all four processes deaf to a fill.
+                       Needs a session (it places orders), ~1 minute, and no
+                       other process logged in (§2.8b caps connections at 5).
 
 **Q7 is destructive and therefore last.** It logs out to invalidate the token,
 which is the whole point: it produces a dead token in seconds instead of waiting
@@ -43,6 +49,7 @@ Usage:
     $env:SHIOAJI_API_KEY="..."; $env:SHIOAJI_SECRET_KEY="..."
     uv run --no-sync python -m forecast_eval.live.relogin_probe --mode offhours
     uv run --no-sync python -m forecast_eval.live.relogin_probe --mode session
+    uv run --no-sync python -m forecast_eval.live.relogin_probe --mode reassert
 """
 from __future__ import annotations
 
@@ -142,10 +149,12 @@ def _login(api, api_key, secret_key, **kw):
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--mode", choices=("offhours", "session"),
+    ap.add_argument("--mode", choices=("offhours", "session", "reassert"),
                     default="offhours",
                     help="offhours: Q6+Q7 only, no subscription or orders. "
-                         "session: all seven, needs live ticks.")
+                         "session: all seven, needs live ticks. "
+                         "reassert: R1-R4, which re-assertion restores the "
+                         "order callback after a re-login; places orders.")
     ap.add_argument("--relogin-form", choices=("force_refresh", "plain"),
                     default="force_refresh",
                     help="session mode: which login form to test around. "
@@ -243,6 +252,8 @@ def main(argv=None) -> int:
                                     api_key, secret_key)
             if rc:
                 return rc
+        elif args.mode == "reassert":
+            _reassert_questions(api, sj, args, findings, api_key, secret_key)
         else:
             _q8_login_forms(api, args, findings, api_key, secret_key, events)
             if args.watch_minutes:
@@ -591,12 +602,12 @@ def _probe_order(api, sj, contract, args, order_events, findings, phase) -> None
         reference = None
     if not reference:
         print("    ! no reference price — skipping the order.")
-        return
+        return 0
 
     limit = probe_limit_price(reference, args.offset_points)
     if limit >= reference:
         print("    ABORT: computed limit is not below the market.")
-        return
+        return 0
     print(f"    reference={reference} -> BUY limit={limit} (passive)")
 
     n_before = len(order_events)
@@ -635,6 +646,116 @@ def _probe_order(api, sj, contract, args, order_events, findings, phase) -> None
     print(f"    callbacks seen: {n}")
     if phase == "before":
         findings["Q3_callbacks_before"] = n
+    return n
+
+
+def _reassert_questions(api, sj, args, findings, api_key, secret_key) -> None:
+    # Tech: baseline order, one `force_refresh` re-login, then a cumulative
+    #       ladder of re-assertions with a probe order after each rung; stop at
+    #       the first rung whose order is heard.
+    # Why:  2026-10-07 — all four processes re-logged in at 14:52-14:55 with the
+    #       shipped re-assertion and never heard the 22:16 night fill: not the
+    #       owner (set_order_callback + subscribe_trade) and not the deployments,
+    #       whose SDK-default order printing went silent too. Q3 measured only
+    #       that the callback is LOST; nothing ever measured what brings it back.
+    #       Cumulative because the first rung that works is the minimal fix, and
+    #       every rung is the one before it plus one call.
+    contract, note = resolve_txf(api, args.contract)
+    print(f"\n  contract: {note}")
+
+    order_events = []
+
+    def _on_order(state, msg):                           # noqa: ANN001
+        order_events.append((datetime.now(), repr(state)[:40]))
+
+    api.set_order_callback(_on_order)
+    base = _probe_order(api, sj, contract, args, order_events, findings,
+                        "before")
+    if not base:
+        findings["R_verdict"] = ("inconclusive — no baseline callbacks; re-run "
+                                 "inside a session")
+        findings["R_left_working"] = _left_working(api, contract)
+        return
+
+    # Tech: the re-login both shipped closures perform, and nothing else.
+    # Why:  the rungs below must start from exactly the state production was
+    #       in at 14:52, or a rung that "works" here proves nothing there.
+    old_account = api.futopt_account
+    print("\n  R0  re-login (force_refresh=True), as owner_cli and cli do")
+    conns_before = _connections(api)
+    ok, value = call("login (force_refresh)",
+                     _login(api, api_key, secret_key, force_refresh=True))
+    findings["R0_relogin"] = "ok" if ok else f"RAISED — {value}"
+    time.sleep(args.settle_seconds)
+    findings["R0_connections"] = f"{conns_before} -> {_connections(api)}"
+    findings["R0_same_account_object"] = api.futopt_account is old_account
+
+    def _fresh_session():
+        # Tech: drop the session entirely and open a plain one, then redo R1+R3.
+        # Why:  the last resort short of a process restart. A fresh process's
+        #       first login is the one path known to hear deals, so this asks
+        #       whether the same works without exiting.
+        api.logout()
+        api.login(api_key=api_key, secret_key=secret_key)
+        api.set_order_callback(_on_order)
+        return api.subscribe_trade(api.futopt_account)
+
+    rungs = (
+        ("R1_set_order_callback",
+         "re-register the order callback only (ShioajiBroker.attach)",
+         lambda: api.set_order_callback(_on_order)),
+        ("R2_subscribe_trade_old_account",
+         "+ subscribe_trade(account from the FIRST login) (the owner's closure)",
+         lambda: api.subscribe_trade(old_account)),
+        ("R3_subscribe_trade_new_account",
+         "+ subscribe_trade(api.futopt_account read AFTER the re-login)",
+         lambda: api.subscribe_trade(api.futopt_account)),
+        ("R4_logout_then_login",
+         "logout, plain login, then R1 + R3",
+         _fresh_session),
+    )
+    for key, label, step in rungs:
+        print(f"\n  {key}  {label}")
+        ok, value = call(key, step)
+        heard = _probe_order(api, sj, contract, args, order_events, findings,
+                             key)
+        findings[key] = (f"{heard} callback(s)"
+                         + ("" if ok else f" — step RAISED {value}"))
+        if heard:
+            findings["R_verdict"] = _r_verdict(key, base, heard)
+            break
+    else:
+        findings["R_verdict"] = ("NOTHING restores the order callback in-process "
+                                 "— a re-login must be a process restart")
+    findings["R_left_working"] = _left_working(api, contract)
+
+
+def _r_verdict(key: str, before: int, after: int) -> str:
+    # Tech: name the first rung that restored the callback, flagging a duplicate.
+    # Why:  a rung that restores the callback twice is not a fix — it is Q3's
+    #       dangerous case, a double-counted fill, arrived at from the other side.
+    if after > before:
+        return (f"{key} restores the callback but DUPLICATED ({before} -> "
+                f"{after}) — clear before re-registering")
+    return f"{key} is the first step that restores the callback ({before} -> {after})"
+
+
+def _left_working(api, contract) -> str:
+    # Tech: refresh order statuses and count probe orders still working.
+    # Why:  every probe order is cancelled in `_probe_order`'s `finally`, but a
+    #       cancel is a request, and this mode deliberately runs on a session
+    #       that may be deaf to the cancel's confirmation. A resting BUY left
+    #       behind fills on the next sharp drop, so the run says so explicitly.
+    from forecast_eval.live.contracts import contract_codes
+    from forecast_eval.live.flatten import is_working
+    codes = contract_codes(contract)
+    try:
+        api.update_status(api.futopt_account)
+        left = [t for t in (api.list_trades() or []) if is_working(t)
+                and str(getattr(getattr(t, "contract", None), "code", "")) in codes]
+    except Exception as exc:                              # noqa: BLE001
+        return f"unknown ({_redact(repr(exc))[:80]}) — CHECK THE FRONT END"
+    return "0" if not left else f"{len(left)} STILL WORKING — cancel by hand"
 
 
 if __name__ == "__main__":

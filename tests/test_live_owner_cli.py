@@ -357,14 +357,24 @@ def test_the_owner_refreshes_before_every_deployment_does():
 
 
 class _ReloginAPI:
-    def __init__(self, subscribed=True):
-        self.logins, self.subscribed_accounts = [], []
+    def __init__(self, subscribed=True, logout_raises=False):
+        self.logins, self.subscribed_accounts, self.calls = [], [], []
         self._subscribed = subscribed
+        self._logout_raises = logout_raises
+        self.futopt_account = "OLD-ACCOUNT"
+
+    def logout(self):
+        self.calls.append("logout")
+        if self._logout_raises:
+            raise RuntimeError("AuthError: Not authenticated")
 
     def login(self, **kw):
+        self.calls.append("login")
         self.logins.append(kw)
+        self.futopt_account = "NEW-ACCOUNT"
 
     def subscribe_trade(self, account):
+        self.calls.append("subscribe_trade")
         self.subscribed_accounts.append(account)
         return self._subscribed
 
@@ -381,14 +391,29 @@ class _Cred:
     api_key, secret_key = "k", "s"
 
 
-def test_the_relogin_refreshes_and_retakes_what_the_refresh_drops():
-    """A plain login is a measured no-op, and callbacks die with the connection."""
+def test_the_relogin_logs_out_then_in_and_subscribes_the_new_session():
+    """MEASURED 2026-10-08 (relogin_probe --mode reassert): after a
+    `force_refresh` login nothing restored the order callback — the 10-07 owner
+    re-logged in that way and never heard the 22:16 night fill. Logout + plain
+    login + subscribe_trade(new account) was heard, 2 of 2."""
     from forecast_eval.live.owner_cli import make_relogin
 
     api, owner = _ReloginAPI(), _AttachOwner()
     make_relogin(api, _Cred(), "ACCOUNT", owner)()
-    assert api.logins == [dict(api_key="k", secret_key="s", force_refresh=True)]
-    assert api.subscribed_accounts == ["ACCOUNT"]
+    assert api.calls == ["logout", "login", "subscribe_trade"]
+    assert api.logins == [dict(api_key="k", secret_key="s")], (
+        "force_refresh is the form that leaves the owner deaf")
+    assert api.subscribed_accounts == ["NEW-ACCOUNT"]
+    assert owner.attached == 1
+
+
+def test_a_logout_that_raises_does_not_stop_the_login():
+    """A token that is already dead cannot log out, and still needs replacing."""
+    from forecast_eval.live.owner_cli import make_relogin
+
+    api, owner = _ReloginAPI(logout_raises=True), _AttachOwner()
+    make_relogin(api, _Cred(), "ACCOUNT", owner)()
+    assert api.calls == ["logout", "login", "subscribe_trade"]
     assert owner.attached == 1
 
 

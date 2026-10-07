@@ -22,11 +22,12 @@ Reading is exhausted.
 | Q6 | Does Shioaji grant a session on a **non-trading day**? | the anchors are wall-clock and fire Saturday and Sunday (§2.25) |
 | Q7 | Does **`api.usage()` raise on a dead token**? | if it returns quietly instead, the verify window is **inert** — passing forever while the token is already gone |
 
-## Two modes
+## Three modes
 | Mode | Answers | Needs | Cost |
 |---|---|---|---|
 | `--mode offhours` | Q6, Q7 (+Q1 partially, Q4, Q5) | nothing — any time, including a weekend | ~10 s |
 | `--mode session` | all seven | live ticks | ~6 min |
+| `--mode reassert` | R1–R4: which re-assertion brings the order callback **back** | a session (places orders), no other process logged in | ~1 min |
 
 Session mode does **not** need the night session specifically: it tests SDK
 mechanics, not strategy, so the day session (08:45–13:45) serves as well and
@@ -36,7 +37,19 @@ comes sooner.
 $env:SHIOAJI_API_KEY="..."; $env:SHIOAJI_SECRET_KEY="..."
 uv run --no-sync python -m forecast_eval.live.relogin_probe --mode offhours
 uv run --no-sync python -m forecast_eval.live.relogin_probe --mode session
+uv run --no-sync python -m forecast_eval.live.relogin_probe --mode reassert
 ```
+
+**Reassert mode** exists because Q3 only measured that the callback is *lost*.
+On 2026-10-07 the shipped re-assertion (`set_order_callback`, plus
+`subscribe_trade` in the owner) left all four processes deaf to a 22:16 fill.
+After a baseline order and one `force_refresh` re-login it climbs a cumulative
+ladder, placing one probe order per rung and stopping at the first rung that is
+heard: R1 `set_order_callback` → R2 `subscribe_trade(account from the first
+login)` → R3 `subscribe_trade(api.futopt_account after the re-login)` → R4
+`logout` + plain `login` + R1 + R3. If no rung is heard, a re-login has to be a
+process restart. Each probe order uses the same passive BUY, cancelled in a
+`finally`; `R_left_working` then counts any probe order still resting.
 
 ## Design notes
 - **Q7 is destructive and therefore last.** It calls `logout()` to invalidate the
@@ -76,6 +89,7 @@ Four runs, 2026-08-16 (off-hours ×3) and 2026-08-17 (day session).
 | **Q7** | `usage()` **raises** on a dead token (`AuthError`) | `api.usage()` is a valid verify call |
 | **Q9** | connection spike **clears to 1 in ~30 s**, flat for 15 min | §2.8b's cap of 5 is never approached |
 | **Q10** | the control: `plain` login → **+0 connections, ticks and callbacks both survive** | callbacks are bound to the **connection object**. Re-assert after session-replacing logins, and only those |
+| **R1–R4** (2026-10-08, night session, shioaji 1.7.6) | after `force_refresh`: R1 `set_order_callback` **0**, R2 + `subscribe_trade(old account)` **0**, R3 + `subscribe_trade(new account)` **0**; R4 logout + plain login + R1 + R3 **2 of 2** (baseline 2), and only R4 printed "Session up". `force_refresh` also hands back a **new** account object | **no in-session re-assertion restores the order callback after `force_refresh`.** The owner now re-logs in with logout + plain login. Ticks were not counted, so the deployments' `force_refresh` closure, whose tick path works, is unchanged — and under `--broker shioaji` it is still deaf to its own fills after a re-login |
 
 **The headline:** `force_refresh=True` rebuilds the session object, so all five
 start-up registrations must be redone — subscription, tick callback, order
