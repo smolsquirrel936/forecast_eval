@@ -304,6 +304,14 @@ Only its `Broker` changes: [ClientBroker](broker/client.md) writes intents to
 **Start [the owner](owner_cli.md) first.** A client whose owner has never spoken
 halts rather than reading the silence as a flat account.
 
+**The position check compares this deployment's own size** (`reconcile_ledger_dir`
+returns None). The owner answers `broker_position()` with `net_for(slug)`, so
+the mirror is this deployment's `Trader.position`, not §16's sum of every
+ledger. The sum is for `--broker shioaji`, whose `broker_position()` is the
+account's whole book. Until 2026-10-07 the sum was used under the owner too. Day
+then halted on the first bar of that morning's session with `position mirror 1 !=
+venue 0`: the 1 was fullday's lot.
+
 **This process still logs in.** It needs the market feed to build bars; only
 *orders* are delegated. That means the owner plus three deployments is **four
 sessions on one credential**, and §14b Q2 measured two coexisting, not four.
