@@ -53,7 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from forecast_eval.live.artifacts import git_commit, git_dirty  # noqa: E402
 from forecast_eval.live.contracts import resolve_txf            # noqa: E402
-from forecast_eval.live.ledger import per_deployment_nets       # noqa: E402
+from forecast_eval.live.ledger import FillLedger, open_position  # noqa: E402
 from forecast_eval.live.owner_process import OwnerProcess       # noqa: E402
 from forecast_eval.live.recorder import Recorder                # noqa: E402
 from forecast_eval.live.relogin import (ReloginScheduler,        # noqa: E402
@@ -210,17 +210,32 @@ def _futures_account(api: Any, accounts: Any) -> Any:
     return None
 
 
-def seed_nets(out_parent: Any, slugs: List[str]) -> Dict[str, int]:
-    """What each deployment's own ledger says it holds, for every served slug."""
-    # Tech: read the per-deployment ledgers and fill in a zero for any slug with
-    #       no file yet.
+def seed_positions(out_parent: Any, slugs: List[str]) -> Dict[str, Any]:
+    """What each deployment's own ledger says it holds, and at what entry."""
+    # Tech: replay every row of each served slug's `fills_<slug>.csv`, across
+    #       all soak epochs, and reduce it with `ledger.open_position`. A slug
+    #       with no ledger, or one that closes flat, seeds 0.
     # Why:  a deployment that has never traded has no ledger, and treating that
-    #       as "unknown" would block a start-up that is completely normal. A slug
-    #       the owner serves but has no record for holds nothing — which is a
-    #       different statement from `account_net_position` returning None,
-    #       because that one is asked to produce a single number for a rail.
-    nets = per_deployment_nets(out_parent)
-    return {slug: int(nets.get(slug, 0)) for slug in slugs}
+    #       as "unknown" would block a start-up that is completely normal.
+    #       Size AND entry, because the owner publishes both and
+    #       `adopt_position` seeds the Trader and the Portfolio from them. Until
+    #       2026-10-07 this returned lot counts alone, so the owner published a
+    #       held lot at avg_price 0.0: fullday's `--resume` adopted its +1 "@
+    #       0.00", and closing it would have booked ~+50 000 points. Same reducer
+    #       `--resume` replays the ledger with, so the two cannot disagree.
+    seeds: Dict[str, Any] = {}
+    for slug in slugs:
+        held = open_position(
+            FillLedger(Path(out_parent) / f"fills_{slug}.csv").replay())
+        seeds[slug] = held if held is not None else 0
+    return seeds
+
+
+def _describe_seed(seeds: Dict[str, Any]) -> Dict[str, str]:
+    """`{slug: "+1 @ 49884.00"}` for the console; flat slugs read "0"."""
+    return {slug: (f"{held.signed_qty:+d} @ {held.avg_price:.2f}"
+                   if getattr(held, "signed_qty", 0) else "0")
+            for slug, held in seeds.items()}
 
 
 def main(argv=None) -> int:
@@ -309,10 +324,11 @@ def main(argv=None) -> int:
         #       to place orders on a seed the venue disagrees with would turn one
         #       stale ledger into a stream of wrongly-sized legs. Refusing here
         #       costs a restart; not refusing costs positions.
-        nets = seed_nets(out_parent, args.slugs)
-        owner.seed_from(nets)
-        print(f"seeded from ledgers: {nets}  account={owner.book.account_net:+d}")
-        recorder.record("owner_seeded", nets=nets,
+        seeds = seed_positions(out_parent, args.slugs)
+        owner.seed_from(seeds)
+        print(f"seeded from ledgers: {_describe_seed(seeds)}  "
+              f"account={owner.book.account_net:+d}")
+        recorder.record("owner_seeded", seeds=_describe_seed(seeds),
                         account=owner.book.account_net)
 
         agreed = owner.reconcile()

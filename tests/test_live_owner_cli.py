@@ -9,7 +9,7 @@ import csv
 import pytest
 
 from forecast_eval.live.ledger import LEDGER_COLUMNS
-from forecast_eval.live.owner_cli import build_parser, main, seed_nets, _serve
+from forecast_eval.live.owner_cli import build_parser, main, seed_positions, _serve
 
 
 def _ledger(directory, slug, rows, soak="epoch-1"):
@@ -24,23 +24,62 @@ def _ledger(directory, slug, rows, soak="epoch-1"):
 
 # ---- seeding ---------------------------------------------------------------
 
-def test_seed_nets_reads_each_deployments_own_ledger(tmp_path):
+def _signed(seeds):
+    return {slug: getattr(held, "signed_qty", held) for slug, held in seeds.items()}
+
+
+def test_seed_positions_reads_each_deployments_own_ledger(tmp_path):
     _ledger(tmp_path, "day", [("BUY", 1), ("BUY", 1)])
     _ledger(tmp_path, "night", [("SELL", 1)])
-    assert seed_nets(tmp_path, ["day", "night"]) == {"day": 2, "night": -1}
+    assert _signed(seed_positions(tmp_path, ["day", "night"])) == {
+        "day": 2, "night": -1}
 
 
 def test_a_slug_with_no_ledger_seeds_flat(tmp_path):
     """A deployment that has never traded is normal, not unknown."""
     _ledger(tmp_path, "day", [("BUY", 1)])
-    assert seed_nets(tmp_path, ["day", "night", "day_night"]) == {
+    assert _signed(seed_positions(tmp_path, ["day", "night", "day_night"])) == {
         "day": 1, "night": 0, "day_night": 0}
 
 
-def test_seed_nets_ignores_ledgers_for_slugs_it_does_not_serve(tmp_path):
+def test_seed_positions_ignores_ledgers_for_slugs_it_does_not_serve(tmp_path):
     _ledger(tmp_path, "day", [("BUY", 1)])
     _ledger(tmp_path, "other", [("BUY", 9)])
-    assert seed_nets(tmp_path, ["day"]) == {"day": 1}
+    assert _signed(seed_positions(tmp_path, ["day"])) == {"day": 1}
+
+
+def test_seed_positions_counts_every_soak_epoch(tmp_path):
+    """The venue holds what every epoch left open, so the seed must too."""
+    path = _ledger(tmp_path, "day", [("BUY", 1)], soak="epoch-1")
+    with path.open("a", newline="", encoding="utf-8") as fh:
+        csv.writer(fh).writerow(["2026-09-08 10:00:00", "BUY", 46100.0, 1, 1.2,
+                                 "epoch-2"])
+    assert _signed(seed_positions(tmp_path, ["day"])) == {"day": 2}
+
+
+def test_a_held_seed_carries_its_entry_price(tmp_path):
+    """2026-10-07: the seed was a bare count, so the owner published fullday's
+    +1 at avg_price 0.0 and `--resume` adopted it "@ 0.00" — closing it would
+    have booked ~+50 000 points."""
+    _ledger(tmp_path, "day_night", [("BUY", 1)])
+    held = seed_positions(tmp_path, ["day_night"])["day_night"]
+    assert held.signed_qty == 1
+    assert held.avg_price == 46000.0
+
+
+def test_the_seeded_entry_reaches_the_deployment(tmp_path):
+    """End to end: ledger -> owner seed -> position event -> what
+    `adopt_position` reads."""
+    from forecast_eval.live.broker.client import ClientBroker
+    from forecast_eval.live.owner_process import OwnerProcess
+
+    _ledger(tmp_path, "day_night", [("BUY", 1)])
+    owner = OwnerProcess(None, None, directory=tmp_path, slugs=["day_night"],
+                         account="ACC")
+    owner.seed_from(seed_positions(tmp_path, ["day_night"]))
+    owner.publish_positions()
+    detail = ClientBroker(tmp_path, "day_night").broker_position_detail()
+    assert (detail.signed_qty, detail.avg_price) == (1, 46000.0)
 
 
 # ---- refusing to start -----------------------------------------------------
