@@ -21,6 +21,7 @@ buy-and-hold by 9 205 points. The Calmar is earned by a small drawdown.
 """
 from typing import Any, Dict
 
+from ...exits.pct_stop import EntryPercentStop
 from .emitter import ThresholdEmitter
 from .forecaster import make_forecaster
 from .trader import Trader
@@ -48,7 +49,18 @@ PARAMS: Dict[str, Any] = {
     "max_aggression_ticks": None,
     "max_position": 1,
     "forced_close": False,
+    # percent-stop knob — package-declared, beyond the twelve CLI knobs
+    # (D6/D7), reachable only through ``--param stop_pct=...``.
+    "stop_pct": None,
 }
+
+# Tech: the knob deliberately defaults OFF.
+# Why:  the shared ``EntryPercentStop`` is measured on DAY only
+#       (PCTSTOP_POSTMORTEM.md — 0.10 is day's one above-incumbent cell);
+#       night's own width is unmeasured, so the default must not move the
+#       recorded baseline. A search cell opts in via ``--param
+#       stop_pct=...``, which keeps the knob in the command string the
+#       ledger records.
 
 # Tech: the emitter knobs deliberately absent from PARAMS — `short_window`,
 #       `min_trend_ticks`, `path_momentum`, `trend_filter`.
@@ -118,11 +130,23 @@ def make_strategy(
             max_aggression_ticks=p["max_aggression_ticks"],
         )
 
+    # Tech: build the percent stop only when its knob is set; None means no
+    #       exit rule, exactly what every recorded run before this knob used.
+    # Why:  run_backtest queries the rule every tick a position is open
+    #       (run.py Step 2) and submits a closing limit on fire — the
+    #       flatten-and-continue semantics the live deployment wants, so the
+    #       backtest measures precisely what live would do.
+    exit_rule = (
+        EntryPercentStop(stop_pct=p["stop_pct"])
+        if p["stop_pct"] is not None
+        else None
+    )
+
     return {
         "forecaster": forecaster,
         "emitter": emitter,
         "make_trader": make_trader,
-        "exit_rule": None,
+        "exit_rule": exit_rule,
         "forced_close": p["forced_close"],
         "params": p,
     }
