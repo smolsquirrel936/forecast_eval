@@ -1,3 +1,4 @@
 commit	train_frac	train_split_bars	calmar	net_pnl	max_drawdown	n_trades	forecaster_sha	status	description
+cdab0c2	pinned	1651591	2.8213	9809.6712	-3477.0220	134	d7acdb22299f	baseline	fullday_pctstop_iter01: baseline -> Calmar 2.8213 (134 trades) = fullday_split_iter07 to 4dp on the simtrade_0929 tree (cdab0c2 forked to autoresearch_fullday_pctstop_1012, stop_pct=None off); unedited-package repro, train 134 / +9809.6712 / -3477.0220 read from the TRAIN 70% block (split bar 1651591, boundary 2024-01-18 03:35, warmup 5000); whole-data 209 / +26004.1600 / -4247.9636 (held out, never scored); next: no-GPU MAE event study then stop_pct cells; command: uv run --no-sync python -m forecast_eval.real_data --strategy fullday --data \\\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_fullday.csv --warmup-bars 5000 --train-bars 1651591 --precompute --output-dir outputs/fullday_pctstop_iter01_20261012_035008
 
 
