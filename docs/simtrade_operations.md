@@ -148,6 +148,16 @@ order-placing broker.
 | a held position | adopted: replayed from the ledger and checked against the owner | **refused** (exit 5) unless *this deployment* is flat |
 | use when | continuing the same test across a pause | after a flatten, or to begin a new test |
 
+**A held lot cannot be resumed once its package declares an exit rule.**
+Adoption seeds the mirrors from the venue's average entry, but
+`adopt_position` refuses (exit 5) whenever an `ExitRule` is configured — the
+entry bar index belongs to the previous process and is not recoverable
+([runtime.py](live/runtime.md) `adopt_position`). With a `stop_pct` declared,
+a held position must be flattened (§6.2), not resumed. The refusal is broader
+than the percent stop strictly needs (`EntryPercentStop` reads only the
+entry price, which adoption does seed) — narrowing it is a code change, not
+an operator one.
+
 Every restart writes a **new** `live_<slug>_<timestamp>/` folder, so one soak's
 artifacts are split across folders; the soak epoch is what ties them together.
 
@@ -182,7 +192,9 @@ Pick one.
   Nothing manages the position in between: no strategy, no exit, no stop-loss.
   Over a weekend that changes little, since the market is closed, but the
   Monday gap lands on it unmanaged. This is the **recommended** path under the
-  owner.
+  owner — **unless the checkout's packages declare a `stop_pct`**: resuming a
+  held lot then refuses at start-up (exit 5, §5), so the position must be
+  flattened instead.
 - **Flatten.** This must happen in session hours, with **all four processes
   stopped** first. Run `flatten --dry-run --out-parent outputs`, which is
   read-only and names whose lots are held, then the same command without
@@ -460,8 +472,14 @@ current run does. Its `--seed-ledger` appends to the live fill ledger, which
 
 - **One account, one book.** The owner nets every deployment, so the account
   can hold up to one lot per deployment in the same direction.
-- **No exit rules, no stop-losses, no forced close** (`forced_close=False`).
-  Positions ride through other sessions, nights and weekends.
+- **No forced close** (`forced_close=False`); a stop-loss only as the package
+  declares one. Each session package's `PARAMS` carries a `stop_pct` knob — an
+  entry-anchored `EntryPercentStop`, checked every bar against the entry price,
+  closing via a marketable limit. Where it is `None` (`main`'s default) there
+  is no exit at all and positions ride through other sessions, nights and
+  weekends; where a width is declared, a held lot cannot be resumed (§5) and a
+  crash leaves the position unmanaged until the stop's next check. Which
+  branch declares which width is recorded in each package's `wiring.py`.
 - **Four logins share the 500 MiB/day data allowance**; the cost of four tick
   subscriptions is unmeasured. A deployment checks the quota **only at
   start-up** (it refuses below 50 MB); the owner samples it on its 30 s cadence
@@ -495,6 +513,10 @@ that branch only.
 | night | `night_iter10` | +0.00065 / −0.00045, `min_prob` 0.55, **long-only**, stride 30 |
 | fullday | `fullday_split_iter07` | band ±0.001, `min_prob` 0.50, stride 15 |
 
+**2026-10-12 ~05:50: not running.** All four processes have been dead since
+2026-10-08 ~21:35 — an abrupt kill, no teardown — with three lots held
+unmanaged at the venue; a clean restart is planned (see the log).
+
 **2026-10-05: night replaced by `night_iter30`** (`4cbc1e6`, branch `autoresearch_night_1004`): band ±0.0004, `min_prob` 0.6, `min_trend_ticks` 10 (emitter default), stride 15, **two-sided**; Calmar 7.2974, 376 trades (whole data). The night row above, and the observations below dated before it, describe `night_iter10`. Current settings: `strategy/README.md`.
 
 **2026-10-03 09:51: running, with the warm-up VRAM fix** (`simtrade_0929` @
@@ -517,7 +539,7 @@ the first pause.
 
 | Date | What |
 |---|---|
-| Mon 2026-10-05, by 08:30 | restart if paused over the weekend (§5) |
+| Mon 2026-10-12, 08:45+ | flatten the three held lots, then the clean restart (log, 2026-10-12) |
 | about 2026-10-19 / 10-20 | restart all deployments before the October expiry (§6.5) |
 | 2026-10-20 / 10-21 | deployments roll; October contract settles |
 
@@ -544,6 +566,9 @@ the first pause.
 | 2026-10-07 08:12–08:13 | all four restarted on the entry fix: owner seeded `day_night` +1 @ 49884.00; fullday adopted +1 @ 49884.00, ledger replay agreed. Owner kept printing `no intents from ['day_night'] for 180s`: nothing ever called `heartbeat()`. **Heartbeat timer on `main`** (every 30 s from the clock block; `age_seconds` reads only the file's tail). Running processes pick it up at their next restart |
 | 2026-10-07 08:35–08:39 | restart on the heartbeat code. Day's first start died at once on `OMP: Error #135: Cannot set thread affinity mask` (Intel OpenMP vs Process Lasso narrowing the deployments to the V-Cache CCD, `0x0000FFFF`, mid-start-up); the retry was refused by the 60 s backoff, the next one ran. If it recurs: `$env:KMP_AFFINITY = "disabled"` |
 | 2026-10-07 08:45 | **day halted on its first bar: `position mirror 1 != venue 0`.** Under `--broker client` the rail compared §16's account-wide ledger sum (+1, fullday's lot) against the owner's per-deployment `net_for('day')` (0). Latent since the owner shipped; first fired because a ledger was non-zero. Night would have halted the same way at 15:00, and fullday the moment a peer held anything. Fixed on `main` (`reconcile_ledger_dir`: no ledger sum under the owner); all three deployments restarted |
+| 2026-10-12 ~05:50 | **all four found dead; dead since 2026-10-08 ~21:35.** No `forecast_eval.live` process; the last run folders (`live_<slug>_20261008_2132xx`) end mid-night-session with no teardown block, and `fatal.jsonl` holds nothing after 10-07 08:46 — an abrupt kill, not a clean stop. Held unmanaged for four days: day +1 @ 49936 (10-07 13:25), night −1 @ 49440 (10-07 22:16), fullday +1 @ 49884 (10-06 09:14). `live_restart_<slug>.json` reads `run_in_flight: true`, so a same-parent restart waits out the 60 s backoff |
+| 2026-10-12 | **`stop_pct` adopted on all three packages, user go** (on `simtrade_0929`): day 0.10 (`aace5c7`), night 0.10 (`260a033`, tightened from the inert 0.20 `9a29ae4`), fullday 0.10 (`c7e2178`). Sweeps: `PCTSTOP_POSTMORTEM.md`, `NIGHT_PCTSTOP_POSTMORTEM.md`, `FULLDAY_PCTSTOP_POSTMORTEM.md`; gates: the adopt rows in `results_*.tsv`. Consequence: a held lot can no longer be resumed (§5) — flatten it |
+| 2026-10-12 | **plan: clean restart.** Next session (08:45+): `flatten --dry-run --out-parent outputs`, then for real (must exit 0); archive `outputs/` (ends the 09-29 soaks, dissolves §6.2's ledger gap and the dead guards' backoff); seed the day and night caches (§6.6); owner first, then all three `--fresh-start`. The stops arm on every **new** entry — the flattened lots are not resumed, so the adoption guard never fires |
 
 **Open questions:**
 
