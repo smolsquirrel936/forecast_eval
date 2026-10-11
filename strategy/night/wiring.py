@@ -51,19 +51,21 @@ PARAMS: Dict[str, Any] = {
     "forced_close": False,
     # percent-stop knob — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param stop_pct=...``.
-    "stop_pct": 0.2,
+    "stop_pct": 0.1,
 }
 
-# Tech: the knob's tuned value — 0.20, ADOPTED on simtrade_0929 (2026-10-12).
-# Why:  the night pct-stop sweep (NIGHT_PCTSTOP_POSTMORTEM.md, ledger rows
-#       night_pctstop_iter01-04) measured every active width as a degradation
-#       (0.02 -> 5.1086, 0.10 -> 5.6650 vs the 7.2974 incumbent) because
-#       night's worst-MAE trades RECOVER before their signal exits; the only
-#       cost-free width is an inert one, and 0.20 carries the measured proof
-#       (iter03: armed, never fires, = baseline to 4dp over 9+ years of
-#       tape). This is pure catastrophic-regime insurance — a loss rail for
-#       an adverse excursion beyond anything recorded, not a performance
-#       mechanism; an explicit ``--param stop_pct=...`` still overrides it.
+# Tech: the knob's tuned value — 0.10, ADOPTED on simtrade_0929 (2026-10-12).
+# Why:  night's first adoption was the inert 0.20 (9a29ae4 — zero measured
+#       cost, armed, never fires); tightened to the firing rail by user go
+#       the same day, the fullday_pctstop catastrophe-rail shape. The
+#       measured cost is one firing per 9 years of tape (night_pctstop_
+#       iter04: 377 vs 376 trades, net -315, DD -3989 -> -5083, Calmar
+#       5.6650 vs the 7.2974 incumbent) because night's worst-MAE trade
+#       (16.83%) RECOVERS before its signal exit, so the stop sells the
+#       trough; the compensation is a hard loss cap at 10% adverse
+#       excursion, bounding any future crash beyond anything recorded.
+#       See NIGHT_PCTSTOP_POSTMORTEM.md. An explicit ``--param
+#       stop_pct=...`` still overrides it.
 
 # Tech: the emitter knobs deliberately absent from PARAMS — `short_window`,
 #       `min_trend_ticks`, `path_momentum`, `trend_filter`.
