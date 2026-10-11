@@ -94,10 +94,28 @@ def measure(open_hm, span_min, label, extra_days=(0,)):
             best_thin, best_thin_b = thin, b
         print("  %-8s %11d %11d %11d %11d %6.1f%%" % (lbl, e, i, e + i, thin,
                                                       100.0 * (e + i) / tot))
+    # Tech: best_thin_b stays None when `agg` is empty -- every Daily_*.rpt
+    #       read failed (read_day swallows FileNotFoundError per file), so no
+    #       bucket saw any volume on either delivery month.
+    # Why:  the suite's static name check imports this module, and until
+    #       2026-10-11 the import crashed here with a TypeError on machines
+    #       where RAW does not exist. An empty survey is a legible answer; a
+    #       crash on import is not.
+    if best_thin_b is None:
+        print("  -> no rows matched any bucket (no raw TAIFEX files under %s?)"
+              % RAW)
+        return agg
     mm = open_min + best_thin_b * 30
     print("  -> busiest by THINNER leg (the binding side of a two-order roll): "
           "%02d:%02d" % ((mm // 60) % 24, mm % 60))
     return agg
 
-measure((15, 0), 14 * 60, "NIGHT roll day 15:00-04:59  [validation]", extra_days=(0, 1))
-measure((8, 45), 5 * 60, "DAY roll day 08:45-13:45  [the C4 answer]")
+
+if __name__ == "__main__":
+    # Tech: the two survey calls run only when the file is executed directly.
+    # Why:  module-level execution ran the full measurement on *import* -- the
+    #       undefined-globals test imports every module, and on a machine
+    #       without the D: raw files that import crashed (empty agg -> None
+    #       best_thin_b). The docs page's run-by-hand command is unchanged.
+    measure((15, 0), 14 * 60, "NIGHT roll day 15:00-04:59  [validation]", extra_days=(0, 1))
+    measure((8, 45), 5 * 60, "DAY roll day 08:45-13:45  [the C4 answer]")
