@@ -10,6 +10,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _no_real_telegram(monkeypatch):
+    """No test ever reaches the real bot.
+
+    `config/secrets.toml` on the trading box carries a live `[telegram]` section,
+    and `cli.main` tests stub the venue but not that file — without this, every
+    refused-start case would buzz the user's phone. Telegram's own tests build
+    `TelegramNotifier` with a fake transport, which this does not affect.
+    """
+    from forecast_eval.live import telegram
+    monkeypatch.setattr(telegram, "load_config", lambda: None)
+
+
 @pytest.fixture
 def cheap_strategy(monkeypatch):
     """Stand a cheap, banded strategy in for a package's real one.

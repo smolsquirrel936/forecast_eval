@@ -88,6 +88,7 @@ from forecast_eval.live.ledger import (FillLedger, ledger_path,     # noqa: E402
 from forecast_eval.live.contracts import (                        # noqa: E402
     contract_month, dated_months, resolve_txf, txf_root)
 from forecast_eval.live.alerts import Alerter                     # noqa: E402
+from forecast_eval.live import telegram                           # noqa: E402
 from forecast_eval.live.feedwatch import FeedWatch, Verdict       # noqa: E402
 from forecast_eval.live.recorder import Recorder                  # noqa: E402
 from forecast_eval.live.relogin import (                          # noqa: E402
@@ -430,6 +431,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "soak_epoch and live_account follow its directory.")
     ap.add_argument("--no-capture", action="store_true",
                     help="Skip raw tick capture (V1's live half needs it)")
+    ap.add_argument("--no-telegram", action="store_true",
+                    help="Do not send alerts to Telegram even if [telegram] is "
+                         "configured in config/secrets.toml")
     ap.add_argument("--max-daily-loss-points", type=float, default=None)
     ap.add_argument("--kill-file", type=Path, default=None)
     # Tech: expose the staleness window, defaulting to the rails' own 120 s.
@@ -614,6 +618,15 @@ def main(argv=None) -> int:
     #       "what has ever gone badly wrong" should be one file, not a search.
     #       `recorder` is attached below once there is one.
     alerter = Alerter(fatal_journal=state_file.parent / "fatal.jsonl")
+
+    # Tech: attach Telegram straight after, with its level file beside the
+    #       fatal journal — one file for every deployment, not keyed by policy.
+    # Why:  attached this early so the earliest fatals reach the phone too. The
+    #       level is deliberately shared: one `/settings` press in the chat
+    #       should change what every running deployment sends (alerts.md).
+    notifier = None if args.no_telegram else telegram.attach(
+        alerter, deployment=args.config,
+        level_file=state_file.parent / "telegram_level.json")
 
     # Tech: the credential is looked up BY DEPLOYMENT — `config/secrets.toml`
     #       first, then the legacy `SHIOAJI_API_KEY`/`SHIOAJI_SECRET_KEY` pair.
@@ -1634,6 +1647,15 @@ def main(argv=None) -> int:
                           position=status.get("position_at_close"),
                           halt_reason=status.get("halt_reason"))
             exit_code = 4
+        # Tech: drain Telegram now, then print its counters.
+        # Why:  after the last alert this run can raise, so `crashed` and
+        #       `flatten_incomplete` are sent before the counters are read. The
+        #       counters are what tell a quiet night from a dead transport: sends
+        #       are asynchronous, so `alert_sink_failures` above never sees them.
+        if notifier is not None:
+            notifier.close()
+            for k, v in notifier.summary().items():
+                print(f"  {k:22s} {v}")
         # Tech: score the last order episode, print the gap, and put the summary
         #       in the trail as its own record.
         # Why:  V4's pass criterion is "a written fill-model gap number" over ≥5
