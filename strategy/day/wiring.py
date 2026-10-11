@@ -62,17 +62,19 @@ PARAMS: Dict[str, Any] = {
     "forced_close": False,
     # percent-stop knob — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param stop_pct=...``.
-    "stop_pct": None,
+    "stop_pct": 0.1,
 }
 
-# Tech: the knob deliberately absent from PARAMS' tuned values — ``stop_pct``
-#       is None (OFF). The day_trail loop measured every stop-side mechanism
-#       as a Calmar loss at these settings; this one is a *live-deployment*
-#       loss rail first (flatten-and-continue), measured here before wiring.
-# Why:  defaulting OFF keeps the unedited package reproducing the recorded
-#       baseline byte-for-byte (gate G1 of the split); a search cell opts in
-#       via ``--param stop_pct=0.03``, which keeps the knob in the command
-#       string the ledger records.
+# Tech: the knob's tuned value — 0.10, ADOPTED on simtrade_0929 (2026-10-12).
+# Why:  day_pctstop_iter05 (ledger `results_day.tsv`, commit 6aaa7bb on
+#       autoresearch_day_pctstop_1012) is the only sweep cell above the
+#       incumbent — Calmar 5.3659 vs 5.1186, DD -1618 -> -1493, 80 trades —
+#       firing twice in 10.8 train years, both on the 2011 catastrophe pair,
+#       and never in the held-out window (PCTSTOP_POSTMORTEM.md). The
+#       unedited-package repro of the adoption is byte-identical to that
+#       cell. Night/fullday keep None: their widths are unmeasured, and
+#       day's 0.10 does not transfer. An explicit ``--param stop_pct=...``
+#       still overrides this default.
 
 # Tech: the emitter knobs deliberately absent from PARAMS — `short_window`,
 #       `min_trend_ticks`, `path_momentum`, `trend_filter`.

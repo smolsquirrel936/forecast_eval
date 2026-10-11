@@ -108,14 +108,24 @@ class TestShouldExit:
 
 class TestWiring:
     @pytest.mark.parametrize("session", SESSIONS)
-    def test_knob_defaults_off(self, session):
-        # Tech: every unedited package must build no exit rule.
-        # Why:  gate G1 of the split — every recorded run reproduced
-        #       byte-for-byte; a default-on stop would silently change them.
+    def test_knob_default_builds_what_params_declares(self, session):
+        # Tech: whatever the package's PARAMS declares is what the unedited
+        #       package builds — None means no exit rule, a value means the
+        #       shared rule at exactly that width.
+        # Why:  day adopted stop_pct 0.10 on simtrade_0929 (day_pctstop_iter05,
+        #       the one above-incumbent cell) while night/fullday stay None
+        #       (unmeasured widths). The invariant is that the package
+        #       default and the built rule agree — pinning "None" here would
+        #       make the adoption itself a test failure instead of a
+        #       recorded decision.
         w = _wiring(session)
-        assert w.PARAMS["stop_pct"] is None
         strat = w.make_strategy(warmup_bars=10)
-        assert strat["exit_rule"] is None
+        declared = w.PARAMS["stop_pct"]
+        if declared is None:
+            assert strat["exit_rule"] is None
+        else:
+            assert isinstance(strat["exit_rule"], EntryPercentStop)
+            assert strat["exit_rule"].stop_pct == declared
 
     @pytest.mark.parametrize("session", SESSIONS)
     def test_knob_builds_the_rule(self, session):
