@@ -144,6 +144,32 @@ closing its position would be trading on someone else's behalf.
 mid-placement — the one moment an order exists at the venue but not yet in the
 book.
 
+## Alerts, and Telegram (since 2026-10-12)
+
+The owner builds an [Alerter](alerts.md) and attaches [Telegram](telegram.md) as
+`[owner]`, on the same `telegram_level.json` as the deployments, so one
+`/settings` press steers all four. Every existing console line is unchanged; the
+alerts are additions beside them.
+
+| Level | Kind | Raised when |
+|---|---|---|
+| FATAL | `owner_frozen` | a running reconcile disagreed and the owner froze |
+| FATAL | `startup_refused` | exit 7 (`gate=subscribe_trade`) or exit 6 (`gate=reconcile`) |
+| FATAL | `no_credentials`, `crashed`, `session_unverified` | as in [cli.py](cli.md); `crashed` re-raises unchanged |
+| WARN | `deployment_silent`, `traffic_low` | **on a change only**: the console still repeats them every 30 s |
+| WARN | `venue_unanswered`, `relogin_failed`, `relogin_abandoned` | start-up reconcile got no answer; a re-login went wrong |
+| INFO | `relogin`, `owner_agrees_again` | a fresh token; the venue matches again while frozen |
+
+Before this, a freeze reached only the owner's console, and the phone heard
+about it about two minutes later as three `owner silent` halts.
+
+**No `fatal.jsonl`.** The status page attributes that file's entries to
+deployment soaks by timing ([status_report.md](status_report.md)), so an owner
+entry would be pinned on whichever soak it fell inside. The owner's alerts are
+recorded in `owner_session.jsonl` as `alert` events instead. The ack and
+`--out` refusals stay console-only: they are typos at a terminal someone is
+looking at. `--no-telegram` turns Telegram off.
+
 ## Two things to know before running it
 
 **Four sessions on one credential — MEASURED, they coexist.** This process logs

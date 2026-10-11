@@ -1,13 +1,13 @@
 # [live/telegram.py](../../live/telegram.py)
 
 **Role:** The Telegram transport for [alerts.py](alerts.md), and the `/settings` buttons that choose what it sends.
-**Pipeline:** [cli.py](cli.md) calls `attach` straight after building the `Alerter`; from then on every alert passes through it.
-**Depends on:** [live/alerts.py](alerts.md), [live/credentials.py](credentials.md)   **Used by:** [live/cli.py](cli.md), [tests/test_live_telegram.py](../tests.md)
+**Pipeline:** [cli.py](cli.md) and [owner_cli.py](owner_cli.md) call `attach` straight after building their `Alerter`; from then on every alert passes through it.
+**Depends on:** [live/alerts.py](alerts.md), [live/credentials.py](credentials.md)   **Used by:** [live/cli.py](cli.md), [live/owner_cli.py](owner_cli.md), [tests/test_live_telegram.py](../tests.md)
 
 ## Responsibility
-One bot, one chat, every deployment. Each `live/cli.py` process registers a
-`TelegramNotifier` as an alerter sink, and every message is prefixed with the
-deployment it came from:
+One bot, one chat, every deployment and the owner. Each `live/cli.py` process,
+and the owner, registers a `TelegramNotifier` as an alerter sink, and every
+message is prefixed with who sent it (`owner` for the owner):
 
 ```
 [night] [INFO] position_opened: LONG 1 @ 46200
@@ -89,4 +89,4 @@ Telegram. `--no-telegram` turns it off for one run.
   real section and the `cli.main` tests stub the venue but not that file.
 
 ## Related
-[live/alerts.py](alerts.md) · [live/cli.py](cli.md) · [live/credentials.py](credentials.md)
+[live/alerts.py](alerts.md) · [live/cli.py](cli.md) · [live/owner_cli.py](owner_cli.md) · [live/credentials.py](credentials.md) · [simtrade_operations.md §9](../simtrade_operations.md)

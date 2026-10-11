@@ -453,3 +453,105 @@ def test_a_quiet_scheduler_prints_nothing(capsys):
     assert _serve(_FakeOwner(), _Args(), None, sched) == 0
     assert sched.checks == 1
     assert "relogin" not in capsys.readouterr().out
+
+
+# ---- alerts (Telegram reaches the owner) -------------------------------------
+
+def _collecting_alerter():
+    from forecast_eval.live.alerts import ALL, Alerter
+    seen = []
+    a = Alerter(console=False)
+    a.add_sink(seen.append, levels=ALL)
+    return a, seen
+
+
+def _serve_n(owner, n, api=None, alerter=None, **kw):
+    """`_serve` for exactly `n` passes, reconciling on every one."""
+    calls = {"n": 0}
+    original = owner.poll
+
+    def _poll():
+        original()
+        calls["n"] += 1
+        if calls["n"] > n:
+            raise KeyboardInterrupt
+    owner.poll = _poll
+    with pytest.raises(KeyboardInterrupt):
+        _serve(owner, _Args(once=False, **kw), api, None, alerter)
+
+
+def test_a_freeze_alerts_once_as_fatal():
+    """Until 2026-10-12 a freeze reached only the owner's console; the phone
+    heard about it two minutes later as three `owner silent` halts."""
+    a, seen = _collecting_alerter()
+    _serve_n(_FakeOwner(reconcile=(False, False, True, True)), 4, alerter=a)
+    assert [(x.severity.value, x.kind) for x in seen] == [
+        ("fatal", "owner_frozen"), ("info", "owner_agrees_again")]
+    assert "mirror 1 != venue 2" in seen[0].message
+
+
+def test_repeating_warnings_alert_on_a_change_only():
+    """The console reprints every 30 s; the phone must not."""
+    a, seen = _collecting_alerter()
+    low = _FakeAPI(_FakeUsage(500_000_000, 524_288_000, 24_288_000))
+    _serve_n(_FakeOwner(stale=["night"]), 3, low, a, min_remaining_mb=50.0)
+    assert [x.kind for x in seen] == ["traffic_low", "deployment_silent"]
+
+
+def test_traffic_alerts_again_after_it_recovered():
+    a, seen = _collecting_alerter()
+
+    class _Flip:
+        n = 0
+
+        def usage(self):
+            self.n += 1
+            left = 524_288_000 if self.n == 2 else 24_288_000
+            return _FakeUsage(0, 524_288_000, left)
+
+    _serve_n(_FakeOwner(), 3, _Flip(), a, min_remaining_mb=50.0)
+    assert [x.kind for x in seen] == ["traffic_low", "traffic_low"]
+
+
+@pytest.mark.parametrize("outcome,expected", [
+    ("RELOGGED", [("info", "relogin")]),
+    ("FAILED", [("warn", "relogin_failed")]),
+    ("ABANDONED", [("warn", "relogin_abandoned")]),
+    ("VERIFY_FAILED", [("fatal", "session_unverified")]),
+    ("VERIFIED", []),
+])
+def test_relogin_outcomes_alert_like_the_deployments(outcome, expected):
+    from forecast_eval.live.relogin import Outcome
+    a, seen = _collecting_alerter()
+    _serve(_FakeOwner(), _Args(), None, _FakeScheduler(Outcome[outcome]), a)
+    assert [(x.severity.value, x.kind) for x in seen] == expected
+
+
+def test_main_attaches_telegram_as_owner_and_alerts_a_missing_credential(
+        tmp_path, monkeypatch):
+    from forecast_eval.live import credentials, owner_cli
+    from forecast_eval.live.alerts import ALL
+    seen, attached = [], {}
+
+    def _attach(alerter, *, deployment, level_file):
+        attached.update(deployment=deployment, level_file=level_file)
+        alerter.console = False
+        alerter.add_sink(seen.append, levels=ALL)
+        return None
+
+    monkeypatch.setattr(owner_cli.telegram, "attach", _attach)
+    monkeypatch.setattr(credentials, "load", lambda name: None)
+    assert main(["--out", str(tmp_path),
+                 "--i-understand-this-places-orders"]) == 2
+    assert attached == {"deployment": "owner",
+                        "level_file": tmp_path / "telegram_level.json"}
+    assert [x.kind for x in seen] == ["no_credentials"]
+
+
+def test_no_telegram_skips_the_attach(tmp_path, monkeypatch):
+    from forecast_eval.live import credentials, owner_cli
+    monkeypatch.setattr(owner_cli.telegram, "attach",
+                        lambda *a, **kw: pytest.fail("attached"))
+    monkeypatch.setattr(credentials, "load", lambda name: None)
+    assert main(["--out", str(tmp_path), "--no-telegram",
+                 "--i-understand-this-places-orders"]) == 2
