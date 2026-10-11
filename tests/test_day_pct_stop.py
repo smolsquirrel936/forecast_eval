@@ -1,0 +1,116 @@
+"""EntryPercentStop — the day package's fraction-of-entry stop.
+
+Mechanics (threshold arithmetic, side flip, exact-at-threshold firing, the
+(0,1) construction guard) plus the wiring contract: the knob defaults OFF so
+the unedited package builds no exit rule, an explicit knob builds one, and an
+unknown override is still refused.
+"""
+from datetime import datetime
+
+import pytest
+
+from forecast_eval.events import MarketEvent
+from forecast_eval.exits.base import PositionState
+from forecast_eval.strategy.day.pct_stop import EntryPercentStop
+from forecast_eval.strategy.day.wiring import PARAMS, make_strategy
+
+
+def _pos(side, entry):
+    return PositionState(
+        side=side,
+        size=1,
+        entry_price=entry,
+        entry_bar_idx=0,
+        entry_timestamp=datetime(2026, 1, 1, 9, 0),
+    )
+
+
+def _mkt(price):
+    return MarketEvent(
+        timestamp=datetime(2026, 1, 1, 9, 1), price=price, volume=1,
+        session="DAY",
+    )
+
+
+class TestConstruction:
+    @pytest.mark.parametrize("bad", [0.0, -0.01, 1.0, 2.5])
+    def test_rejects_non_fractional_widths(self, bad):
+        with pytest.raises(ValueError, match="stop_pct"):
+            EntryPercentStop(stop_pct=bad)
+
+    def test_accepts_fractional_width(self):
+        assert EntryPercentStop(stop_pct=0.03).stop_pct == 0.03
+
+
+class TestShouldExit:
+    def test_long_fires_exactly_at_threshold(self):
+        rule = EntryPercentStop(stop_pct=0.03)
+        assert rule.should_exit(_pos("LONG", 20000.0), _mkt(19400.0), bar_idx=5)
+
+    def test_long_fires_past_threshold(self):
+        rule = EntryPercentStop(stop_pct=0.03)
+        assert rule.should_exit(_pos("LONG", 20000.0), _mkt(19000.0), bar_idx=5)
+
+    def test_long_holds_above_threshold(self):
+        rule = EntryPercentStop(stop_pct=0.03)
+        assert not rule.should_exit(
+            _pos("LONG", 20000.0), _mkt(19400.01), bar_idx=5
+        )
+
+    def test_short_fires_exactly_at_threshold(self):
+        rule = EntryPercentStop(stop_pct=0.03)
+        assert rule.should_exit(_pos("SHORT", 20000.0), _mkt(20600.0), bar_idx=5)
+
+    def test_short_holds_below_threshold(self):
+        rule = EntryPercentStop(stop_pct=0.03)
+        assert not rule.should_exit(
+            _pos("SHORT", 20000.0), _mkt(20599.99), bar_idx=5
+        )
+
+    def test_width_scales_with_entry_price(self):
+        # Tech: the same 3% width must be a wider point gap at a higher entry.
+        # Why: the era-dependence the percent denomination exists to fix — a
+        #       fixed point gap is a different fraction of the contract at
+        #       2011 vs 2026 price levels.
+        rule = EntryPercentStop(stop_pct=0.03)
+        low_entry, high_entry = 7000.0, 24000.0
+        assert not rule.should_exit(
+            _pos("LONG", high_entry), _mkt(high_entry - 0.03 * low_entry),
+            bar_idx=5,
+        )
+        assert rule.should_exit(
+            _pos("LONG", low_entry), _mkt(low_entry - 0.03 * low_entry),
+            bar_idx=5,
+        )
+
+    def test_stateless_across_positions(self):
+        # Tech: query a rule against one position, then another with a
+        #       different entry; the second answer must depend only on the
+        #       second entry.
+        # Why:  the rule has no arming/re-key machinery — after a stop fires
+        #       and the strategy re-enters, the new position's snapshot must
+        #       carry its own threshold.
+        rule = EntryPercentStop(stop_pct=0.05)
+        assert rule.should_exit(_pos("LONG", 10000.0), _mkt(9000.0), bar_idx=1)
+        assert not rule.should_exit(_pos("LONG", 20000.0), _mkt(19050.0), bar_idx=2)
+        assert rule.should_exit(_pos("SHORT", 15000.0), _mkt(15800.0), bar_idx=3)
+
+
+class TestWiring:
+    def test_knob_defaults_off(self):
+        # Tech: the unedited package must build no exit rule.
+        # Why:  gate G1 of the split — every recorded run reproduced
+        #       byte-for-byte; a default-on stop would silently change them.
+        assert PARAMS["stop_pct"] is None
+        strat = make_strategy(warmup_bars=10)
+        assert strat["exit_rule"] is None
+
+    def test_knob_builds_the_rule(self):
+        strat = make_strategy(warmup_bars=10, stop_pct=0.03)
+        rule = strat["exit_rule"]
+        assert isinstance(rule, EntryPercentStop)
+        assert rule.stop_pct == 0.03
+
+    def test_unknown_override_still_refused(self):
+        with pytest.raises(ValueError, match="unknown strategy override"):
+            make_strategy(warmup_bars=10, stop_loss_ticks=900)
