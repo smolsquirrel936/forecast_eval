@@ -11,7 +11,12 @@
 uv run --no-sync python tools/roll_at_measure.py
 ```
 
-Offline and read-only. Touches no venue and no live state.
+Offline and read-only. Touches no venue and no live state. The module is
+**import-safe**: the surveys run only under the command above (the suite's
+static name check imports every module, so module-level execution would run —
+on a machine without the raw files, crash — on every test run). With no
+readable files under `RAW`, `measure` prints `no rows matched` and returns an
+empty table instead of raising.
 
 ## Responsibility
 `ROLL_AT` decides when a deployment swaps months, and the wrong value is not
