@@ -1,18 +1,28 @@
-"""EntryPercentStop — the day package's fraction-of-entry stop.
+"""EntryPercentStop — the shared fraction-of-entry stop, plus the wiring
+contract in all three session packages.
 
 Mechanics (threshold arithmetic, side flip, exact-at-threshold firing, the
-(0,1) construction guard) plus the wiring contract: the knob defaults OFF so
-the unedited package builds no exit rule, an explicit knob builds one, and an
-unknown override is still refused.
+(0,1) construction guard) plus the per-session wiring contract: every
+package's ``stop_pct`` defaults OFF so the unedited package builds no exit
+rule, an explicit knob builds the shared rule, and an unknown override is
+still refused.
 """
+import importlib
 from datetime import datetime
 
 import pytest
 
 from forecast_eval.events import MarketEvent
 from forecast_eval.exits.base import PositionState
-from forecast_eval.strategy.day.pct_stop import EntryPercentStop
-from forecast_eval.strategy.day.wiring import PARAMS, make_strategy
+from forecast_eval.exits.pct_stop import EntryPercentStop
+
+SESSIONS = ("day", "night", "fullday")
+
+
+def _wiring(session):
+    return importlib.import_module(
+        f"forecast_eval.strategy.{session}.wiring"
+    )
 
 
 def _pos(side, entry):
@@ -97,20 +107,28 @@ class TestShouldExit:
 
 
 class TestWiring:
-    def test_knob_defaults_off(self):
-        # Tech: the unedited package must build no exit rule.
+    @pytest.mark.parametrize("session", SESSIONS)
+    def test_knob_defaults_off(self, session):
+        # Tech: every unedited package must build no exit rule.
         # Why:  gate G1 of the split — every recorded run reproduced
         #       byte-for-byte; a default-on stop would silently change them.
-        assert PARAMS["stop_pct"] is None
-        strat = make_strategy(warmup_bars=10)
+        w = _wiring(session)
+        assert w.PARAMS["stop_pct"] is None
+        strat = w.make_strategy(warmup_bars=10)
         assert strat["exit_rule"] is None
 
-    def test_knob_builds_the_rule(self):
-        strat = make_strategy(warmup_bars=10, stop_pct=0.03)
+    @pytest.mark.parametrize("session", SESSIONS)
+    def test_knob_builds_the_rule(self, session):
+        # Tech: an explicit knob builds the SHARED rule class — one
+        #       implementation, three packages.
+        w = _wiring(session)
+        strat = w.make_strategy(warmup_bars=10, stop_pct=0.03)
         rule = strat["exit_rule"]
         assert isinstance(rule, EntryPercentStop)
         assert rule.stop_pct == 0.03
 
-    def test_unknown_override_still_refused(self):
+    @pytest.mark.parametrize("session", SESSIONS)
+    def test_unknown_override_still_refused(self, session):
+        w = _wiring(session)
         with pytest.raises(ValueError, match="unknown strategy override"):
-            make_strategy(warmup_bars=10, stop_loss_ticks=900)
+            w.make_strategy(warmup_bars=10, stop_loss_ticks=900)

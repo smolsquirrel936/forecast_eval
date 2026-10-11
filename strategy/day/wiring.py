@@ -32,9 +32,9 @@ It trails eval-window buy-and-hold by 24 419 points, and it has never traded.
 """
 from typing import Any, Dict
 
+from ...exits.pct_stop import EntryPercentStop
 from .emitter import ThresholdEmitter
 from .forecaster import make_forecaster
-from .pct_stop import EntryPercentStop
 from .trader import Trader
 
 # Tech: this session's default knobs — the twelve values `real_data.py`'s

@@ -3,20 +3,27 @@ against the position.
 
 Entry-anchored, percent-width: the stop sits ``entry_price * stop_pct`` on the
 adverse side of the entry fill and never moves, so the point gap is set once,
-by the price level at entry. This is the live loop's requested "float" —
+by the price level at entry. This is the "float" the live loop asked for --
 ``max_daily_loss_points`` is a fixed point budget that means different
 fractions of the contract at different price levels (the day tape spans
 6 952 to 26 000); a 3 % stop is ~209 points at a 2011 entry and ~780 at a
-2026 one. Unlike ``TrailingStop`` (day_trail post-mortem: fires at V-bottoms,
-every width discarded), the reference is the entry, not the best print — a
-winner's open profit is never given back by the rule itself.
+2026 one. Unlike a give-back trail (day_trail post-mortem: fires at
+V-bottoms, every width discarded), the reference is the entry, not the best
+print -- a winner's open profit is never given back by the rule itself.
 
 The rule is stateless: ``should_exit`` reads only the ``PositionState``
 snapshot the run loop rebuilds every tick, so a re-entry minutes after a
 stop fires is handled with no arming machinery at all.
+
+Promoted from ``strategy/day/pct_stop.py`` (2026-10-12) so all three session
+packages can declare the ``stop_pct`` knob against one implementation. The
+only measured evidence is DAY's 8-cell sweep (``PCTSTOP_POSTMORTEM.md``:
+0.10 is the one cell above that incumbent; below 0.10 churn dominates);
+each other session's width needs its own loop before it is tuned --
+day's 0.10 does not transfer.
 """
-from ...events import MarketEvent
-from ...exits.base import ExitRule, PositionState
+from ..events import MarketEvent
+from .base import ExitRule, PositionState
 
 
 class EntryPercentStop(ExitRule):
