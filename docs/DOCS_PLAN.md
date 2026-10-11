@@ -43,6 +43,7 @@ docs/
   live/broker/{base,sim,dryrun,shioaji,shadow}.md
   tests.md           ← consolidated suite overview
   simtrade_operations.md ← task page: operating the owner + deployments (no module)
+  notifications.md   ← task page: alerts and Telegram, the usage manual (no module)
 ```
 
 - **Hub** ([README.md](README.md)) is the page read first: a Mermaid architecture

@@ -89,4 +89,4 @@ Telegram. `--no-telegram` turns it off for one run.
   real section and the `cli.main` tests stub the venue but not that file.
 
 ## Related
-[live/alerts.py](alerts.md) · [live/cli.py](cli.md) · [live/owner_cli.py](owner_cli.md) · [live/credentials.py](credentials.md) · [simtrade_operations.md §9](../simtrade_operations.md)
+[notifications.md](../notifications.md) (the usage manual) · [live/alerts.py](alerts.md) · [live/cli.py](cli.md) · [live/owner_cli.py](owner_cli.md) · [live/credentials.py](credentials.md) · [simtrade_operations.md §9](../simtrade_operations.md)
