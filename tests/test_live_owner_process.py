@@ -232,6 +232,28 @@ def test_a_fill_carries_a_fee(tmp_path):
     assert fill.fee == pytest.approx(0.2)
 
 
+def test_a_fill_is_stamped_in_venue_local_time(tmp_path):
+    """A deal's `ts` is a UTC epoch; every other timestamp is naive Taipei time.
+
+    MEASURED 2026-10-08: night's SELL, ordered at 22:15 local and filled at
+    49,440 at 22:16:52, was booked at 14:16:52 — between sessions, eight hours
+    before its own order. `TS.timestamp()` in `_deal` reads a naive TS as UTC,
+    so the other tests round-trip it and cannot see this."""
+    owner, api = _owner(tmp_path)
+    night = ClientBroker(tmp_path, "night")
+    night.submit(OrderEvent(timestamp=pd.Timestamp("2026-10-07 22:15:00"), side="SELL",
+                            limit_price=49440.0, intent="OPEN", quantity=1),
+                 current_price=49440.0)
+    owner.poll()
+    owner._on_event(type("S", (), {"name": "FuturesDeal"})(), {
+        "ordno": "NO1", "trade_id": None, "exchange_seq": "1", "action": "Sell",
+        "price": 49440.0, "quantity": 1,
+        "ts": pd.Timestamp("2026-10-07 14:16:52", tz="UTC").timestamp()})
+    (fill,) = night.poll_fills(MarketEvent(timestamp=TS, price=49440.0, volume=1,
+                                           session="NIGHT"))
+    assert fill.timestamp == pd.Timestamp("2026-10-07 22:16:52")
+
+
 # ---- the deal callback -----------------------------------------------------
 
 def test_deal_is_dispatched_before_order(tmp_path):

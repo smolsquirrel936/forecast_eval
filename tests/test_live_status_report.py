@@ -6,7 +6,10 @@ touches a running soak.
 import json
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from forecast_eval.live import status_report as sr
+from forecast_eval.metrics import trading_metrics
 from forecast_eval.live.status_report import Proc
 
 NOW = datetime(2026, 10, 1, 18, 30, 0)
@@ -16,6 +19,10 @@ HW = {"procs": [{"pid": 300, "ded": 8000.0, "shr": 0.0, "ws": 400, "priv": 14000
       "gpu": {"name": "GPU", "used": 30000.0, "total": 32000.0, "util": 0.0, "temp": 50.0,
               "power": 50.0, "power_limit": 500.0, "driver": "1"},
       "mem": {"ram": 128.0, "ram_free": 64.0, "commit": 130.0, "commit_free": 60.0, "cpu": "CPU"}}
+# The headers `logging_io.write_fills` / `write_trades` produce.
+FILLS_HEAD = "timestamp,side,fill_price,quantity,fee"
+TRADES_HEAD = ("entry_ts,exit_ts,side,entry_price,exit_price,pnl_points,fees_points,"
+               "net_pnl_points,session,bars_held,rolled")
 
 
 def _procs():
@@ -74,8 +81,8 @@ def _outputs(tmp_path):
     for m in ("15:00:10", "15:01:10", "15:02:30", "15:03:10", "15:04:10"):
         ticks.append(f"2026-09-30T{m},2026-09-30T{m}.500000,TXF,100,2,0")
     (run / "ticks.csv").write_text("\n".join(ticks) + "\n", encoding="utf-8")
-    for name, head in (("orders.csv", "timestamp,side"), ("fills.csv", "timestamp,side"),
-                       ("trades.csv", "entry_ts,net_pnl_points")):
+    for name, head in (("orders.csv", "timestamp,side"), ("fills.csv", FILLS_HEAD),
+                       ("trades.csv", TRADES_HEAD)):
         (run / name).write_text(head + "\n", encoding="utf-8")
     _write_jsonl(out / "events_night.jsonl", [{"kind": "position", "signed_qty": 0}] * 3)
     _write_jsonl(out / "fatal.jsonl", [{"kind": "crashed", "when": "2026-09-30T07:55:00", "message": "boom"}])
@@ -158,7 +165,7 @@ def _resumed(out):
     # the old folder: one order and its fill, plus a forecast on its LAST bar,
     # whose 2-bar horizon can only be scored from the new folder's bars
     (old / "orders.csv").write_text("timestamp,side\n2026-09-30T15:01:00,BUY\n", encoding="utf-8")
-    (old / "fills.csv").write_text("timestamp,side\n2026-09-30T15:01:05,BUY\n", encoding="utf-8")
+    (old / "fills.csv").write_text(f"{FILLS_HEAD}\n2026-09-30T15:01:05,BUY,100,1,0.02\n", encoding="utf-8")
     with (old / "session.jsonl").open("a", encoding="utf-8") as f:
         f.write("\n" + json.dumps({"event": "forecast", "bar_idx": 4, "timestamp": "2026-10-01T00:01:00",
                                    "payload": {"predicted_return": -0.003, "prob_up": 0.1,
@@ -172,8 +179,8 @@ def _resumed(out):
         "timestamp,received,code,price,volume,simtrade\n"
         "2026-10-01T15:00:10,2026-10-01T15:00:10.500000,TXF,97,1,0\n", encoding="utf-8")
     (new / "orders.csv").write_text("timestamp,side\n", encoding="utf-8")
-    (new / "fills.csv").write_text("timestamp,side\n2026-09-30T15:01:05,BUY\n", encoding="utf-8")
-    (new / "trades.csv").write_text("entry_ts,net_pnl_points\n", encoding="utf-8")
+    (new / "fills.csv").write_text(f"{FILLS_HEAD}\n2026-09-30T15:01:05,BUY,100,1,0.02\n", encoding="utf-8")
+    (new / "trades.csv").write_text(TRADES_HEAD + "\n", encoding="utf-8")
     return old, new
 
 
@@ -211,6 +218,71 @@ def test_a_forecast_whose_horizon_crosses_a_restart_is_still_scored(tmp_path, mo
     assert (r["decisions"]["hit"], r["decisions"]["n_eval"]) == (3, 3)
 
 
+def test_a_hold_past_band_and_min_prob_names_its_veto(tmp_path, monkeypatch):
+    """The emitter's only gates after min_prob are the trend filter, then the
+    path check. A HOLD whose median path agrees with the signal is the trend
+    filter's; one whose path disagrees could be either, so it says so. An
+    emitted signal and a min_prob failure carry no veto."""
+    _fake_packages(tmp_path, monkeypatch)
+    out, log = _outputs(tmp_path)
+    run = out / "live_night_20260930_080000"
+    sell = {"predicted_return": -0.005, "prob_up": 0.1, "last_price": 99.0}
+    _write_jsonl(run / "session.jsonl", [
+        json.loads(l) for l in (run / "session.jsonl").read_text(encoding="utf-8").splitlines()
+        if not l.startswith('{"truncated"')] + [
+        {"event": "forecast", "bar_idx": 3, "timestamp": "2026-09-30T15:04:00",
+         "payload": {**sell, "median_path": [99.0, 98.0, 97.0]}},       # path agrees
+        {"event": "signal", "timestamp": "2026-09-30T15:04:00", "direction": "HOLD"},
+        {"event": "forecast", "bar_idx": 4, "timestamp": "2026-10-01T00:01:00",
+         "payload": {**sell, "median_path": [99.0, 100.0, 97.0]}},      # path disagrees
+        {"event": "signal", "timestamp": "2026-10-01T00:01:00", "direction": "HOLD"},
+    ])
+    data = sr.collect(out, log, NOW, processes=_procs(), hardware=HW, tz=UTC)
+    d = data["runs"][0]["decisions"]
+    assert [f["veto"] for f in d["rows"]] == [None, None, "trend", "trend or path"]
+    assert d["vetoes"] == {"trend": 1, "trend or path": 1}
+    text = " ".join(f["html"] for f in sr.findings(data))
+    assert "1 vetoed by the trend filter, 1 by the trend filter or path check" in text
+
+
+def test_performance_is_the_per_run_reports_metrics_and_charts(tmp_path):
+    """The table is `metrics.trading_metrics` over trades.csv, in its own key
+    order; the charts are the per-run report's plotly figures, drawn against the
+    soak's capture; and nothing is written under outputs/ — the soak price
+    cache belongs to the live process."""
+    out, log = _outputs(tmp_path)
+    run = out / "live_night_20260930_080000"
+    (run / "trades.csv").write_text(
+        TRADES_HEAD + "\n"
+        "2026-09-30T15:00:30,2026-09-30T15:01:30,LONG,100,103,3,0.04,2.96,NIGHT,1,0\n"
+        "2026-09-30T15:03:30,2026-09-30T15:04:30,SHORT,102,103,-1,0.04,-1.04,NIGHT,1,0\n",
+        encoding="utf-8")
+    (run / "fills.csv").write_text(
+        FILLS_HEAD + "\n2026-09-30T15:00:30,BUY,100,1,0.02\n2026-09-30T15:01:30,SELL,103,1,0.02\n"
+        "2026-09-30T15:03:30,SELL,102,1,0.02\n2026-09-30T15:04:30,BUY,103,1,0.02\n", encoding="utf-8")
+    before = sorted(str(p) for p in out.rglob("*"))
+    data = sr.collect(out, log, NOW, processes=_procs(), hardware=HW, tz=UTC)
+    assert sorted(str(p) for p in out.rglob("*")) == before
+    perf = data["runs"][0]["performance"]
+    assert [k for k, _ in perf["metrics"]] == list(trading_metrics([]))
+    m = dict(perf["metrics"])
+    assert m["n_trades"] == 2 and m["net_pnl_points"] == pytest.approx(1.92)
+    assert m["hit_rate"] == 0.5 and m["max_drawdown_points"] == pytest.approx(-1.04)
+    assert perf["point_value"] == 200.0                     # the per-run report's TXF default
+    assert "strategy" in {t["name"] for t in perf["figs"]["equity"]["data"]}
+    assert [t["name"] for t in perf["figs"]["price"]["data"]] == ["price", "BUY", "SELL"]
+
+
+def test_performance_without_trades_is_valid_json(tmp_path):
+    """No round trip leaves the ratios undefined; they must reach the page as
+    null, since NaN is not JSON."""
+    out, log = _outputs(tmp_path)
+    data = sr.collect(out, log, NOW, processes=_procs(), hardware=HW, tz=UTC)
+    m = dict(data["runs"][0]["performance"]["metrics"])
+    assert m["n_trades"] == 0 and m["hit_rate"] is None
+    json.dumps(data, default=str, allow_nan=False)
+
+
 def test_findings_flag_gaps_failed_relogins_and_vram(tmp_path):
     out, log = _outputs(tmp_path)
     data = sr.collect(out, log, NOW, processes=_procs(), hardware=HW, tz=UTC)
@@ -233,8 +305,8 @@ def test_render_is_deterministic_and_escapes_script_end(tmp_path):
     data["fatal"][0]["message"] = "</script><b>x"
     a, b = sr.render(data), sr.render(json.loads(json.dumps(data, default=str)))
     assert a == b
-    assert "__STATUS_DATA__" not in a
-    assert a.count("</script>") == 1
+    assert "__STATUS_DATA__" not in a and "__PLOTLY_JS__" not in a
+    assert a.count("</script>") == 2                # plotly.js + the page's own script
 
 
 def test_main_writes_the_page_and_json(tmp_path, monkeypatch):

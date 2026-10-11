@@ -31,6 +31,7 @@ from __future__ import annotations
 import threading
 import time
 from collections import deque
+from datetime import timedelta
 from typing import Any, Callable, Deque, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
@@ -60,6 +61,16 @@ DEFAULT_DEPLOYMENT_TIMEOUT = 180.0
 #       inside that window sees the venue ahead. 120 s is about 3x the slowest
 #       booking seen; an unexplainable difference still fails at once.
 DEFAULT_RECONCILE_GRACE = 120.0
+
+# Tech: the venue clock's offset from UTC, added to a deal's epoch `ts`.
+# Why:  MEASURED 2026-10-08 (simtrade_0929): a deal's `ts` is a UTC epoch, while
+#       every other timestamp here — bars, orders, ticks — is naive Taipei time.
+#       Unconverted, night's SELL ordered at 22:15 was booked at 14:16:52, between
+#       sessions and eight hours before its own order, which mislabels the
+#       trade's session through `classify_session`. TAIFEX is Asia/Taipei, UTC+8
+#       all year with no DST, so the offset is a constant — the same one
+#       `tools/session_artifacts.VENUE_UTC_OFFSET` applies to recorded deals.
+VENUE_UTC_OFFSET = timedelta(hours=8)
 
 
 def _load_sj() -> Any:
@@ -463,8 +474,8 @@ class OwnerProcess:
             side="BUY" if action.endswith("Buy") else "SELL",
             price=price,
             quantity=quantity,
-            timestamp=pd.Timestamp(msg["ts"], unit="s") if msg.get("ts")
-            else pd.Timestamp.now(),
+            timestamp=pd.Timestamp(msg["ts"], unit="s") + VENUE_UTC_OFFSET
+            if msg.get("ts") else pd.Timestamp.now(),
             fee=price * self.fee_rate * max(quantity, 0),
         )
         if booked is None:

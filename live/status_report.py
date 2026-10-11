@@ -18,6 +18,7 @@ import ast
 import csv
 import html
 import json
+import math
 import re
 import shutil
 import statistics
@@ -222,6 +223,55 @@ def _rows(path: Path) -> List[Dict[str, str]]:
         return []
 
 
+def collect_performance(dep: Deployment) -> Dict[str, Any]:
+    """The per-run report's trading metrics and two charts, for one deployment."""
+    # Tech: imported here, not at module level.
+    # Why:  `reports` pulls matplotlib and plotly, and `metrics` pulls pandas;
+    #       the rest of this module reads plain CSV and JSON, so the heavy
+    #       imports stay with the one section that needs them.
+    import pandas as pd
+
+    from .. import reports
+    from ..metrics import TradeRecord, trading_metrics
+    from .prices import minute_series
+
+    # Tech: trades and fills from the newest folder, read by the per-run report's
+    #       own reader; `point_value` and `fee_rate` from params.json with the
+    #       same TXF defaults `reports.generate_report` falls back to.
+    # Why:  the newest folder's files already cover the whole soak (`--resume`
+    #       replays its fills — see `collect_run`), and the same reader and the
+    #       same defaults are what make these numbers the per-run report's
+    #       numbers rather than a second implementation of them.
+    trades = reports._read_artifact(dep.run_dir, "trades")
+    fills = reports._read_artifact(dep.run_dir, "fills")
+    point_value = float(dep.params.get("point_value") or 200.0)
+    fee_rate = float(dep.params.get("fee_rate") or 0.0002)
+    m = trading_metrics([TradeRecord(**t) for t in trades.to_dict("records")])
+    # Why:  NaN is not JSON; null renders as "—" like every other missing value.
+    m = {k: None if isinstance(v, float) and math.isnan(v) else v for k, v in m.items()}
+
+    # Tech: the price line is every soak folder's capture at one row a minute,
+    #       through the helper the per-run report's price cache is built from.
+    # Why:  `prices.soak_price_series` would also give this line, but it writes
+    #       `prices_<slug>.csv`, and this report must never write anywhere but
+    #       its own output. The soak's folders are the ones its fills came from.
+    frames = [f for f in (minute_series(rd / "ticks.csv") for rd in dep.run_dirs or (dep.run_dir,))
+              if f is not None]
+    ticks = pd.concat(frames).sort_values("timestamp", ignore_index=True) if frames else None
+
+    # Tech: the two plotly figures, as JSON for `Plotly.newPlot` in the page.
+    # Why:  the same functions the per-run report draws with, so the charts are
+    #       identical to it; without plotly the section keeps its table.
+    figs = {"equity": None, "price": None}
+    if reports._HAS_PLOTLY:
+        figs["equity"] = json.loads(reports.plot_equity_drawdown_plotly(
+            trades, ticks=ticks, fee_rate=fee_rate, point_value=point_value).to_json())
+        figs["price"] = json.loads(reports.plot_price_fills_plotly(fills, ticks).to_json())
+    # Why:  pairs, not a dict — the page JSON is written with sorted keys, and the
+    #       table should keep the per-run report's row order.
+    return {"metrics": list(m.items()), "point_value": point_value, "figs": figs}
+
+
 def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]:
     """Everything the report shows about one deployment, as plain JSON-able data."""
     params, d = dep.params, dep.run_dir
@@ -317,6 +367,7 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
     bar_pos = {(b["_run"], b["bar_idx"]): i for i, b in enumerate(bars)}
     signals = {e["timestamp"]: e for e in events if e.get("event") == "signal"}
     rows, band_pass, prob_pass, hits, n_eval, abs_err = [], 0, 0, 0, 0, []
+    vetoes: Counter = Counter()
     for e in (e for e in events if e.get("event") == "forecast"):
         p = e.get("payload", {})
         r, pu = p.get("predicted_return"), p.get("prob_up")
@@ -329,6 +380,25 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
             pu is not None and (pu if direction == "BUY" else 1 - pu) >= min_prob))
         band_pass += crossed
         prob_pass += prob_ok
+        s = signals.get(e["timestamp"], {})
+        # Tech: for a forecast that passed band and min_prob but whose logged
+        #       signal is HOLD, name the emitter veto that held it: "trend" when
+        #       the median path's midpoint sits on the signal's side of
+        #       last_price (the path check passes), else "trend or path".
+        # Why:  `ThresholdEmitter._decide` runs the trend filter, then the path
+        #       check, and nothing else after min_prob. The path check is
+        #       stateless, so the payload re-runs it exactly; the trend filter's
+        #       price window holds warm-up samples that are never logged, so it
+        #       is named only by elimination. When both checks fail, the trend
+        #       filter, which runs first, may have been the one that blocked it.
+        veto = None
+        if prob_ok and s.get("direction") == "HOLD":
+            path, last = p.get("median_path"), p.get("last_price")
+            path_ok = (not path or last is None or len(path) < 2
+                       or (path[len(path) // 2] >= last if direction == "BUY"
+                           else path[len(path) // 2] <= last))
+            veto = "trend" if path_ok else "trend or path"
+            vetoes[veto] += 1
         i = bar_pos.get((e["_run"], e["bar_idx"]))
         future = (bars[i + horizon]["price"]
                   if i is not None and i + horizon < len(bars) else None)
@@ -339,9 +409,8 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
             hits += (r > 0) == (realized > 0)
             if p.get("predicted_price") is not None:
                 abs_err.append(abs(p["predicted_price"] - future))
-        s = signals.get(e["timestamp"], {})
         rows.append({"ts": e["timestamp"], "ret": r, "prob": pu, "realized": realized,
-                     "sig": s.get("direction", "HOLD"), "crossed": crossed})
+                     "sig": s.get("direction", "HOLD"), "crossed": crossed, "veto": veto})
     sig_counts = Counter(s.get("direction") for s in signals.values())
     # Tech: orders summed over every folder; fills and trades from the newest.
     # Why:  a `--resume` seeds the soak's earlier fills into the new run
@@ -394,7 +463,7 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
         "decisions": {
             "forecasts": len(rows), "signals": dict(sig_counts),
             "nonhold": sum(v for k, v in sig_counts.items() if k != "HOLD"),
-            "band_pass": band_pass, "prob_pass": prob_pass,
+            "band_pass": band_pass, "prob_pass": prob_pass, "vetoes": dict(vetoes),
             "orders": len(orders), "fills": len(fills), "trades": len(trades),
             "pnl_points": sum(float(t.get("net_pnl_points") or 0) for t in trades),
             "hit": hits, "n_eval": n_eval,
@@ -406,6 +475,7 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
             "owner_events": sum(owner_pos.values()),
             "owner_values": {str(k): v for k, v in owner_pos.items()}, "owner_now": owner_last,
         },
+        "performance": collect_performance(dep),
         "stability": {
             "relogins": [e.get("when") for e in relogins],
             "relogin_failed": [{"when": e.get("wall"), "backoff": e.get("backoff_seconds")} for e in failed],
@@ -590,9 +660,12 @@ def findings(data: Mapping[str, Any]) -> List[Dict[str, str]]:
     dec = []
     for r in runs:
         d, n = r["decisions"], names[r["package"]]
-        vetoed = d["prob_pass"] - d["nonhold"]
+        v = d["vetoes"]
+        vetoed = f'{v.get("trend", 0)} vetoed by the trend filter'
+        if v.get("trend or path"):
+            vetoed += f', {v["trend or path"]} by the trend filter or path check'
         s = (f'{n}: {d["forecasts"]} forecasts, {d["band_pass"]} crossed the band, '
-             f'{d["band_pass"] - d["prob_pass"]} failed min_prob, {vetoed} vetoed by trend/path, '
+             f'{d["band_pass"] - d["prob_pass"]} failed min_prob, {vetoed}, '
              f'{d["nonhold"]} signals, {d["orders"]} orders')
         sells = d["signals"].get("SELL", 0)
         if r["params"]["long_only"] and sells and d["orders"] == 0:
@@ -718,7 +791,17 @@ def render(data: Mapping[str, Any], template: Path = TEMPLATE) -> str:
     #       and code inline; escaping `</` stops a log message containing
     #       `</script>` from ending the script block early.
     payload = json.dumps(data, default=str, sort_keys=True).replace("</", "<\\/")
-    return template.read_text(encoding="utf-8").replace("__STATUS_DATA__", payload)
+    # Tech: plotly.js goes in inline, once, before the data; empty without plotly.
+    # Why:  the same offline rule — a CDN link would leave the performance charts
+    #       blank on a machine without internet. Substituted first so a data
+    #       string that happens to contain the placeholder is never expanded.
+    try:
+        from plotly.offline import get_plotlyjs
+        plotly_js = get_plotlyjs()
+    except ImportError:
+        plotly_js = ""
+    page = template.read_text(encoding="utf-8").replace("__PLOTLY_JS__", plotly_js)
+    return page.replace("__STATUS_DATA__", payload)
 
 
 def default_output(now: datetime, root: Optional[Path] = None) -> Path:
