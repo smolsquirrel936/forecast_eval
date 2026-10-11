@@ -39,6 +39,7 @@ actual signal exit) is **negative at every width**:
 |---|---|---|---|
 | none (baseline) | **7.2974** | 376 | incumbent |
 | 0.02 | 5.1086 | 435 | discard — churn, 3× the naive damage |
+| 0.10 | 5.6650 | 377 | discard — even 1 firing widens DD −3989→−5083 |
 | 0.20 (control) | 7.2974 | 376 | inert, = baseline exactly |
 
 ## Why night is day's opposite
@@ -54,8 +55,8 @@ re-entry churn (n 376→435 at 2 %, net −4 138, DD −900 wider).
 
 ## Consequences
 
-- `strategy/night` keeps `stop_pct: None` on `simtrade_0929` — the incumbent
-  IS the search's best. No adoption, nothing to merge beyond this record.
+- No active width beats the incumbent — the sweep's best *firing* cell
+  (0.10) degrades, so nothing performance-relevant was found to adopt.
 - If a hard live catastrophe rail is ever mandated for night, the only
   non-destructive width is one that never fires on recorded data (≥ 0.18);
   note that even the single ≥10 %-MAE trade recovered, so night has no
@@ -63,3 +64,22 @@ re-entry churn (n 376→435 at 2 %, net −4 138, DD −900 wider).
 - Same rule, opposite verdicts across sessions — the width question is
   per-session evidence, which is why the shared `EntryPercentStop` ships
   with a per-package knob and no default.
+
+## Addendum (same day): the no-degradation width, measured
+
+iter04 closed the wide end: 0.10 — the best naive width (−1 036, exactly
+one firing) — measures Calmar 5.6650, DD −5 082.56. Even a single firing
+degrades: the post-stop re-entry clawed back most of the naive net damage
+(−315 measured) but the stop-out + re-entry trajectory *deepened* the
+drawdown trough by −1 094 points. The curve is monotone toward inert:
+
+    0.02 → 5.1086   0.10 → 5.6650   0.20 → 7.2974 (= baseline, inert)
+
+**The only stop_pct without performance degradation is an inert one**, and
+0.20 is the width with the measured proof (iter03 = baseline to 4dp). It
+never fired in 9+ years of night tape — as a live knob it is pure
+catastrophic-regime insurance (an adverse excursion beyond anything
+recorded), at zero measured cost. Adopted as night's `stop_pct` default on
+`simtrade_0929` (2026-10-12) on exactly that understanding: a loss rail for
+a regime the tape has never shown, not a performance mechanism — night's
+active widths are all measured degradations.
