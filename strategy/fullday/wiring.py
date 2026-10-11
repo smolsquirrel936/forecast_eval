@@ -51,16 +51,21 @@ PARAMS: Dict[str, Any] = {
     "forced_close": False,
     # percent-stop knob — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param stop_pct=...``.
-    "stop_pct": None,
+    "stop_pct": 0.1,
 }
 
-# Tech: the knob deliberately defaults OFF.
-# Why:  the shared ``EntryPercentStop`` is measured on DAY only
-#       (PCTSTOP_POSTMORTEM.md — 0.10 is day's one above-incumbent cell);
-#       fullday's own width is unmeasured (its other knobs are day's,
-#       UNTUNED), so the default must not move the recorded baseline. A
-#       search cell opts in via ``--param stop_pct=...``, which keeps the
-#       knob in the command string the ledger records.
+# Tech: the knob's tuned value — 0.10, ADOPTED on simtrade_0929 (2026-10-12).
+# Why:  the fullday pct-stop sweep (FULLDAY_PCTSTOP_POSTMORTEM.md, ledger
+#       rows fullday_pctstop_iter01-04) found no above-incumbent cell — 0.03
+#       churns (Calmar 2.0740) and 0.10 costs one firing per 6 train years
+#       (2.7895 vs the 2.8213 incumbent, -110 net, DD unchanged) because
+#       the stopped trade recovered before its signal exit. 0.10 is adopted
+#       anyway, as the catastrophe rail: its firings land only on
+#       already-extreme trades (the train firing is the 11.46%-MAE trade;
+#       on the held-out window, never scored for the decision, it caught
+#       the two 2026 crash trades, MAE 11.98%/11.52%) — the day_pctstop
+#       rail shape, a user decision recorded 2026-10-12. An explicit
+#       ``--param stop_pct=...`` still overrides it.
 
 # Tech: the emitter knobs deliberately absent from PARAMS — `short_window`,
 #       `min_trend_ticks`, `path_momentum`, `trend_filter`.

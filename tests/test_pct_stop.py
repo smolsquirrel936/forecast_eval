@@ -112,12 +112,14 @@ class TestWiring:
         # Tech: whatever the package's PARAMS declares is what the unedited
         #       package builds — None means no exit rule, a value means the
         #       shared rule at exactly that width.
-        # Why:  day adopted stop_pct 0.10 on simtrade_0929 (day_pctstop_iter05,
-        #       the one above-incumbent cell) while night/fullday stay None
-        #       (unmeasured widths). The invariant is that the package
-        #       default and the built rule agree — pinning "None" here would
-        #       make the adoption itself a test failure instead of a
-        #       recorded decision.
+        # Why:  all three packages now carry adopted widths — day 0.10
+        #       (day_pctstop_iter05, its one above-incumbent cell), night
+        #       0.20 (the inert tail rail, NIGHT_PCTSTOP_POSTMORTEM) and
+        #       fullday 0.10 (the catastrophe rail, user decision
+        #       2026-10-12, FULLDAY_PCTSTOP_POSTMORTEM). The invariant is
+        #       that the package default and the built rule agree — pinning
+        #       "None" here would make an adoption itself a test failure
+        #       instead of a recorded decision.
         w = _wiring(session)
         strat = w.make_strategy(warmup_bars=10)
         declared = w.PARAMS["stop_pct"]
