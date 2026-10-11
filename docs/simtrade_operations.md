@@ -12,8 +12,8 @@ not linked).
 > This is a **task page**, not a 1:1 module page, so it is listed beside
 > `tests.md` in `test_docs_coverage.py`'s consolidated set.
 >
-> Sections 1–9 are **general**: true for any run of this shape. Section 10,
-> [Current status](#10-current-status), is **deliberately separate**: a dated
+> Sections 1–10 are **general**: true for any run of this shape. Section 11,
+> [Current status](#11-current-status), is **deliberately separate**: a dated
 > snapshot of the run in progress, which goes stale. Edit it in place and date
 > every entry. Don't let run-specific facts leak into the general sections.
 
@@ -50,7 +50,8 @@ production account.
 | `bars_cache_<slug>.csv` | warm-up bar cache, **rewritten only at start-up** ([seed_cache](live/seed_cache.md)) | every start |
 | `intents_<slug>.jsonl` / `events_<slug>.jsonl` | the [wire](live/intents.md): client → owner intents; owner → client fills and `position` events (one a second) | the running pair |
 | `live_<slug>_<timestamp>/` | one run's artifacts: `orders`, `fills`, `trades`, `signals`, `forecasts`, `ticks`, `params.json`, `session.jsonl` | review |
-| `fatal.jsonl` | every fatal alert, all deployments in one file, **with no deployment field** | review |
+| `fatal.jsonl` | every fatal alert, all deployments in one file, **with no deployment field**; the owner's alerts go to `owner_session.jsonl` instead | review |
+| `telegram_level.json` | the Telegram alert level chosen with `/settings`, shared by all four processes (§9); absent = the `[telegram]` default | every alert |
 | `owner_session.jsonl` | the owner's trail, appended across runs: placements with their `ordno` and slug, deals, order events, pending/failed reconciles, freezes, anomalies (since 2026-10-07) | review |
 
 **Never move, clean or rename `outputs/` while a soak continues.** `--resume`
@@ -78,7 +79,8 @@ the interpreter); that is normal.
 ## 4. Stopping cleanly
 
 1. **Ctrl-C each deployment first**: day, night, fullday. Wait for each to print
-   its summary block (feed, roll, relogin, ledger and alert counters) and exit.
+   its summary block (feed, roll, relogin, ledger, alert and Telegram
+   counters) and exit.
    The same block is recorded at the end of its `session.jsonl`:
    `session_end`, `feed_summary`, `roll_summary`, `relogin_summary`,
    `ledger_summary`, `artifact_summary`.
@@ -468,7 +470,53 @@ refuses a folder that already has `fills`/`trades`/`signals` CSVs, which every
 current run does. Its `--seed-ledger` appends to the live fill ledger, which
 **must never** happen while a deployment is writing to it.
 
-## 9. Standing cautions
+## 9. Alerts on your phone
+
+All four processes send their alerts to one Telegram chat
+([telegram.md](live/telegram.md)). Each message starts with who sent it:
+`[owner]`, `[day]`, `[night]` or `[day_night]`. The alerts also go to the
+console and the trails, so a dead Telegram loses nothing.
+
+**Setup, once.** Fill in `[telegram]` in `config/secrets.toml` (`bot_token`
+from @BotFather, `chat_id` from `live.telegram --find-chat`), then send a test
+message:
+
+```powershell
+uv run --no-sync python -m forecast_eval.live.telegram --find-chat
+uv run --no-sync python -m forecast_eval.live.telegram
+```
+
+A section still holding `REPLACE_ME` doesn't stop a start: it prints a
+`telegram_disabled` warning and runs without Telegram. `--no-telegram` turns it
+off for one process.
+
+**What arrives:**
+
+| Level | From the deployments | From the owner |
+|---|---|---|
+| FATAL | any rails halt, `flatten_incomplete`, a refused start, `crashed`, no credentials, `session_unverified`, an unsettled roll | `owner_frozen`, a refused start (exit 6 or 7), `crashed`, no credentials, `session_unverified` |
+| WARN | `feed_missed` / `feed_unreachable`, `session_down`, `relogin_failed` / `relogin_abandoned`, `account_changed`, `contract_rolled`, roll trouble | `deployment_silent`, `traffic_low`, `venue_unanswered`, `relogin_failed` / `relogin_abandoned` |
+| INFO | `position_opened`, `position_closed` with this trade's PnL, `resumed`, `relogin`, `feed_recovered`, `roll_started` | `relogin`, `owner_agrees_again` |
+
+The owner's console repeats its traffic and silent-deployment warnings every
+30 s; it alerts only when they change.
+
+**Choosing the level.** Send `/settings` to the bot and press *All (INFO)*,
+*WARN + FATAL* or *FATAL only*. The choice is saved in
+`outputs/telegram_level.json` and applies to **all four processes**, without a
+restart, and it is kept across restarts. FATAL is always sent. The default is
+INFO, which means a message per fill plus a `relogin` notice from each process
+before every open (08:40 and 14:55, weekends included): eight a day across the
+four.
+
+**After a stop**, each process prints its `telegram_*` counters with the rest
+of its summary (§4). `telegram_failed` above 0 means messages were not
+delivered, and is how a dead transport differs from a quiet night.
+`telegram_poll_conflicts` grows normally: four processes share one bot and take
+turns reading button presses, so a press can take up to about a minute to be
+answered.
+
+## 10. Standing cautions
 
 - **One account, one book.** The owner nets every deployment, so the account
   can hold up to one lot per deployment in the same direction.
@@ -496,11 +544,11 @@ current run does. Its `--seed-ledger` appends to the live fill ledger, which
   the 2026-09-29 simtrade (STRATEGY_SPLIT_PLAN §23 lifted the one-instance rule
   for 2 × 1 lot × 10 minutes).
 
-## 10. Current status
+## 11. Current status
 
 > **Snapshot, not reference.** Everything in this section describes one run at
 > one time. Update it in place, date every entry, and move anything that turns
-> out to be generally true up into §§1–9.
+> out to be generally true up into §§1–10.
 
 **Run:** `simtrade_0929`, branch `simtrade_0929` (local, not pushed), launched
 2026-09-29 08:20–08:25 into a fresh `outputs/` with `--fresh-start`. Settings

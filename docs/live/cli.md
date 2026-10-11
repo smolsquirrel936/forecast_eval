@@ -64,6 +64,7 @@ live half and V3's shadow parity are both read back from.
 | `--out` | `outputs/live_<ts>` | **relative** — resolves against the CWD you launch from |
 | `--state-file` | `<out>/../live_restart_<policy>.json` | [RestartGuard](startup.md) state. Keyed by policy; `soak_epoch` and `live_account` follow its directory |
 | `--no-capture` | off | skips raw tick capture; V1's live half needs it |
+| `--no-telegram` | off | don't attach [Telegram](telegram.md) even when `[telegram]` is configured |
 | `--max-daily-loss-points` | none | [rails](state.md) `FLATTEN` threshold |
 | `--kill-file` | none | presence flattens and exits at the next bar |
 | `--staleness-seconds` | `900.0` | **backstop** — halt after this long unhealed. Detection is [FeedWatch](feedwatch.md)'s job (§2.22) |

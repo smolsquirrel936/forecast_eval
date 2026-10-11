@@ -51,12 +51,15 @@ from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+from forecast_eval.live import telegram                           # noqa: E402
+from forecast_eval.live.alerts import Alerter                     # noqa: E402
 from forecast_eval.live.artifacts import git_commit, git_dirty  # noqa: E402
 from forecast_eval.live.contracts import resolve_txf            # noqa: E402
 from forecast_eval.live.ledger import FillLedger, open_position  # noqa: E402
 from forecast_eval.live.owner_process import OwnerProcess       # noqa: E402
 from forecast_eval.live.recorder import Recorder                # noqa: E402
-from forecast_eval.live.relogin import (ReloginScheduler,        # noqa: E402
+from forecast_eval.live.relogin import (Outcome,                 # noqa: E402
+                                        ReloginScheduler,
                                         session_open_anchors)
 from forecast_eval.live.startup import usage_bytes              # noqa: E402
 
@@ -123,7 +126,7 @@ def make_relogin(api: Any, cred: Any, account: Any, owner: Any):
     return _relogin
 
 
-def _relogin_tick(relogin: Any, now: datetime) -> None:
+def _relogin_tick(relogin: Any, now: datetime, alerter: Any = None) -> None:
     # Tech: let the scheduler act if a window is live, and print any outcome.
     # Why:  the scheduler owns retries, backoff and the verify; the loop only
     #       drives it once a pass and says what happened, so an operator
@@ -132,6 +135,25 @@ def _relogin_tick(relogin: Any, now: datetime) -> None:
     if outcome is not None:
         print(f"relogin: {outcome.value}  (token age "
               f"{relogin.token_age(now)})")
+    # Tech: alert on the outcome with the kinds and levels `live/cli.py` uses.
+    # Why:  an owner whose token died cannot place or hear an order for any
+    #       deployment, so a failed verify is as fatal here as there. `VERIFIED`
+    #       is the routine case and stays on the console.
+    if alerter is None or outcome is None:
+        return
+    if outcome is Outcome.RELOGGED:
+        alerter.info("relogin", "owner token refreshed and the deal stream "
+                                "re-subscribed")
+    elif outcome is Outcome.FAILED:
+        alerter.warn("relogin_failed", "an owner re-login attempt failed — "
+                                       "retrying inside the window")
+    elif outcome is Outcome.ABANDONED:
+        alerter.warn("relogin_abandoned", "the owner's re-login window closed "
+                                          "with no fresh token")
+    elif outcome is Outcome.VERIFY_FAILED:
+        alerter.fatal("session_unverified",
+                      "the owner failed its pre-open check and could not be "
+                      "recovered — no deployment can place an order")
 
 DEFAULT_SLUGS = ("day", "night", "day_night")
 
@@ -187,6 +209,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "below this. The default matches the floor "
                          "`RestartGuard` refuses to start below; raise it once a "
                          "real per-session figure is known (§18.13).")
+    ap.add_argument("--no-telegram", action="store_true",
+                    help="Do not send alerts to Telegram even if [telegram] is "
+                         "configured in config/secrets.toml")
     ap.add_argument("--once", action="store_true",
                     help="Run a single poll and reconcile, then exit. For "
                          "checking wiring without holding the session open.")
@@ -266,12 +291,42 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 2
 
+    # Tech: the owner's alerter, built once `--out` is known, with Telegram on
+    #       the shared level file and no fatal journal; the recorder is attached
+    #       once it exists.
+    # Why:  until 2026-10-12 the owner had no alerter, so a freeze or a refused
+    #       start reached only its console, and the phone heard about it ~2 min
+    #       later as three `owner silent` halts. No `fatal.jsonl`: the status
+    #       page attributes that file's entries to deployment soaks by timing,
+    #       and an owner entry would be pinned on whichever soak it fell inside.
+    #       The owner's own trail, `owner_session.jsonl`, records every alert.
+    #       The ack and `--out` refusals above stay console-only: they are a
+    #       typo at a terminal someone is looking at.
+    alerter = Alerter()
+    notifier = None if args.no_telegram else telegram.attach(
+        alerter, deployment="owner",
+        level_file=out_parent / "telegram_level.json")
+    try:
+        return _main(args, out_parent, alerter)
+    finally:
+        if notifier is not None:
+            notifier.close()
+            for k, v in notifier.summary().items():
+                print(f"  {k:22s} {v}")
+
+
+def _main(args: Any, out_parent: Path, alerter: Alerter) -> int:
+    # Tech: everything after the argument checks: login, seed, reconcile, serve.
+    # Why:  split from `main` so Telegram's drain wraps every return and raise
+    #       below in one `finally`, without re-indenting the start-up sequence.
     from forecast_eval.live import credentials
     cred = credentials.load(args.credential)
     if cred is None:
         print(f"ERROR: no credential for {args.credential!r} — add a "
               f"[{args.credential}] section to {credentials.SECRETS_FILE}",
               file=sys.stderr)
+        alerter.fatal("no_credentials",
+                      f"owner: no credential for {args.credential!r}")
         return 2
 
     import shioaji as sj
@@ -285,6 +340,7 @@ def main(argv=None) -> int:
                         meta={"process": "owner", "slugs": list(args.slugs),
                               "git_commit": git_commit(),
                               "git_dirty": git_dirty()})
+    alerter.recorder = recorder
     try:
         accounts = api.login(api_key=cred.api_key, secret_key=cred.secret_key)
         login_at = datetime.now()
@@ -313,6 +369,10 @@ def main(argv=None) -> int:
                           "deals, orders would fill", file=sys.stderr)
                     print("  and no deployment would ever hear about it.",
                           file=sys.stderr)
+                    alerter.fatal("startup_refused",
+                                  "the owner's deal stream was not subscribed "
+                                  "— do not start the deployments",
+                                  gate="subscribe_trade")
                     return 7
             except Exception as exc:                    # noqa: BLE001
                 print(f"subscribe_trade raised: {exc!r} — relying on login()'s "
@@ -354,10 +414,16 @@ def main(argv=None) -> int:
             print("  Reconcile them by hand — `python -m "
                   "forecast_eval.live.flatten --out-parent <dir>` reports who "
                   "holds what — then restart.", file=sys.stderr)
+            alerter.fatal("startup_refused",
+                          "the ledgers and the venue disagree: "
+                          + "; ".join(owner.anomalies), gate="reconcile")
             return 6
         if agreed is None:
             print("  WARNING: the venue would not answer; starting on the "
                   "ledger seed alone.")
+            alerter.warn("venue_unanswered", "the venue would not answer the "
+                         "start-up reconcile; the owner started on the ledger "
+                         "seed alone")
 
         used, limit, remaining = usage_bytes(_usage(api))
         if used is not None:
@@ -381,7 +447,14 @@ def main(argv=None) -> int:
               f"reconcile {args.reconcile_seconds}s")
         print("START THE DEPLOYMENTS NOW (live/cli.py --broker client).")
 
-        return _serve(owner, args, api, relogin)
+        return _serve(owner, args, api, relogin, alerter)
+    except Exception as exc:
+        # Tech: alert, then re-raise unchanged.
+        # Why:  an owner that dies leaves every deployment unable to trade; the
+        #       traceback and the exit code stay exactly what they were.
+        alerter.fatal("crashed", f"owner: {exc!r}",
+                      error_type=type(exc).__name__)
+        raise
     finally:
         recorder.record("owner_stop")
         recorder.close()
@@ -404,7 +477,7 @@ def _usage(api: Any) -> Any:
 
 
 def _serve(owner: OwnerProcess, args: Any, api: Any = None,
-           relogin: Any = None) -> int:
+           relogin: Any = None, alerter: Any = None) -> int:
     """The loop: drain intents, publish, reconcile on a slower cadence."""
     # Tech: install a SIGINT/SIGTERM handler that asks the loop to stop, then
     #       poll until it does.
@@ -428,10 +501,15 @@ def _serve(owner: OwnerProcess, args: Any, api: Any = None,
 
     last_reconcile = 0.0
     agreed_since_freeze = False
+    # Tech: what the two repeating warnings last alerted on.
+    # Why:  both reprint every 30 s on the console; the alert fires on a change
+    #       only, so a night of thin traffic is one message, not 1 200.
+    traffic_alerted = False
+    stale_alerted: List[str] = []
     while not stopping["now"]:
         owner.poll()
         if relogin is not None:
-            _relogin_tick(relogin, datetime.now())
+            _relogin_tick(relogin, datetime.now(), alerter)
 
         now = time.monotonic()
         if now - last_reconcile >= args.reconcile_seconds:
@@ -457,11 +535,19 @@ def _serve(owner: OwnerProcess, args: Any, api: Any = None,
                       "positions still published. Reconcile by hand, then\n"
                       "      Ctrl-C the deployments and this owner, and restart.",
                       file=sys.stderr)
+                if alerter is not None:
+                    alerter.fatal("owner_frozen",
+                                  f"reconciliation failed: {owner.anomalies[-1]}"
+                                  f" — no new orders; reconcile by hand")
             elif agreed is True and owner.frozen is not None:
                 if not agreed_since_freeze:
                     agreed_since_freeze = True
                     print("  the venue and the book agree again — still frozen; "
                           "restart the owner to trade.", file=sys.stderr)
+                    if alerter is not None:
+                        alerter.info("owner_agrees_again",
+                                     "the venue and the book match again; the "
+                                     "owner stays frozen until restarted")
             elif agreed is True and owner.reconcile_note:
                 print(f"  reconcile pending: {owner.reconcile_note}")
             # Tech: read the traffic meter on the same cadence as the venue
@@ -479,6 +565,15 @@ def _serve(owner: OwnerProcess, args: Any, api: Any = None,
                           f"{args.min_remaining_mb:.0f} MB floor. Over quota "
                           f"Shioaji returns EMPTY history rather than erroring, "
                           f"so the next start-up will be refused.")
+                    if alerter is not None and not traffic_alerted:
+                        alerter.warn("traffic_low",
+                                     f"{remaining / 1048576:.0f} MB of daily "
+                                     f"traffic left — the next start-up is "
+                                     f"refused below "
+                                     f"{args.min_remaining_mb:.0f} MB")
+                    traffic_alerted = True
+                elif remaining is not None:
+                    traffic_alerted = False
 
             stale = owner.stale_deployments()
             if stale:
@@ -490,6 +585,12 @@ def _serve(owner: OwnerProcess, args: Any, api: Any = None,
                 print(f"  WARNING: no intents from {stale} for "
                       f"{owner.deployment_timeout:.0f}s. Their positions are "
                       f"still open and still counted.")
+            if alerter is not None and stale and list(stale) != stale_alerted:
+                alerter.warn("deployment_silent",
+                             f"no intents from {list(stale)} for "
+                             f"{owner.deployment_timeout:.0f}s; their positions "
+                             f"are still open")
+            stale_alerted = list(stale)
 
         if args.once:
             break

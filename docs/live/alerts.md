@@ -2,7 +2,7 @@
 
 **Role:** The one door everything that needs a human goes through.
 **Pipeline:** [cli.py](cli.md) builds it first and hands it to [state.py](state.md); every terminal path calls it.
-**Depends on:** nothing   **Used by:** [live/cli.py](cli.md), [live/state.py](state.md), [tests/test_live_alerts.py](../tests.md)
+**Depends on:** nothing   **Used by:** [live/cli.py](cli.md), [live/owner_cli.py](owner_cli.md), [live/state.py](state.md), [tests/test_live_alerts.py](../tests.md)
 
 ## Responsibility
 A five-day unattended soak is the case this exists for. When something goes wrong
@@ -45,16 +45,11 @@ happened is worse than none.
 | `Alert` | dataclass | `severity`, `kind`, `message`, `when`, `detail`; `.format()`, `.as_dict()` |
 | `Severity`, `ALL` | enum, tuple | `FATAL` / `WARN` / `INFO` |
 
-## Adding Telegram later
-Nothing in this repo changes except one registration:
-
-```python
-def telegram(alert):
-    requests.post(URL, json={"chat_id": CHAT, "text": alert.format()})
-
-alerter.add_sink(telegram, levels=(Severity.FATAL,))          # the urgent chat
-alerter.add_sink(telegram_verbose, levels=ALL)                # the noisy one
-```
+## Telegram
+Attached by [telegram.py](telegram.md) with one call, `add_sink(notifier,
+levels=ALL)`, and no other change here. It subscribes to every level and does
+its own filtering, because its level is a live setting (the `/settings` button)
+rather than one fixed at registration.
 
 `kind` is the machine-readable tag to route and group on; `message` is the
 sentence a human reads on a phone. Keeping both means a transport never has to
@@ -74,9 +69,10 @@ parse prose to decide where something goes.
   about a network fault, which is exactly when the transport fails. Losing that
   message is acceptable; losing the run to the notifier is not. Everything is
   written to the trail regardless of whether any transport worked.
-- **`alert_sink_failures` is not decoration.** A Telegram sink that silently
-  stopped working is indistinguishable from a quiet night — unless the failures
-  are counted. That number is the only thing that tells them apart.
+- **`alert_sink_failures` is not decoration.** A sink that silently stopped
+  working is indistinguishable from a quiet night — unless the failures are
+  counted. It counts *synchronous* raises only; Telegram sends from a background
+  thread, so its failures are `telegram_failed` in its own summary.
 - **The fatal journal outlives the run directory.** It sits beside
   `live_restart.json`, not inside `outputs/live_<ts>/`, so "what has ever gone
   badly wrong" is one file rather than a search across every `session.jsonl`.

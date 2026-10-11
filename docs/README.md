@@ -107,6 +107,7 @@ Three invariants make this honest (all enforced in code + tests):
 | [live/roll.py](live/roll.md) | `RollSchedule` / `RollWatch` | crossing a contract expiry: the plan that trades the position, and the net that catches a missed one |
 | [live/ioc_probe.py](live/ioc_probe.md) | IOC-expiry probe | does an expired IOC report anything? the question that blocks the roll's retry ladder |
 | [live/alerts.py](live/alerts.md) | `Alerter` | the one door everything needing a human goes through; where a Telegram sink attaches |
+| [live/telegram.py](live/telegram.md) | `TelegramNotifier` | alerts to one Telegram chat for every deployment, with a `/settings` button choosing the level |
 | [live/startup.py](live/startup.md) | `RestartGuard` | the rails that survive the process dying |
 | [live/prices.py](live/prices.md) | `soak_price_series` | the report's price line across every segment of a soak, cached by run |
 | [live/recorder.py](live/recorder.md) | JSONL audit trail | what a live session writes down, and why per-line flush |
