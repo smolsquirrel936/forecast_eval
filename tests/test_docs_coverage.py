@@ -53,7 +53,7 @@ def test_every_page_has_a_module():
     """The other direction: a page for a module that was renamed or deleted is a
     dangling doc, and the hub will link to something that no longer exists."""
     consolidated = {"README.md", "DOCS_PLAN.md", "tests.md", "usage.md",
-                    "simtrade_operations.md"}
+                    "simtrade_operations.md", "notifications.md"}
     orphans = []
     for page in sorted(DOCS.rglob("*.md")):
         if page.name in consolidated:

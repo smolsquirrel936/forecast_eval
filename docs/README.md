@@ -211,6 +211,10 @@ timeline, reports while it runs, and a dated current-status section) is the
 task page
 [simtrade_operations.md](simtrade_operations.md).
 
+**Getting alerts on your phone** (Telegram setup, the `/settings` level
+button, every alert and what to do about it, delivery and troubleshooting) is
+the task page [notifications.md](notifications.md).
+
 ---
 
 ## Recommended reading order

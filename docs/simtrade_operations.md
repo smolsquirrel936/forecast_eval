@@ -472,9 +472,11 @@ current run does. Its `--seed-ledger` appends to the live fill ledger, which
 
 ## 9. Alerts on your phone
 
-All four processes send their alerts to one Telegram chat
-([telegram.md](live/telegram.md)). Each message starts with who sent it:
-`[owner]`, `[day]`, `[night]` or `[day_night]`. The alerts also go to the
+All four processes send their alerts to one Telegram chat. The full manual —
+every alert and what to do about it, delivery, troubleshooting — is
+[notifications.md](notifications.md). Each message starts with who sent it:
+`[owner]`, `[day]`, `[night]` or `[fullday]` (the `--strategy` name, not the
+`day_night` file slug). The alerts also go to the
 console and the trails, so a dead Telegram loses nothing.
 
 **Setup, once.** Fill in `[telegram]` in `config/secrets.toml` (`bot_token`
