@@ -150,15 +150,14 @@ order-placing broker.
 | a held position | adopted: replayed from the ledger and checked against the owner | **refused** (exit 5) unless *this deployment* is flat |
 | use when | continuing the same test across a pause | after a flatten, or to begin a new test |
 
-**A held lot cannot be resumed once its package declares an exit rule.**
-Adoption seeds the mirrors from the venue's average entry, but
-`adopt_position` refuses (exit 5) whenever an `ExitRule` is configured — the
-entry bar index belongs to the previous process and is not recoverable
-([runtime.py](live/runtime.md) `adopt_position`). With a `stop_pct` declared,
-a held position must be flattened (§6.2), not resumed. The refusal is broader
-than the percent stop strictly needs (`EntryPercentStop` reads only the
-entry price, which adoption does seed) — narrowing it is a code change, not
-an operator one.
+**A held lot resumes under a `stop_pct`** (since 2026-10-14). Adoption seeds
+the mirrors from the venue's average entry, and `EntryPercentStop` reads only
+side and entry price, so the stop is armed at the true entry from the first
+bar. `adopt_position` still refuses (exit 5) any exit rule that is not
+`adoptable` — one that counts bars held, since the entry bar index belongs to
+the previous process ([runtime.py](live/runtime.md) `adopt_position`,
+[exits/base.py](exits/base.md)). From 2026-10-12 to 10-14 every rule was
+refused, so a held lot had to be flattened.
 
 Every restart writes a **new** `live_<slug>_<timestamp>/` folder, so one soak's
 artifacts are split across folders; the soak epoch is what ties them together.
@@ -194,9 +193,8 @@ Pick one.
   Nothing manages the position in between: no strategy, no exit, no stop-loss.
   Over a weekend that changes little, since the market is closed, but the
   Monday gap lands on it unmanaged. This is the **recommended** path under the
-  owner — **unless the checkout's packages declare a `stop_pct`**: resuming a
-  held lot then refuses at start-up (exit 5, §5), so the position must be
-  flattened instead.
+  owner. A declared `stop_pct` resumes armed at the venue's entry (§5); only
+  an exit rule that is not `adoptable` refuses (exit 5) and forces a flatten.
 - **Flatten.** This must happen in session hours, with **all four processes
   stopped** first. Run `flatten --dry-run --out-parent outputs`, which is
   read-only and names whose lots are held, then the same command without
@@ -527,8 +525,9 @@ answered.
   entry-anchored `EntryPercentStop`, checked every bar against the entry price,
   closing via a marketable limit. Where it is `None` (`main`'s default) there
   is no exit at all and positions ride through other sessions, nights and
-  weekends; where a width is declared, a held lot cannot be resumed (§5) and a
-  crash leaves the position unmanaged until the stop's next check. Which
+  weekends; where a width is declared, a held lot resumes with the stop armed
+  at the venue's entry (§5), and a crash leaves the position unmanaged until
+  the restart's first bar. Which
   branch declares which width is recorded in each package's `wiring.py`.
 - **Four logins share the 500 MiB/day data allowance**; the cost of four tick
   subscriptions is unmeasured. A deployment checks the quota **only at
@@ -619,6 +618,7 @@ the first pause.
 | 2026-10-12 ~05:50 | **all four found dead; dead since 2026-10-08 ~21:35.** No `forecast_eval.live` process; the last run folders (`live_<slug>_20261008_2132xx`) end mid-night-session with no teardown block, and `fatal.jsonl` holds nothing after 10-07 08:46 — an abrupt kill, not a clean stop. Held unmanaged for four days: day +1 @ 49936 (10-07 13:25), night −1 @ 49440 (10-07 22:16), fullday +1 @ 49884 (10-06 09:14). `live_restart_<slug>.json` reads `run_in_flight: true`, so a same-parent restart waits out the 60 s backoff |
 | 2026-10-12 | **`stop_pct` adopted on all three packages, user go** (on `simtrade_0929`): day 0.10 (`aace5c7`), night 0.10 (`260a033`, tightened from the inert 0.20 `9a29ae4`), fullday 0.10 (`c7e2178`). Sweeps: `PCTSTOP_POSTMORTEM.md`, `NIGHT_PCTSTOP_POSTMORTEM.md`, `FULLDAY_PCTSTOP_POSTMORTEM.md`; gates: the adopt rows in `results_*.tsv`. Consequence: a held lot can no longer be resumed (§5) — flatten it |
 | 2026-10-12 | **plan: clean restart.** Next session (08:45+): `flatten --dry-run --out-parent outputs`, then for real (must exit 0); archive `outputs/` (ends the 09-29 soaks, dissolves §6.2's ledger gap and the dead guards' backoff); seed the day and night caches (§6.6); owner first, then all three `--fresh-start`. The stops arm on every **new** entry — the flattened lots are not resumed, so the adoption guard never fires |
+| 2026-10-14 08:05 | **night and fullday refused `--resume`** (exit 5, `startup_refused`, gate `adopt_position`): both held lots opened after the 10-12 clean restart — night −1 @ 48760 (10-13 22:04), fullday +1 @ 48972 (10-12 22:36) — and the blanket exit-rule guard refused them under `stop_pct` 0.10. **Guard narrowed, user go:** `ExitRule.adoptable` (default False); `EntryPercentStop` and `FixedStopLoss` opt in, since they read only side and entry price. A held lot now resumes with the stop armed at the venue's entry (§5) |
 
 **Open questions:**
 

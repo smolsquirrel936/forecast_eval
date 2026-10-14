@@ -25,6 +25,8 @@ fill** and never moved.
   the best print since entry (that is a give-back trail, discarded in the
   day_trail post-mortem: fires at V-bottoms). Open profit on a winner is
   never given back by this rule; only the initial `stop_pct` band is at risk.
+- **`adoptable = True`.** It reads only side and entry price, so a live
+  `--resume` into a held lot adopts it with the stop armed at the venue's entry.
 - **Stateless.** `should_exit` reads only the `PositionState` snapshot the run
   loop rebuilds every tick, so a re-entry after a stop fires needs no arming or
   re-keying machinery — the new position carries its own entry price.

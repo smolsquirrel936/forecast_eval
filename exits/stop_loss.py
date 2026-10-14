@@ -4,6 +4,11 @@ from .base import ExitRule, PositionState
 
 
 class FixedStopLoss(ExitRule):
+    # Tech: declare the rule safe to run against an adopted position.
+    # Why:  it reads only `side` and `entry_price`, which adoption seeds from the
+    #       venue; nothing bar- or time-indexed (see `ExitRule.adoptable`).
+    adoptable = True
+
     def __init__(self, stop_loss_ticks: int, tick_size: float = 1.0):
         # Tech: require a positive tick distance, then store it with the tick size.
         # Why:  a non-positive stop would trigger immediately (or never), which is

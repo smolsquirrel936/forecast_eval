@@ -27,6 +27,12 @@ from .base import ExitRule, PositionState
 
 
 class EntryPercentStop(ExitRule):
+    # Tech: declare the rule safe to run against an adopted position.
+    # Why:  `should_exit` reads only `side` and `entry_price`, both of which
+    #       `adopt_position` seeds from the venue, so a `--resume` into a held
+    #       lot keeps the stop armed at the true entry (see `ExitRule.adoptable`).
+    adoptable = True
+
     def __init__(self, stop_pct: float):
         # Tech: require a fractional width, then store it.
         # Why:  a non-positive stop fires immediately (or never) and a width

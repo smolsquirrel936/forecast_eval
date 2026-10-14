@@ -17,6 +17,8 @@ Closes the position once price moves a fixed number of ticks against the entry.
 - The stop sits on the **adverse** side of entry, so the comparison flips with
   position side: long exits at `entry − offset`, short at `entry + offset`.
 - Uses `<=` / `>=` so the stop fires exactly *at* the threshold.
+- `adoptable = True`: reads only side and entry price, so a live `--resume`
+  into a held lot can run under it.
 - Construction rejects `stop_loss_ticks <= 0` (would trigger immediately or never).
 
 ## Related

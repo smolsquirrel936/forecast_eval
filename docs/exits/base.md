@@ -14,6 +14,7 @@ take-profit, etc.
 |---|---|---|
 | `PositionState` | dataclass | read-only open-position view: side, size, entry price/bar/timestamp |
 | `ExitRule` | ABC | `should_exit(position, market, bar_idx) -> bool` |
+| `ExitRule.adoptable` | class attr, default `False` | True when the rule reads only `side`/`size`/`entry_price` — safe on a live `--resume` |
 
 ## Key points
 - An ExitRule expresses only the **decision** (close now or not); the Trader owns
@@ -22,6 +23,11 @@ take-profit, etc.
   context but cannot mutate trading state.
 - Checked **every tick** (not just on forecast boundaries), so a stop can fire
   intra-stride.
+- **`adoptable` gates a live resume.** A restart that adopts a held lot
+  ([live/runtime.py](../live/runtime.md) `adopt_position`) seeds side and entry
+  price from the venue, but `entry_bar_idx` / `entry_timestamp` get sentinels.
+  A rule opts in with `adoptable = True` only if it never reads those two;
+  anything else (a time stop, a trail) is refused at start-up.
 
 ## Related
 [stop_loss.py](stop_loss.md) · [time_stop.py](time_stop.md) · [trader.py](../trader.md) · [SPEC §4.1](../../SPEC.md)

@@ -27,6 +27,17 @@ class PositionState:
 
 
 class ExitRule(ABC):
+    # Tech: True when `should_exit` reads only `side`, `size` and `entry_price`
+    #       from the snapshot — never `entry_bar_idx` or `entry_timestamp`.
+    #       Defaults to False; a subclass opts in.
+    # Why:  a live restart that adopts a held lot (`live/runtime.py`
+    #       `adopt_position`) recovers the venue's side and average entry, but
+    #       the entry bar and time belong to the dead process and are seeded
+    #       with sentinels. Only a rule that never reads them can run against an
+    #       adopted position; the default keeps any rule that has not said so
+    #       — a time stop, a trail — refused rather than timed from a sentinel.
+    adoptable: bool = False
+
     @abstractmethod
     def should_exit(
         self,
