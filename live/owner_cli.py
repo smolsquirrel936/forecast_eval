@@ -499,7 +499,14 @@ def _serve(owner: OwnerProcess, args: Any, api: Any = None,
         except (ValueError, OSError):                   # pragma: no cover
             pass                                        # not the main thread
 
-    last_reconcile = 0.0
+    # Tech: None, not 0.0, as the "never reconciled" sentinel.
+    # Why:  `time.monotonic()` counts from BOOT and starts near zero on a
+    #       freshly booted machine, so a 0.0 sentinel makes the first pass look
+    #       like it is still inside the cadence (`now - 0.0 < reconcile_seconds`)
+    #       and the START-UP reconcile is skipped — the very pass that refuses
+    #       to trade on a desynced ledger (caught 2026-10-14 by the cadence test
+    #       on a 6-minute-old boot).
+    last_reconcile: Optional[float] = None
     agreed_since_freeze = False
     # Tech: what the two repeating warnings last alerted on.
     # Why:  both reprint every 30 s on the console; the alert fires on a change
@@ -512,7 +519,7 @@ def _serve(owner: OwnerProcess, args: Any, api: Any = None,
             _relogin_tick(relogin, datetime.now(), alerter)
 
         now = time.monotonic()
-        if now - last_reconcile >= args.reconcile_seconds:
+        if last_reconcile is None or now - last_reconcile >= args.reconcile_seconds:
             last_reconcile = now
             agreed = owner.reconcile()
             if agreed is False and owner.frozen is None:

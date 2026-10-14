@@ -191,7 +191,13 @@ class ArtifactWriter:
         self.soak_id = soak_id
         self.min_interval = float(min_interval_seconds)
         self.ext = ext
-        self._last_write = 0.0
+        # Tech: None, not 0.0, as the "never written" sentinel.
+        # Why:  `time.monotonic()` counts from BOOT and starts near zero on a
+        #       freshly booted machine, so a 0.0 sentinel makes the first write
+        #       look throttled (`now - 0.0 < min_interval`) and it never lands.
+        #       Caught 2026-10-14 by the gate tests on a 6-minute-old boot; the
+        #       same rule `runtime.py`'s `_ladder_last` already follows.
+        self._last_write: Optional[float] = None
         self._last_counts: Optional[tuple] = None
         self.writes = 0
         self.failures = 0
@@ -230,7 +236,8 @@ class ArtifactWriter:
         now = _time.monotonic()
         counts = self._counts(runtime)
         if not force:
-            if now - self._last_write < self.min_interval:
+            if (self._last_write is not None
+                    and now - self._last_write < self.min_interval):
                 return None
             if counts == self._last_counts:
                 self._last_write = now
