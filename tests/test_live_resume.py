@@ -19,6 +19,9 @@ import pytest
 
 from forecast_eval.events import FillEvent
 from forecast_eval.execution import Execution
+from forecast_eval.exits.pct_stop import EntryPercentStop
+from forecast_eval.exits.stop_loss import FixedStopLoss
+from forecast_eval.exits.time_stop import TimeStop
 from forecast_eval.live.broker.base import HeldPosition
 from forecast_eval.live.broker.dryrun import DryRunBroker
 from forecast_eval.live.broker.shadow import ShadowBroker
@@ -161,13 +164,49 @@ def test_a_position_above_max_position_is_refused():
 
 
 def test_adoption_is_refused_when_an_exit_rule_is_configured():
-    """The entry *bar index* belongs to a process that is gone. Live runs
-    configure no exit rule today; the day one is added, a stop timed from a
-    sentinel must fail loudly instead of firing at the wrong moment."""
+    """The entry *bar index* belongs to a process that is gone. A rule that has
+    not declared itself `adoptable` must fail loudly instead of firing at the
+    wrong moment — including anything that is not an ExitRule subclass at all."""
     rt = _runtime(HeldPosition(1, 17480.0))
     rt.loop.exit_rule = object()
     with pytest.raises(ValueError, match="ExitRule"):
         rt.adopt_position(timestamp=NOW)
+
+
+def test_adoption_is_refused_under_a_bar_counting_rule():
+    """`TimeStop` reads `entry_bar_idx`, which adoption seeds with the -1
+    sentinel: it would fire on the first bar of the resumed run."""
+    rt = _runtime(HeldPosition(1, 17480.0))
+    rt.loop.exit_rule = TimeStop(max_bars=60)
+    with pytest.raises(ValueError, match="TimeStop is configured"):
+        rt.adopt_position(timestamp=NOW)
+    assert rt.trader.position == 0
+
+
+@pytest.mark.parametrize("rule", [
+    EntryPercentStop(stop_pct=0.1),
+    FixedStopLoss(stop_loss_ticks=200),
+], ids=["EntryPercentStop", "FixedStopLoss"])
+def test_adoption_proceeds_under_an_entry_price_rule(rule):
+    """The price stops read only side and entry price — both seeded from the
+    venue — so a `--resume` into a held lot keeps them armed (2026-10-14: night
+    and fullday refused to resume with `stop_pct=0.1` declared)."""
+    rt = _runtime(HeldPosition(-1, 48760.0))
+    rt.loop.exit_rule = rule
+    adopted = rt.adopt_position(timestamp=NOW)
+    assert adopted["position"] == -1 and adopted["entry_price"] == 48760.0
+    assert rt.trader.position == -1
+
+
+def test_an_adopted_position_is_stopped_from_the_venue_entry():
+    """The stop measures from the adopted entry, not from the restart's market:
+    a short adopted at 17480 with a 0.1 % stop (17497.48) fires on the 17500
+    print — and would not if the entry had been reset to that print."""
+    rt = _runtime(HeldPosition(-1, 17480.0))
+    rt.loop.exit_rule = EntryPercentStop(stop_pct=0.001)
+    rt.adopt_position(timestamp=NOW)
+    _feed_one_bar(rt)
+    assert rt.result().n_exits >= 1
 
 
 def test_adopting_twice_is_refused():

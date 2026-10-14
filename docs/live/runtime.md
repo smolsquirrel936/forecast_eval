@@ -78,7 +78,8 @@ bar. Held once, at start-up — the per-bar path stays on `broker_position()`.
 | No venue at all (`has_venue = False`) and a `fallback` given | adopted from the **ledger**, `source="ledger"` |
 | 1 lot | adopted at the **venue's** average entry price |
 | Above `max_position` | raises — `Trader.on_fill` cannot average a second lot's entry (§2.10) |
-| An `ExitRule` is configured | raises — the entry *bar index* belongs to the dead process |
+| An `ExitRule` that is not `adoptable` (e.g. `TimeStop`) | raises — the entry *bar index* belongs to the dead process |
+| An `adoptable` `ExitRule` (`EntryPercentStop`, `FixedStopLoss`) | adopted — the rule reads only side and entry price, both seeded from the venue |
 | Called twice | raises — adoption seeds a fresh mirror, once |
 
 ## Key invariants / gotchas

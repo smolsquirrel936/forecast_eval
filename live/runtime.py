@@ -328,15 +328,17 @@ class LiveRuntime:
             return None
 
         # Tech: refuse rather than adopt when the size exceeds what the accounting
-        #       supports, or when a bar-counting exit rule is configured.
+        #       supports, or when the configured exit rule is not `adoptable`.
         # Why:  two ways adoption could quietly produce a wrong number instead of
         #       an error. Above `max_position`, `Trader.on_fill` has no
         #       average-entry branch (§2.10) — the same reason `check_startup`
-        #       raises. And the true entry *bar index* is unknowable here: it
-        #       belongs to a process that is gone, so any rule measuring bars held
-        #       would measure from a sentinel. Live runs configure no exit rule
-        #       today; the day one is added, this must fail loudly rather than
-        #       silently time a stop from the wrong origin.
+        #       raises. And the true entry *bar index* and time are unknowable
+        #       here: they belong to a process that is gone, so any rule measuring
+        #       bars held would measure from a sentinel. A rule that reads only
+        #       side and entry price (`EntryPercentStop`, `FixedStopLoss`)
+        #       declares `adoptable` and runs on the venue's seeded entry; any
+        #       other rule still fails loudly rather than silently time a stop
+        #       from the wrong origin.
         if abs(held.signed_qty) > self.strategy_params["max_position"]:
             raise ValueError(
                 f"the account holds {held.signed_qty} lot(s), above "
@@ -344,12 +346,14 @@ class LiveRuntime:
                 f"average a second lot's entry (§2.10), so this cannot be adopted "
                 f"— flatten with `python -m forecast_eval.live.flatten`, then "
                 f"restart.")
-        if self.loop.exit_rule is not None:
+        rule = self.loop.exit_rule
+        if rule is not None and not getattr(rule, "adoptable", False):
             raise ValueError(
-                "cannot adopt a position while an ExitRule is configured: the "
-                "entry bar index belongs to the previous process and is not "
-                "recoverable, so any bars-held rule would measure from a "
-                "sentinel.")
+                f"cannot adopt a position while the ExitRule "
+                f"{type(rule).__name__} is configured: it is not adoptable — the "
+                f"entry bar index belongs to the previous process and is not "
+                f"recoverable, so any bars-held rule would measure from a "
+                f"sentinel.")
         if self.trader.position != 0:
             raise ValueError(
                 f"adopt_position ran with the mirror already at "
