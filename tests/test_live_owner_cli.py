@@ -5,6 +5,7 @@ that decides whether the owner should start at all, plus the serve loop driven
 with a fake owner.
 """
 import csv
+from datetime import datetime
 
 import pytest
 
@@ -555,3 +556,138 @@ def test_no_telegram_skips_the_attach(tmp_path, monkeypatch):
     monkeypatch.setattr(credentials, "load", lambda name: None)
     assert main(["--out", str(tmp_path), "--no-telegram",
                  "--i-understand-this-places-orders"]) == 2
+
+
+# ---- a lost owner session (2026-10-15) ---------------------------------------
+
+class _WatchScheduler:
+    def __init__(self, window=False):
+        self.window, self.logins = window, []
+
+    def in_window(self, now):
+        return self.window
+
+    def note_login(self, now):
+        self.logins.append(now)
+
+
+def _owner_watch(probe_raises=True, relogin_raises=False, **kw):
+    from forecast_eval.live.owner_cli import OwnerSessionWatch
+    calls = {"probe": 0, "relogin": 0}
+
+    def _probe():
+        calls["probe"] += 1
+        if probe_raises:
+            raise RuntimeError("SessionNotEstablished")
+
+    def _relogin():
+        calls["relogin"] += 1
+        if relogin_raises:
+            raise RuntimeError("login refused")
+
+    w = OwnerSessionWatch(relogin=_relogin, probe=_probe, **kw)
+    return w, calls
+
+
+T_OWNER = datetime(2026, 10, 15, 9, 54)
+
+
+def test_three_unanswered_reconciles_relogin_the_owner():
+    """The owner's 30 s reconcile is its liveness check: three unanswered
+    (~90 s) on a session that also fails `usage()` mean it is gone."""
+    sched = _WatchScheduler()
+    w, calls = _owner_watch(scheduler=sched)
+    w.note(None, T_OWNER)
+    w.note(None, T_OWNER)
+    assert calls["relogin"] == 0
+    w.note(None, T_OWNER)
+    assert calls == {"probe": 1, "relogin": 1}
+    assert sched.logins == [T_OWNER], "the token-age clock is re-anchored"
+
+
+def test_a_session_that_answers_usage_is_not_relogged():
+    """The re-login logs out, cutting the deal stream; 2026-10-06 lost a fill to
+    that cut. A live session with a `list_positions` hiccup is left alone."""
+    w, calls = _owner_watch(probe_raises=False)
+    for _ in range(9):
+        w.note(None, T_OWNER)
+    assert calls == {"probe": 3, "relogin": 0}
+
+
+def test_an_answered_reconcile_restarts_the_count():
+    w, calls = _owner_watch()
+    for agreed in (None, None, True, None, None):
+        w.note(agreed, T_OWNER)
+    assert calls["relogin"] == 0
+    w.note(False, T_OWNER)      # a disagreement is still an answer
+    w.note(None, T_OWNER)
+    assert calls["relogin"] == 0
+
+
+def test_the_owner_stands_aside_inside_its_anchor_windows():
+    sched = _WatchScheduler(window=True)
+    w, calls = _owner_watch(scheduler=sched)
+    for _ in range(6):
+        w.note(None, T_OWNER)
+    assert calls == {"probe": 0, "relogin": 0}
+    sched.window = False
+    w.note(None, T_OWNER)
+    assert calls["relogin"] == 1, "the window closed with the failures still owed"
+
+
+def test_the_owner_gives_up_after_its_budget_and_says_so_once():
+    """No staleness backstop bounds the owner, so the budget does — then a
+    person has to look, because no deployment can place or hear an order."""
+    a, seen = _collecting_alerter()
+    w, calls = _owner_watch(relogin_raises=True, alerter=a, max_relogins=2)
+    for _ in range(12):
+        w.note(None, T_OWNER)
+    assert calls["relogin"] == 2
+    assert [(x.severity.value, x.kind) for x in seen] == [
+        ("warn", "session_relogin_failed"), ("warn", "session_relogin_failed"),
+        ("fatal", "owner_session_lost")]
+    assert w.n_relogin_failures == 2
+
+
+def test_an_answer_refills_the_budget():
+    w, calls = _owner_watch(relogin_raises=True, max_relogins=1)
+    for _ in range(6):
+        w.note(None, T_OWNER)
+    assert calls["relogin"] == 1
+    w.note(True, T_OWNER)
+    for _ in range(3):
+        w.note(None, T_OWNER)
+    assert calls["relogin"] == 2
+
+
+def test_a_successful_owner_relogin_alerts_info():
+    a, seen = _collecting_alerter()
+    w, _ = _owner_watch(alerter=a)
+    for _ in range(3):
+        w.note(None, T_OWNER)
+    assert [(x.severity.value, x.kind) for x in seen] == [
+        ("info", "session_relogin")]
+
+
+def test_serve_feeds_every_reconcile_to_the_session_watch():
+    class _Watch:
+        def __init__(self):
+            self.seen = []
+
+        def note(self, agreed, now):
+            self.seen.append(agreed)
+
+    watch = _Watch()
+    owner = _FakeOwner(reconcile=(None, None, True))
+    calls = {"n": 0}
+    original = owner.poll
+
+    def _poll():
+        original()
+        calls["n"] += 1
+        if calls["n"] > 3:
+            raise KeyboardInterrupt
+    owner.poll = _poll
+    with pytest.raises(KeyboardInterrupt):
+        _serve(owner, _Args(once=False), None, None, None, watch)
+    assert watch.seen == [None, None, True]

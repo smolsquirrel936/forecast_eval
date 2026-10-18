@@ -155,6 +155,116 @@ def _relogin_tick(relogin: Any, now: datetime, alerter: Any = None) -> None:
                       "the owner failed its pre-open check and could not be "
                       "recovered — no deployment can place an order")
 
+
+# Tech: unanswered reconciles in a row before the owner suspects its session,
+#       and the re-logins it then spends on one outage before it gives up.
+# Why:  MEASURED in `owner_session.jsonl`. On 2026-10-15 the owner's own
+#       session died at 09:54:01 with the deployments' and stayed dead until its
+#       14:52 anchor: 597 unanswered reconciles. On 2026-10-14 05:01:55 another
+#       loss ran 11 until the owner was stopped. The 30 s reconcile already makes
+#       the authenticated call that fails, so 3 unanswered is the evidence — 31 s
+#       after the first on 10-15, because a call that blocks on its timeout fires
+#       the next at once; never more than ~90 s. Ahead of the deployments' first
+#       lost-session re-login (~3 min), so the owner goes first here as at the
+#       anchors. The only other runs in the log (10-12 to 10-17) are 30 s
+#       `ShioajiTimeoutError`s around the 08:00 roll, at most 2 in a row. The owner has no staleness
+#       backstop to bound attempts, so the budget does: four, then a FATAL,
+#       because a dead owner session means no deployment can place or hear an
+#       order and a person has to look.
+OWNER_LOST_AFTER = 3
+OWNER_LOST_MAX_RELOGINS = 4
+
+
+class OwnerSessionWatch:
+    """Re-login the owner when its reconcile keeps going unanswered."""
+
+    def __init__(self, relogin: Any, probe: Any, scheduler: Any = None,
+                 after: int = OWNER_LOST_AFTER,
+                 max_relogins: int = OWNER_LOST_MAX_RELOGINS,
+                 recorder: Any = None, alerter: Any = None):
+        self.relogin, self.probe, self.scheduler = relogin, probe, scheduler
+        self.after, self.max_relogins = after, max_relogins
+        self.recorder, self.alerter = recorder, alerter
+        self.unanswered = 0
+        self.relogins_this_outage = 0
+        self._gave_up = False
+        self.n_relogins = 0
+        self.n_relogin_failures = 0
+
+    def note(self, agreed: Optional[bool], now: datetime) -> None:
+        # Tech: count unanswered reconciles (None); after `after` in a row, probe
+        #       the session and re-login only if the probe raises too.
+        # Why:  `reconcile` returns None for any venue failure, and the cure for
+        #       a dead session — logout, login, re-subscribe — briefly cuts the
+        #       deal stream. 2026-10-06 lost a fill to exactly that cut. So a
+        #       second authenticated call, `usage()` (raises on a dead token,
+        #       relogin_probe Q7), must fail as well: a session that answers it
+        #       is alive, and a `list_positions` hiccup is not worth a fill.
+        if agreed is not None:
+            if self.unanswered or self.relogins_this_outage:
+                self._record("owner_session_answered",
+                             relogins=self.relogins_this_outage)
+            self.unanswered = 0
+            self.relogins_this_outage = 0
+            self._gave_up = False
+            return
+        self.unanswered += 1
+        if self.unanswered < self.after:
+            return
+        # Tech: stand aside inside the scheduler's own windows.
+        # Why:  it is already re-logging in and verifying there; a second login
+        #       on top would stack connections and race its re-subscribe.
+        if self.scheduler is not None and self.scheduler.in_window(now):
+            return
+        if self.relogins_this_outage >= self.max_relogins:
+            if not self._gave_up:
+                self._gave_up = True
+                self._record("owner_session_lost", relogins=self.max_relogins)
+                if self.alerter is not None:
+                    self.alerter.fatal(
+                        "owner_session_lost",
+                        f"the owner's session stayed dead through "
+                        f"{self.max_relogins} re-logins — no deployment can "
+                        f"place or hear an order; restart the owner")
+            return
+        unanswered, self.unanswered = self.unanswered, 0
+        try:
+            self.probe()
+        except Exception as exc:                        # noqa: BLE001 — see Why
+            self._record("owner_session_probe_failed", unanswered=unanswered,
+                         error=repr(exc))
+        else:
+            self._record("owner_session_alive", unanswered=unanswered)
+            return
+        self.relogins_this_outage += 1
+        try:
+            self.relogin()
+        except Exception as exc:                        # noqa: BLE001
+            # Tech: recorded and alerted, never raised.
+            # Why:  this runs in the serve loop; an escape would end the owner,
+            #       which is a worse outage than the one being repaired.
+            self.n_relogin_failures += 1
+            self._record("owner_session_relogin_failed", error=repr(exc),
+                         attempt=self.relogins_this_outage)
+            if self.alerter is not None:
+                self.alerter.warn("session_relogin_failed",
+                                  f"owner re-login after a lost session "
+                                  f"failed: {exc!r}")
+            return
+        self.n_relogins += 1
+        if self.scheduler is not None:
+            self.scheduler.note_login(now)
+        self._record("owner_session_relogin", attempt=self.relogins_this_outage)
+        if self.alerter is not None:
+            self.alerter.info("session_relogin",
+                              "the owner's venue calls kept failing; re-logged "
+                              "in and re-subscribed the deal stream")
+
+    def _record(self, event: str, **fields: Any) -> None:
+        if self.recorder is not None:
+            self.recorder.record(event, **fields)
+
+
 DEFAULT_SLUGS = ("day", "night", "day_night")
 
 # Tech: the owner's own audit trail, appended beside the ledgers in `--out`.
@@ -436,8 +546,9 @@ def _main(args: Any, out_parent: Path, alerter: Alerter) -> int:
         # Why:  `usage()` raises on a dead token (relogin_probe Q7), and it is an
         #       authenticated REST call — the kind that died at 24 h. The owner
         #       has no tick feed, so unlike `live/cli.py` there is no tick half.
+        owner_relogin = make_relogin(api, cred, account, owner)
         relogin = ReloginScheduler(
-            relogin=make_relogin(api, cred, account, owner),
+            relogin=owner_relogin,
             verify=api.usage, anchors=owner_relogin_anchors())
         relogin.note_login(login_at)
         print("relogin anchors: " + ", ".join(
@@ -447,7 +558,13 @@ def _main(args: Any, out_parent: Path, alerter: Alerter) -> int:
               f"reconcile {args.reconcile_seconds}s")
         print("START THE DEPLOYMENTS NOW (live/cli.py --broker client).")
 
-        return _serve(owner, args, api, relogin, alerter)
+        # Tech: the lost-session repair, on the anchors' own re-login action.
+        # Why:  `OwnerSessionWatch` — between the anchors nothing else would
+        #       ever log a dead owner back in.
+        session_watch = OwnerSessionWatch(
+            relogin=owner_relogin, probe=api.usage, scheduler=relogin,
+            recorder=recorder, alerter=alerter)
+        return _serve(owner, args, api, relogin, alerter, session_watch)
     except Exception as exc:
         # Tech: alert, then re-raise unchanged.
         # Why:  an owner that dies leaves every deployment unable to trade; the
@@ -477,7 +594,8 @@ def _usage(api: Any) -> Any:
 
 
 def _serve(owner: OwnerProcess, args: Any, api: Any = None,
-           relogin: Any = None, alerter: Any = None) -> int:
+           relogin: Any = None, alerter: Any = None,
+           session_watch: Any = None) -> int:
     """The loop: drain intents, publish, reconcile on a slower cadence."""
     # Tech: install a SIGINT/SIGTERM handler that asks the loop to stop, then
     #       poll until it does.
@@ -522,6 +640,8 @@ def _serve(owner: OwnerProcess, args: Any, api: Any = None,
         if last_reconcile is None or now - last_reconcile >= args.reconcile_seconds:
             last_reconcile = now
             agreed = owner.reconcile()
+            if session_watch is not None:
+                session_watch.note(agreed, datetime.now())
             if agreed is False and owner.frozen is None:
                 # Tech: a disagreement FREEZES the owner — no new orders — and
                 #       the loop keeps serving.

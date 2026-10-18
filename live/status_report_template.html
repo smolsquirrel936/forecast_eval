@@ -46,6 +46,7 @@ main { max-width: 1120px; margin: 0 auto; padding: 32px 16px 64px; }
 h1 { font-size: 28px; line-height: 1.2; margin: 0 0 6px; font-weight: 650; }
 h2 { font-size: 20px; margin: 48px 0 4px; font-weight: 650; }
 h3 { font-size: 15px; margin: 24px 0 8px; font-weight: 600; }
+h4 { font-size: 13px; margin: 14px 0 6px; font-weight: 600; color: var(--ink-2); }
 p { margin: 8px 0; max-width: 78ch; }
 .sub { color: var(--ink-2); }
 .small { font-size: 13px; color: var(--ink-2); }
@@ -110,7 +111,7 @@ summary { cursor: pointer; font-size: 13px; color: var(--ink-2); padding: 4px 0;
   <nav class="toc">
     <a href="#overview">Overview</a><a href="#basic">1 · Basic info</a><a href="#data">2 · Data received</a>
     <a href="#decisions">3 · Decisions</a><a href="#position">4 · Position</a><a href="#performance">5 · Trading performance</a>
-    <a href="#stability">6 · Stability</a><a href="#hardware">7 · Hardware</a><a href="#method">Sources</a>
+    <a href="#transactions">6 · Transactions</a><a href="#stability">7 · Stability</a><a href="#hardware">8 · Hardware</a><a href="#method">Sources</a>
   </nav>
 
   <h2 id="overview">Overview</h2>
@@ -177,7 +178,12 @@ summary { cursor: pointer; font-size: 13px; color: var(--ink-2); padding: 4px 0;
   <div class="table-wrap"><table id="tb-perf"></table></div>
   <div id="perf-charts"></div>
 
-  <h2 id="stability">6 · Stability</h2>
+  <h2 id="transactions">6 · Transactions</h2>
+  <p class="lede">Every order each deployment sent, what became of it, and the round trips it made, for the whole soak. A position still held is listed first. An order that never filled is marked: the owner cancels an unfilled limit after 15 minutes, and the deployment keeps its position. <i>Fill records</i> counts rows of <code>fills.csv</code>; it equals the filled orders when every fill is explained by an order, and a fill that matches no order is flagged.</p>
+  <div class="table-wrap"><table id="tb-tx"></table></div>
+  <div id="tx-runs"></div>
+
+  <h2 id="stability">7 · Stability</h2>
   <p class="lede">A Shioaji token expires 24 h after login, so every process logs in again on a schedule before each session opens. A deployment confirms each re-login a few minutes later.</p>
   <div class="chart">
     <div class="chart-title">Logins per process, by session</div>
@@ -187,7 +193,7 @@ summary { cursor: pointer; font-size: 13px; color: var(--ink-2); padding: 4px 0;
   </div>
   <div class="table-wrap"><table id="tb-stab"></table></div>
 
-  <h2 id="hardware">7 · Hardware</h2>
+  <h2 id="hardware">8 · Hardware</h2>
   <p class="lede">A snapshot taken when this page was generated; nothing records resource use over time. Per-process VRAM comes from Windows GPU counters, because <code>nvidia-smi</code> can't attribute memory per process on a WDDM display GPU.</p>
   <div class="grid4" id="tiles-hw"></div>
   <div class="chart" id="vram-box">
@@ -599,7 +605,46 @@ function renderPerformance() {
   });
 }
 
-// ---------- 6. stability
+// ---------- 6. transactions
+function renderTransactions() {
+  const pv = r => r.performance.point_value;
+  const pts = (v, r) => v == null ? "—" : `<span style="color:${v > 0 ? "var(--good-text)" : v < 0 ? "var(--critical)" : "inherit"}">${fmt(v, 1)} pts</span>` + (r ? ` · ${fmt(v * pv(r))} TWD` : "");
+  const openTxt = r => r.transactions.open.length
+    ? r.transactions.open.map(l => `<b>${l.side} ${l.qty}</b> @ ${fmt(l.entry)} since ${fhm(l.since)}`).join("<br>") : "flat";
+  table("tb-tx", ["", ...RUNS.map(runKey)], [
+    ["Open position", ...RUNS.map(openTxt)],
+    ["Orders sent", ...RUNS.map(r => fmt(r.transactions.orders.length))],
+    ["Orders: filled / not filled", ...RUNS.map(r => `${r.transactions.orders.length - r.transactions.unfilled} / ${r.transactions.unfilled ? `<b style="color:var(--critical)">${r.transactions.unfilled}</b>` : 0}`)],
+    // Never below the filled orders above: each fill is claimed by one order at most.
+    ["Fill records (<code>fills.csv</code>)", ...RUNS.map(r => fmt(r.transactions.fills) + (r.transactions.unmatched_fills
+      ? ` <b style="color:var(--critical)">· ${r.transactions.unmatched_fills} match no order</b>` : ""))],
+    ["Closed round trips (wins)", ...RUNS.map(r => `${r.transactions.trades.length} (${r.transactions.wins})`)],
+    ["Realised net P&L", ...RUNS.map(r => pts(r.transactions.net_points, r))],
+    ["Fees on all fills", ...RUNS.map(r => fmt(r.transactions.fees_points, 1) + " pts")],
+  ], RUNS.map((_, i) => i + 1));
+  $("tx-runs").innerHTML = RUNS.map((r, i) => {
+    const t = r.transactions;
+    const trades = t.trades.length
+      ? `<div class="table-wrap"><table id="tx-tr-${i}"></table></div>` : `<div class="small">No closed round trip yet.</div>`;
+    const orders = t.orders.length
+      ? `<div class="table-wrap"><table id="tx-od-${i}"></table></div>` : `<div class="small">No order sent.</div>`;
+    const warn = t.unmatched_fills ? `<div class="callout"><b>${t.unmatched_fills} of ${t.fills} fill records match no order.</b> An order filled in parts, a fill added to the ledger by hand, or a fill that arrived after the next order's bar. Compare <code>fills.csv</code> with <code>orders.csv</code>.</div>` : "";
+    return `<h3>${runKey(r)}</h3><div class="small">Open position: ${openTxt(r)}</div>${warn}<h4>Closed round trips</h4>${trades}<h4>Orders</h4>${orders}`;
+  }).join("");
+  RUNS.forEach((r, i) => {
+    const t = r.transactions;
+    if (t.trades.length) table(`tx-tr-${i}`, ["Entry", "Exit", "Side", "Entry price", "Exit price", "Points", "Fees", "Net"],
+      t.trades.map(x => [fdt(x.entry_ts), fdt(x.exit_ts), esc(x.side), fmt(x.entry), fmt(x.exit), fmt(x.points, 1), fmt(x.fees, 1), pts(x.net)]),
+      [3, 4, 5, 6, 7]);
+    if (t.orders.length) table(`tx-od-${i}`, ["Bar", "Side", "Intent", "Limit", "Outcome", "Filled at", "Fill price"],
+      t.orders.map(o => [fdt(o.ts), esc(o.side), esc(o.intent), fmt(o.limit),
+        o.outcome === "filled" ? `<span class="ok-mark">✓</span>filled` : `<span class="bad-mark">✕</span>no fill`,
+        o.fill_ts ? fdt(o.fill_ts) : "—", fmt(o.fill_price)]),
+      [3, 6]);
+  });
+}
+
+// ---------- 7. stability
 function slotOf(iso) {
   // The session open a login came before: the first day/night open at or after it.
   const t = dt(iso), [dh, dm] = hm(SH.day_open), [nh, nm] = hm(SH.night_open);
@@ -651,7 +696,7 @@ function renderStability() {
   ], Array.from({ length: head.length - 1 }, (_, i) => i + 1));
 }
 
-// ---------- 7. hardware
+// ---------- 8. hardware
 function stackBar(id, legId, total, parts, unit) {
   const { svg, W } = mkSvg(id, 64);
   const Wd = W - 2, y0 = 8, bh = 26;
@@ -703,11 +748,12 @@ function renderSources() {
   <p>Shared state: <code>live_restart_&lt;slug&gt;.json</code> (heartbeat, failures), <code>soak_epoch_&lt;slug&gt;.json</code> (start time, retired soaks), <code>events_&lt;slug&gt;.jsonl</code> (the owner's position stream), <code>fatal.jsonl</code>. Live processes are matched by their <code>--strategy</code> argument.</p>
   <p>Logins: <code>shioaji.log</code> lines “Stored new token” per PID, converted from UTC to local time. Hardware: Windows <code>GPU Process Memory</code> counters, <code>Get-Process</code>, <code>Win32_OperatingSystem</code> and <code>nvidia-smi</code>, read once when the page was generated.</p>
   <p>Trading performance: <code>metrics.trading_metrics</code> over the newest folder's <code>trades.csv</code>, and the per-run report's <code>plot_equity_drawdown_plotly</code> and <code>plot_price_fills_plotly</code>. Their price line is every soak folder's <code>ticks.csv</code> at one row a minute, without simtrade prints. <code>point_value</code> and <code>fee_rate</code> come from <code>params.json</code>, defaulting to 200 and 0.0002 like the per-run report.</p>
+  <p>Transactions: every folder's <code>orders.csv</code>, with the newest folder's <code>fills.csv</code> and <code>trades.csv</code>. The two files share no order id, so an order is matched to the first fill on its side between its bar and the next order's; one with no such fill is "no fill". The open position is what FIFO matching of the fills leaves over.</p>
   <p>Hit rate compares the sign of <code>predicted_return</code> with the realised return from the forecast bar's price to the price <i>horizon</i> bars later. Forecasts whose horizon has not finished are not counted. Findings are fixed rules: VRAM ≥ 85% or commit ≥ 80% warns, and a heartbeat older than 5 minutes warns.</p>`;
 }
 
 function renderCharts() { renderSessions(); renderData(); renderDecisions(); renderPosition(); renderStability(); renderHardware(); }
-renderOverview(); renderBasic(); renderCharts(); renderPerformance(); renderSources();
+renderOverview(); renderBasic(); renderCharts(); renderPerformance(); renderTransactions(); renderSources();
 let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(renderCharts, 150); });
 </script>
 </body>

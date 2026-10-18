@@ -92,7 +92,8 @@ from forecast_eval.live import telegram                           # noqa: E402
 from forecast_eval.live.feedwatch import FeedWatch, Verdict       # noqa: E402
 from forecast_eval.live.recorder import Recorder                  # noqa: E402
 from forecast_eval.live.relogin import (                          # noqa: E402
-    Outcome as ReloginOutcome, ReloginScheduler)
+    Outcome as ReloginOutcome, ReloginScheduler, deployment_relogin_anchors,
+    stagger_slot)
 from forecast_eval.live.roll import (                             # noqa: E402
     Roll, RollSchedule, RollWatch, front_month_at, roll_at)
 from forecast_eval.live.runtime import LiveRuntime                # noqa: E402
@@ -1226,6 +1227,28 @@ def main(argv=None) -> int:
                     f"no tick since the re-login (count still {ticks['n']}) — "
                     f"the feed did not come back")
 
+        def _session_relogin():
+            # Tech: FeedWatch's session repair — the anchors' `_relogin`, plus
+            #       the token-age clock and an alert either way.
+            # Why:  2026-10-15 (simtrade_operations §11) — a session lost in
+            #       session was never re-logged into, and the 900 s backstop
+            #       halted day and fullday. The anchor path is the one measured
+            #       to heal it that day, so it is reused rather than re-derived.
+            #       `note_login` keeps the scheduler's token age true, since this
+            #       login refreshes the token as much as an anchor's does. The
+            #       re-raise is what makes FeedWatch count and record a failure.
+            try:
+                _relogin()
+            except Exception as exc:                  # noqa: BLE001
+                alerter.warn("session_relogin_failed",
+                             f"re-login after a lost session failed: {exc!r} "
+                             f"— retrying after more failed checks")
+                raise
+            relogin.note_login(datetime.now())
+            alerter.info("session_relogin",
+                         "the venue stayed unreachable; re-logged in and "
+                         "re-asserted callbacks and the subscription")
+
         feed = FeedWatch(
             # Tech: 5 s, not the SDK's 30 s default.
             # Why:  this runs on the consumer thread, so the default would stall
@@ -1244,6 +1267,8 @@ def main(argv=None) -> int:
             #       at all. It moves automatically if either constant does.
             max_resubscribes=_repair_budget(args.staleness_seconds,
                                             args.feed_check_seconds),
+            relogin=_session_relogin,
+            relogin_offset=stagger_slot(args.config),
             recorder=recorder,
         )
 
@@ -1424,12 +1449,14 @@ def main(argv=None) -> int:
         # Tech: the token scheduler, seeded with the start-up login's timestamp.
         # Why:  §2.24 — the session token expires 24 h after login and the SDK has
         #       no refresh. Without `note_login` the first anchor would compare
-        #       against nothing.
+        #       against nothing. The anchors are this deployment's staggered
+        #       ones (`relogin.DEPLOYMENT_STAGGER`), seconds apart from its peers.
         relogin = ReloginScheduler(relogin=_relogin, verify=_verify,
+                                   anchors=deployment_relogin_anchors(args.config),
                                    recorder=recorder)
         relogin.note_login(login_at)
         print(f"relogin anchors: "
-              + ", ".join(f"{a:%H:%M}/{v:%H:%M}" for a, v, _ in
+              + ", ".join(f"{a:%H:%M:%S}/{v:%H:%M}" for a, v, _ in
                           [(datetime.combine(date.today(), t[0]),
                             datetime.combine(date.today(), t[1]), t[2])
                            for t in relogin.anchors]))

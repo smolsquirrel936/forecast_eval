@@ -534,3 +534,58 @@ def test_the_recovery_re_anchors_token_age_even_when_the_recheck_fails():
     at = MON.replace(hour=14, minute=59)
     _tick(s, at, at + timedelta(minutes=1), step_seconds=1)
     assert s.token_age(at + timedelta(minutes=1)) < timedelta(minutes=2)
+
+
+# ---- the deployments' stagger (the 5-connection cap) -------------------------
+
+def test_the_deployments_relogin_forty_seconds_apart_and_verify_together():
+    """relogin_probe Q9: a refresh opens its new connection ~30 s before the old
+    one drops. Three in the same second briefly made 7 against a cap of 5; 40 s
+    apart, each spike clears before the next starts. Verify does not move — it
+    is the last look before the open and must stay a whole minute."""
+    from forecast_eval.live.relogin import deployment_relogin_anchors
+    day, night, fullday = (deployment_relogin_anchors(d)
+                           for d in ("day", "night", "fullday"))
+    assert [a[0][0] for a in (day, night, fullday)] == [
+        time(8, 40), time(8, 40, 40), time(8, 41, 20)]
+    assert [a[1][0] for a in (day, night, fullday)] == [
+        time(14, 55), time(14, 55, 40), time(14, 56, 20)]
+    assert day == session_open_anchors(), "slot 0 is the unstaggered schedule"
+    for anchors in (night, fullday):
+        assert [(v, o) for _, v, o in anchors] == [
+            (v, o) for _, v, o in session_open_anchors()]
+
+
+def test_an_unknown_deployment_gets_the_unstaggered_schedule():
+    from forecast_eval.live.relogin import deployment_relogin_anchors, stagger_slot
+    assert stagger_slot(None) == stagger_slot("weekend") == 0
+    assert deployment_relogin_anchors(None) == session_open_anchors()
+
+
+def test_the_last_slot_still_fits_two_attempts_before_verify():
+    """The stagger shortens the retry window, so the latest slot is the one at
+    risk: 08:41:20 -> 08:44:00 must still hold the default 60 s retry."""
+    from forecast_eval.live.relogin import deployment_relogin_anchors
+    calls = []
+
+    def _fails():
+        calls.append(1)
+        raise RuntimeError("timeout")
+
+    s = ReloginScheduler(relogin=_fails,
+                         anchors=deployment_relogin_anchors("fullday"))
+    s.note_login(datetime(2026, 10, 19, 0, 0))
+    t = datetime(2026, 10, 19, 8, 41, 0)
+    while t < datetime(2026, 10, 19, 8, 44, 0):
+        s.check(t)
+        t += timedelta(seconds=1)
+    assert len(calls) == 2
+
+
+def test_in_window_covers_relogin_and_verify_and_nothing_else():
+    s = _sched(verify=lambda: None)
+    d = date(2026, 10, 19)
+    assert s.in_window(datetime.combine(d, time(8, 40)))
+    assert s.in_window(datetime.combine(d, time(8, 44, 30)))
+    assert not s.in_window(datetime.combine(d, time(8, 45)))
+    assert not s.in_window(datetime.combine(d, time(10, 8)))

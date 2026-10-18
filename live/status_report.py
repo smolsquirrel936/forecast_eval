@@ -272,6 +272,89 @@ def collect_performance(dep: Deployment) -> Dict[str, Any]:
     return {"metrics": list(m.items()), "point_value": point_value, "figs": figs}
 
 
+def _num(v: Any) -> Optional[float]:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _sec(ts: str) -> str:
+    # Why:  `orders.csv` writes `2026-10-15 19:33:00` and `fills.csv` adds
+    #       nanoseconds; cut to the second as ISO text they compare correctly,
+    #       and every browser's `Date` parses them (a space and nine fraction
+    #       digits are not part of the format JavaScript guarantees).
+    return ts[:19].replace(" ", "T")
+
+
+def collect_transactions(orders: List[Dict[str, str]], fills: List[Dict[str, str]],
+                         trades: List[Dict[str, str]]) -> Dict[str, Any]:
+    """One deployment's transaction record: orders with outcomes, closed trades, open lot."""
+    fl = sorted(({"ts": _sec(f.get("timestamp", "")), "side": f.get("side", ""),
+                  "price": _num(f.get("fill_price")), "qty": int(_num(f.get("quantity")) or 0),
+                  "fee": _num(f.get("fee"))} for f in fills), key=lambda f: f["ts"])
+    od = sorted(({"ts": _sec(o.get("timestamp", "")), "side": o.get("side", ""),
+                  "intent": o.get("intent", ""), "limit": _num(o.get("limit_price")),
+                  "qty": int(_num(o.get("quantity")) or 0)} for o in orders), key=lambda o: o["ts"])
+
+    # Tech: each order takes the first unclaimed fill on its side at or after its
+    #       own timestamp and before the next order's; an order with none is
+    #       "no fill".
+    # Why:  `orders.csv` and `fills.csv` share no order id — the venue's `ordno`
+    #       lives only in the owner's log. The window is sound because a
+    #       deployment holds at most `max_position` and sends its next order only
+    #       after the last one filled or was cancelled (the owner cancels an
+    #       unfilled limit after 15 min). An unmatched order is the one a reader
+    #       most needs to see: on 2026-10-17 night's two closes were cancelled
+    #       and its long stayed open.
+    claimed: set = set()
+    for i, o in enumerate(od):
+        end = od[i + 1]["ts"] if i + 1 < len(od) else None
+        hit = next((j for j, f in enumerate(fl) if j not in claimed
+                    and f["side"] == o["side"] and f["ts"] >= o["ts"]
+                    and (end is None or f["ts"] < end)), None)
+        if hit is not None:
+            claimed.add(hit)
+            o.update(outcome="filled", fill_ts=fl[hit]["ts"], fill_price=fl[hit]["price"])
+        else:
+            o.update(outcome="no fill", fill_ts=None, fill_price=None)
+
+    # Tech: the open position is what FIFO matching of the fills leaves over.
+    # Why:  `trades.csv` holds only closed round trips, so a held lot appears in
+    #       no file as such; the fills are the one record that covers both.
+    lots: List[Dict[str, Any]] = []
+    for f in fl:
+        sign, q = (1 if f["side"] == "BUY" else -1), f["qty"]
+        while q and lots and lots[0]["sign"] != sign:
+            take = min(q, lots[0]["qty"])
+            lots[0]["qty"] -= take
+            q -= take
+            if not lots[0]["qty"]:
+                lots.pop(0)
+        if q:
+            lots.append({"sign": sign, "qty": q, "price": f["price"], "ts": f["ts"]})
+    open_lots = [{"side": "LONG" if l["sign"] > 0 else "SHORT", "qty": l["qty"],
+                  "entry": l["price"], "since": l["ts"]} for l in lots]
+
+    tr = [{"entry_ts": _sec(t.get("entry_ts") or ""), "exit_ts": _sec(t.get("exit_ts") or ""), "side": t.get("side"),
+           "entry": _num(t.get("entry_price")), "exit": _num(t.get("exit_price")),
+           "points": _num(t.get("pnl_points")), "fees": _num(t.get("fees_points")),
+           "net": _num(t.get("net_pnl_points"))} for t in trades]
+    return {
+        "orders": od, "fills": len(fl), "trades": tr, "open": open_lots,
+        "unfilled": sum(o["outcome"] != "filled" for o in od),
+        # Tech: fills no order claimed. Never negative: a fill is claimed once.
+        # Why:  zero means every fill is explained by an order. More means an
+        #       order filled in parts, a fill added by hand (2026-10-06), or a
+        #       fill landing after the next order's bar, which the matching
+        #       window then misreads — each one a reason to read the files.
+        "unmatched_fills": len(fl) - len(claimed),
+        "net_points": sum(t["net"] or 0.0 for t in tr),
+        "fees_points": sum(f["fee"] or 0.0 for f in fl),
+        "wins": sum((t["net"] or 0) > 0 for t in tr),
+    }
+
+
 def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]:
     """Everything the report shows about one deployment, as plain JSON-able data."""
     params, d = dep.params, dep.run_dir
@@ -476,6 +559,7 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
             "owner_values": {str(k): v for k, v in owner_pos.items()}, "owner_now": owner_last,
         },
         "performance": collect_performance(dep),
+        "transactions": collect_transactions(orders, fills, trades),
         "stability": {
             "relogins": [e.get("when") for e in relogins],
             "relogin_failed": [{"when": e.get("wall"), "backoff": e.get("backoff_seconds")} for e in failed],
@@ -690,6 +774,15 @@ def findings(data: Mapping[str, Any]) -> List[Dict[str, str]]:
                  if nonflat else
                  "<b>Flat the whole time.</b> Every bar recorded position 0 and every owner position "
                  f"event reported 0 ({sum(r['position']['owner_events'] for r in runs):,} events).")})
+
+    unmatched = [r for r in runs if r["transactions"]["unmatched_fills"]]
+    if unmatched:
+        out.append({"level": "warn", "html":
+                    "<b>Fill records that no order explains:</b> "
+                    + esc(", ".join(f'{names[r["package"]]} {r["transactions"]["unmatched_fills"]} of '
+                                    f'{r["transactions"]["fills"]}' for r in unmatched))
+                    + ". An order filled in parts, a fill added to the ledger by hand, or a fill that "
+                      "arrived after the next order's bar; compare fills.csv with orders.csv (§6)."})
 
     logins = data["logins"]
     procs = [("Owner", data["owner"]["pid"])] if data["owner"] else []

@@ -197,6 +197,7 @@ What each alert means and what to do. "Ops" links point into
 | `crashed` | both | an unhandled exception ended the process. Deployments add `error_type` and `where` (file:line); the owner adds `error_type` | read the console traceback; positions are left as they were, unmanaged |
 | `startup_refused` | both | a start was refused before trading. `gate=` says which: `preflight` (flags), `RestartGuard` (backoff, backfill cap, quota), `adopt_position` (cannot adopt the held lot, e.g. an exit rule is declared), `subscribe_trade` (owner exit 7), `reconcile` (owner exit 6: ledgers and venue disagree); also a non-flat `--fresh-start` | the message names the fix; Ops §5, §6.2, §6.9 |
 | `owner_frozen` | owner | a running reconcile disagreed; the owner places nothing more, and each deployment halts when it next submits | reconcile by hand (Ops §6.7, §6.9), then restart everything |
+| `owner_session_lost` | owner | the owner's venue calls kept failing through 4 re-logins: its session is dead, so **no deployment can place or hear an order** | restart the owner, then check the deployments |
 | `session_unverified` | both | the pre-open check failed and recovery failed: the token or feed is dead as the session opens. From the owner it means **no deployment can place an order** | restart the process (owner first if it is the owner) |
 | `no_credentials`, `bad_credentials` | deployment; owner `no_credentials` | no usable Shioaji key for this process | fix `config/secrets.toml` |
 | `roll_unsettled` | deployment | the contract rolled with a position open and no price to settle it at; the position mirror is stale | compare the venue with the ledgers before trusting the run (Ops §6.5) |
@@ -207,7 +208,8 @@ What each alert means and what to do. "Ops" links point into
 | Kind | Sender | Means |
 |---|---|---|
 | `feed_missed` | deployment | the venue traded without us; resubscribing. Sent when the feed's verdict *changes*, not every minute |
-| `feed_unreachable` | deployment | cannot reach the venue to check the feed |
+| `feed_unreachable` | deployment | cannot reach the venue to check the feed. If it lasts 3-5 checks (~3-5 min; day, night, fullday in that order) the deployment re-logs in by itself |
+| `session_relogin_failed` | both | a re-login after a lost session failed. A deployment retries after 3 more failed checks, and its 900 s backstop halts if none heals it; the owner retries after 3 more unanswered reconciles, up to 4 times, then sends `owner_session_lost` |
 | `session_down` | deployment | the quote session dropped |
 | `relogin_failed` | both | a re-login attempt failed; it retries inside the window |
 | `relogin_abandoned` | both | the re-login window closed with no fresh token — expect `session_unverified` at the open |
@@ -230,6 +232,7 @@ What each alert means and what to do. "Ops" links point into
 | `position_closed` | deployment | a fill closed it, with **this trade's** PnL in points |
 | `resumed` | deployment | `--resume` adopted a held position (from the venue or the ledger) |
 | `relogin` | both | the token was refreshed before an open: deployments at about 08:40 and 14:55, the owner at about 08:37 and 14:52, weekends included |
+| `session_relogin` | both | a lost session was re-logged into between the anchors: a deployment after 3-5 failed feed checks, the owner after 3 unanswered reconciles with `usage()` failing too |
 | `feed_recovered` | deployment | the feed is delivering again after a `feed_*` warning |
 | `roll_started` | deployment | the scheduled roll to the next month is beginning |
 | `owner_agrees_again` | owner | the venue and the book match again while frozen; still frozen until restarted |

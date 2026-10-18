@@ -267,3 +267,153 @@ def test_the_summary_counts_every_verdict():
     s = w.summary()
     assert s["feed_checks"] == 1 and s["feed_quiet"] == 1
     assert s["feed_missed"] == 0 and s["feed_resubscribes"] == 0
+
+
+# ---- a lost session is re-logged into (2026-10-15) --------------------------
+
+_LOST = RuntimeError("SessionNotEstablished: Unable to wait for session "
+                     "'(c3,s1)_sinopac' to be established")
+
+
+def _lost_session_watch(**kw):
+    logins = []
+    w = FeedWatch(snapshot=_Venue(error=_LOST), resubscribe=lambda: None,
+                  interval=INTERVAL, relogin=lambda: logins.append(1), **kw)
+    w.note_tick(T0, T0)
+    return w, logins
+
+
+def _check_minutes(w, minutes):
+    return [w.check(T0 + timedelta(seconds=60 * m + 1)) for m in minutes]
+
+
+def test_a_session_that_stays_unreachable_is_relogged_before_the_backstop():
+    """REGRESSION (2026-10-15). Every snapshot raised `SessionNotEstablished`
+    for 14 checks, UNREACHABLE only warned, and the 900 s backstop halted day
+    and fullday. A re-login is what healed night at 14:55, so it runs here —
+    after three failed checks, well inside the fifteen minutes."""
+    w, logins = _lost_session_watch(relogin_after=3)
+    verdicts = _check_minutes(w, (1, 2))
+    assert verdicts == [Verdict.UNREACHABLE] * 2
+    assert logins == [], "one or two failed queries are not a dead session"
+
+    assert _check_minutes(w, (3,)) == [Verdict.UNREACHABLE]
+    assert logins == [1]
+
+
+def test_relogins_are_throttled_while_the_session_stays_dead():
+    """The count restarts after each attempt, so a session that will not come
+    back costs one login per three checks — four before a 900 s backstop, not
+    one a minute against the per-person connection cap."""
+    w, logins = _lost_session_watch(relogin_after=3)
+    _check_minutes(w, range(1, 15))
+    assert len(logins) == 4
+    assert w.summary()["feed_relogins"] == 4
+
+
+def test_a_print_restarts_the_count():
+    w, logins = _lost_session_watch(relogin_after=3)
+    _check_minutes(w, (1, 2))
+    t1 = T0 + timedelta(seconds=150)
+    w.note_tick(t1, t1)
+    w.check(t1 + timedelta(seconds=61))
+    assert logins == [], "the failures before the print were a different silence"
+
+
+def test_an_answering_session_restarts_the_count():
+    """A malformed answer is still UNREACHABLE, but the session answered —
+    a re-login would not change what it sends."""
+    venue = _Venue(error=_LOST)
+    logins = []
+    w = FeedWatch(snapshot=venue, resubscribe=lambda: None, interval=INTERVAL,
+                  relogin=lambda: logins.append(1), relogin_after=3)
+    w.note_tick(T0, T0)
+    _check_minutes(w, (1, 2))
+    venue.error, venue.ts = None, "not a timestamp at all"
+    assert _check_minutes(w, (3,)) == [Verdict.UNREACHABLE]
+    venue.error = _LOST
+    _check_minutes(w, (4, 5))
+    assert logins == []
+
+
+def test_unreadable_answers_alone_never_relogin():
+    logins = []
+    w = FeedWatch(snapshot=lambda: SimpleNamespace(total_volume=5),
+                  resubscribe=lambda: None, interval=INTERVAL,
+                  relogin=lambda: logins.append(1), relogin_after=1)
+    w.note_tick(T0, T0)
+    _check_minutes(w, range(1, 6))
+    assert logins == []
+
+
+def test_a_failing_relogin_is_counted_not_raised():
+    """The re-login runs on the consumer thread. An escape would end the very
+    process it is trying to save — and the next attempt still comes."""
+    calls = []
+
+    def _refused():
+        calls.append(1)
+        raise RuntimeError("login refused")
+
+    w = FeedWatch(snapshot=_Venue(error=_LOST), resubscribe=lambda: None,
+                  interval=INTERVAL, relogin=_refused, relogin_after=3)
+    w.note_tick(T0, T0)
+    assert _check_minutes(w, range(1, 7)) == [Verdict.UNREACHABLE] * 6
+    assert len(calls) == 2
+    s = w.summary()
+    assert s["feed_relogins"] == 0 and s["feed_relogin_failures"] == 2
+
+
+def test_no_relogin_without_the_callable():
+    """Left unset, UNREACHABLE keeps its old meaning: warn and back off."""
+    w, resubs = _watch(_Venue(error=_LOST))
+    w.note_tick(T0, T0)
+    _check_minutes(w, range(1, 15))
+    assert w.summary()["feed_relogins"] == 0 and resubs == []
+
+
+def test_the_relogin_reaches_the_recorder():
+    import tempfile
+    from pathlib import Path
+
+    from forecast_eval.live.recorder import Recorder
+    with tempfile.TemporaryDirectory() as d:
+        rec = Recorder(Path(d) / "s.jsonl", simulation=True)
+        w = FeedWatch(snapshot=_Venue(error=_LOST), resubscribe=lambda: None,
+                      interval=INTERVAL, relogin=lambda: None, relogin_after=2,
+                      recorder=rec)
+        w.note_tick(T0, T0)
+        _check_minutes(w, (1, 2))
+        rec.close()
+        text = (Path(d) / "s.jsonl").read_text(encoding="utf-8")
+    assert '"consecutive": 2' in text
+    assert "feed_relogin" in text and '"after": 2' in text
+
+
+def test_the_deployments_relogin_a_check_apart_and_stay_apart():
+    """Three deployments see a venue-wide drop on the same clock. Offsets
+    0/1/2 (day/night/fullday) keep every attempt in a different minute, so no
+    two `force_refresh` connection spikes overlap — and each still gets four
+    attempts inside the 15 checks a 900 s backstop allows."""
+    attempts = {}
+    for offset in (0, 1, 2):
+        at = []
+        w = FeedWatch(snapshot=_Venue(error=_LOST), resubscribe=lambda: None,
+                      interval=INTERVAL, relogin_after=3, relogin_offset=offset)
+        w.relogin = lambda w=w, at=at: at.append(w.n_checks)
+        w.note_tick(T0, T0)
+        _check_minutes(w, range(1, 15))     # check 15 is the backstop's 900 s
+        attempts[offset] = at
+    assert attempts == {0: [3, 6, 9, 12], 1: [4, 7, 10, 13], 2: [5, 8, 11, 14]}
+
+
+def test_the_offset_applies_again_after_the_session_answers():
+    """A new outage is a new same-clock collision, so it is staggered again."""
+    w, logins = _lost_session_watch(relogin_after=3, relogin_offset=2)
+    _check_minutes(w, range(1, 6))
+    assert logins == [1]
+    t1 = T0 + timedelta(seconds=400)
+    w.note_tick(t1, t1)
+    for m in range(1, 5):
+        w.check(t1 + timedelta(seconds=60 * m + 1))
+    assert logins == [1], "four failures is under 3 + 2 for a fresh outage"

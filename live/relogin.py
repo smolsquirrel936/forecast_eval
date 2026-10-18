@@ -84,6 +84,38 @@ VERIFY_LEAD = timedelta(minutes=1)
 #       lands ~40 s before the open, which is the whole point of checking here.
 RECHECK_GRACE = timedelta(seconds=20)
 
+# Tech: how far apart the deployments' re-logins start, and in which order.
+# Why:  relogin_probe Q9 measured a `force_refresh=True` login opening its new
+#       connection ~30 s before the old one drops. With the owner and three
+#       deployments connected, three refreshes in the same second briefly hold 7
+#       connections against the cap of 5 per person_id (§2.8b), and what Shioaji
+#       does above 5 has never been measured. 40 s apart, each spike has cleared
+#       before the next starts, so the peak is 5. The offsets run *later* than
+#       the unstaggered anchor, never earlier, so the owner's window (open-8 to
+#       open-6 min, `owner_cli.OWNER_RELOGIN_LEAD`) stays clear of all three.
+DEPLOYMENT_STAGGER = timedelta(seconds=40)
+STAGGER_ORDER = ("day", "night", "fullday")
+
+
+def stagger_slot(deployment: Optional[str]) -> int:
+    # Tech: a deployment's place in `STAGGER_ORDER`; 0 for anything else.
+    # Why:  one number drives both staggers — the anchors here and FeedWatch's
+    #       lost-session re-login — so the two cannot order the deployments
+    #       differently. An unknown name gets slot 0, the unstaggered schedule.
+    return STAGGER_ORDER.index(deployment) if deployment in STAGGER_ORDER else 0
+
+
+def deployment_relogin_anchors(deployment: Optional[str]
+                               ) -> Tuple[Tuple[time, time, time], ...]:
+    # Tech: `session_open_anchors` with the re-login start moved later by the
+    #       deployment's slot; the verify window does not move.
+    # Why:  a later start shortens the retry window rather than the verify one,
+    #       which is the last look before the open and must stay whole. At the
+    #       default backoff the last slot (2 min 40 s) still fits two attempts.
+    return session_open_anchors(
+        relogin_lead=RELOGIN_LEAD - stagger_slot(deployment) * DEPLOYMENT_STAGGER)
+
+
 # Tech: a window key — a date plus the window's start time of day.
 # Why:  each window must fire once per day, so "which window" alone is not
 #       enough to remember what has been settled. Re-login and verify have
@@ -185,6 +217,13 @@ class ReloginScheduler:
         if self._last_login is None:
             return None
         return now - self._last_login
+
+    def in_window(self, now: datetime) -> bool:
+        # Tech: whether `now` falls in a re-login or verify window.
+        # Why:  a caller with its own session repair (the owner's lost-session
+        #       watch) stands aside while this scheduler is already logging in,
+        #       so the two never stack logins inside one window.
+        return self._live_window(now) is not None
 
     def check(self, now: datetime) -> Optional[Outcome]:
         # Tech: attempt a re-login if an anchor window is live; return the
