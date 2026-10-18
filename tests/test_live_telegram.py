@@ -71,10 +71,23 @@ def test_one_press_reaches_every_deployment(tmp_path):
     assert not day.allows(Severity.WARN)
 
 
-@pytest.mark.parametrize("level", ["info", "warn", "fatal"])
+@pytest.mark.parametrize("level", ["info", "trade", "warn", "fatal"])
 def test_fatal_is_sent_whatever_the_setting(tmp_path, level):
     store = LevelStore(tmp_path / "l.json", level)
     assert store.allows(Severity.FATAL)
+
+
+@pytest.mark.parametrize("level,sent", [
+    ("info", {Severity.INFO, Severity.TRADE, Severity.WARN, Severity.FATAL}),
+    ("trade", {Severity.TRADE, Severity.WARN, Severity.FATAL}),
+    ("warn", {Severity.WARN, Severity.FATAL}),
+    ("fatal", {Severity.FATAL}),
+])
+def test_each_level_sends_itself_and_everything_louder(tmp_path, level, sent):
+    """"Trades + WARN + FATAL" is the setting that drops the twice-daily
+    re-logins of four processes and keeps the fills."""
+    store = LevelStore(tmp_path / "l.json", level)
+    assert {s for s in ALL if store.allows(s)} == sent
 
 
 def test_a_torn_level_file_keeps_the_last_good_value(tmp_path):
@@ -155,17 +168,18 @@ def _press(data, chat=CHAT):
         "message": {"message_id": 7, "chat": {"id": int(chat)}}}}
 
 
-def test_settings_replies_with_three_buttons_marking_the_current_one(tmp_path):
+def test_settings_replies_with_four_buttons_marking_the_current_one(tmp_path):
     n, api, _ = _notifier(tmp_path)
     n.start(poll=False)
     n.handle_update(_msg("/settings"))
     n.close()
     (reply,) = api.sent()
     buttons = [row[0] for row in reply["reply_markup"]["inline_keyboard"]]
-    assert [b["callback_data"] for b in buttons] == ["level:info", "level:warn",
-                                                     "level:fatal"]
+    assert [b["callback_data"] for b in buttons] == [
+        "level:info", "level:trade", "level:warn", "level:fatal"]
+    assert buttons[1]["text"] == "Trades + WARN + FATAL"
     assert buttons[0]["text"].startswith("✓")
-    assert not buttons[1]["text"].startswith("✓")
+    assert not any(b["text"].startswith("✓") for b in buttons[1:])
 
 
 def test_a_press_sets_the_shared_level_and_redraws(tmp_path):
@@ -175,7 +189,20 @@ def test_a_press_sets_the_shared_level_and_redraws(tmp_path):
     methods = [m for m, _ in api.calls]
     assert methods == ["answerCallbackQuery", "editMessageText"]
     edited = api.calls[1][1]["reply_markup"]["inline_keyboard"]
-    assert edited[2][0]["text"].startswith("✓")
+    assert edited[3][0]["text"].startswith("✓")
+
+
+def test_the_trade_button_keeps_fills_and_drops_relogins(tmp_path):
+    n, api, store = _notifier(tmp_path)
+    n.handle_update(_press("level:trade"))
+    assert store.get() == "trade"
+    api.calls.clear()
+    n.start(poll=False)
+    n(_alert(Severity.INFO, "relogin", "token refreshed"))
+    n(_alert(Severity.TRADE, "position_opened", "LONG 1 @ 46200"))
+    n.close()
+    assert [p["text"] for p in api.sent()] == [
+        "[night] [TRADE] position_opened: LONG 1 @ 46200"]
 
 
 def test_a_failed_redraw_still_keeps_the_new_level(tmp_path):

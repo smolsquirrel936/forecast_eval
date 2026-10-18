@@ -487,7 +487,7 @@ def test_a_freeze_alerts_once_as_fatal():
     a, seen = _collecting_alerter()
     _serve_n(_FakeOwner(reconcile=(False, False, True, True)), 4, alerter=a)
     assert [(x.severity.value, x.kind) for x in seen] == [
-        ("fatal", "owner_frozen"), ("info", "owner_agrees_again")]
+        ("fatal", "owner_frozen"), ("warn", "owner_agrees_again")]
     assert "mirror 1 != venue 2" in seen[0].message
 
 

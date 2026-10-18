@@ -10,16 +10,17 @@ and the owner, registers a `TelegramNotifier` as an alerter sink, and every
 message is prefixed with who sent it (`owner` for the owner):
 
 ```
-[night] [INFO] position_opened: LONG 1 @ 46200
+[night] [TRADE] position_opened: LONG 1 @ 46200
 [day] [FATAL] halt: position mirror disagrees with the venue | action=flatten simulation=True
 ```
 
 **The level is a button, not a constant.** Send `/settings` to the bot (it is
-also in the bot's menu) and it answers with three buttons:
+also in the bot's menu) and it answers with four buttons:
 
 | Button | Sends |
 |---|---|
 | All (INFO) | everything — trades, milestones, warnings, fatals |
+| Trades + WARN + FATAL | fills, warnings and fatals; drops the routine re-logins |
 | WARN + FATAL | warnings and fatals |
 | FATAL only | fatals |
 
@@ -36,7 +37,7 @@ survives restarts. `level` in `[telegram]` applies only until the first press.
    [telegram]
    bot_token = "123456:ABC..."
    chat_id = "REPLACE_ME"
-   level = "info"          # starting level: info | warn | fatal
+   level = "info"          # starting level: info | trade | warn | fatal
    ```
 3. Send the bot any message, then run
    `uv run --no-sync python -m forecast_eval.live.telegram --find-chat` and copy

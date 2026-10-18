@@ -138,12 +138,14 @@ def _relogin_tick(relogin: Any, now: datetime, alerter: Any = None) -> None:
     # Tech: alert on the outcome with the kinds and levels `live/cli.py` uses.
     # Why:  an owner whose token died cannot place or hear an order for any
     #       deployment, so a failed verify is as fatal here as there. `VERIFIED`
-    #       is the routine case and stays on the console.
+    #       is the routine case and stays on the console. A re-login after a
+    #       failed or abandoned one is their recovery, so it goes out as WARN.
     if alerter is None or outcome is None:
         return
     if outcome is Outcome.RELOGGED:
-        alerter.info("relogin", "owner token refreshed and the deal stream "
-                                "re-subscribed")
+        alerter.recovery("relogin", "owner token refreshed and the deal stream "
+                                    "re-subscribed",
+                         resolves=("relogin_failed", "relogin_abandoned"))
     elif outcome is Outcome.FAILED:
         alerter.warn("relogin_failed", "an owner re-login attempt failed — "
                                        "retrying inside the window")
@@ -256,9 +258,11 @@ class OwnerSessionWatch:
             self.scheduler.note_login(now)
         self._record("owner_session_relogin", attempt=self.relogins_this_outage)
         if self.alerter is not None:
-            self.alerter.info("session_relogin",
-                              "the owner's venue calls kept failing; re-logged "
-                              "in and re-subscribed the deal stream")
+            self.alerter.recovery("session_relogin",
+                                  "the owner's venue calls kept failing; "
+                                  "re-logged in and re-subscribed the deal "
+                                  "stream",
+                                  resolves=("session_relogin_failed",))
 
     def _record(self, event: str, **fields: Any) -> None:
         if self.recorder is not None:
@@ -672,9 +676,11 @@ def _serve(owner: OwnerProcess, args: Any, api: Any = None,
                     print("  the venue and the book agree again — still frozen; "
                           "restart the owner to trade.", file=sys.stderr)
                     if alerter is not None:
-                        alerter.info("owner_agrees_again",
-                                     "the venue and the book match again; the "
-                                     "owner stays frozen until restarted")
+                        alerter.recovery("owner_agrees_again",
+                                         "the venue and the book match again; "
+                                         "the owner stays frozen until "
+                                         "restarted",
+                                         resolves=("owner_frozen",))
             elif agreed is True and owner.reconcile_note:
                 print(f"  reconcile pending: {owner.reconcile_note}")
             # Tech: read the traffic meter on the same cadence as the venue

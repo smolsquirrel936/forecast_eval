@@ -357,6 +357,9 @@ class Alerter:
     def warn(self, kind, message, **fields):
         self.sent.append(("warn", kind))
 
+    def trade(self, kind, message, **fields):
+        self.sent.append(("trade", kind))
+
     def info(self, kind, message, **fields):
         self.sent.append(("info", kind))
 

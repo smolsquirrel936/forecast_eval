@@ -4,15 +4,21 @@ A five-day unattended soak is the case this exists for: when something goes
 wrong at 03:00 it has to leave the machine, and today it only reaches a console
 nobody is watching and a JSONL nobody reads until morning.
 
-**One method, three severities.** `fatal` / `warn` / `info` all funnel into
-`emit`, and every alert carries a `severity` and a `kind` tag. Sinks subscribe to
+**One method, four severities.** `fatal` / `warn` / `trade` / `info` all funnel
+into `emit`, and every alert carries a `severity` and a `kind` tag. Sinks subscribe to
 the levels they want, so one Telegram chat can take fatals while another takes
 everything — without the call sites knowing anything about channels. Adding a
 transport later is `alerter.add_sink(fn, levels=...)` and nothing else changes.
 
     FATAL  the run is over or a position is exposed — act now
     WARN   handled, but you would want to know (a feed repaired, an anomaly)
+    TRADE  a fill opened or closed a position
     INFO   milestones (started, warm, resumed, ended cleanly)
+
+**A recovery is raised at the level of the problem it ends.** `recovery` sends
+WARN when one of the kinds it `resolves` was raised (WARN or FATAL) and not yet
+resolved, and INFO otherwise — so a channel that shows a warning also shows the
+all-clear, while a routine re-login stays INFO.
 
 **Delivery is best-effort and can never take down the run.** A sink that raises
 is swallowed and noted; the alert path must not become a new way to lose a
@@ -28,20 +34,25 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 
 class Severity(str, Enum):
-    # Tech: the three levels, ordered fatal > warn > info.
+    # Tech: the four levels, ordered fatal > warn > trade > info.
     # Why:  a tag rather than a boolean because the whole point is that different
     #       classes reach the user by different routes. `str`-valued so it
-    #       serialises into the trail without conversion.
+    #       serialises into the trail without conversion. TRADE sits above INFO
+    #       because a fill is rare and worth reading, while INFO also carries the
+    #       twice-daily re-logins of four processes; below WARN because nothing
+    #       has gone wrong.
     FATAL = "fatal"
     WARN = "warn"
+    TRADE = "trade"
     INFO = "info"
 
 
-ALL: Tuple[Severity, ...] = (Severity.FATAL, Severity.WARN, Severity.INFO)
+ALL: Tuple[Severity, ...] = (Severity.FATAL, Severity.WARN, Severity.TRADE,
+                             Severity.INFO)
 
 
 @dataclass(frozen=True)
@@ -87,6 +98,7 @@ class Alerter:
         self.fatal_journal = fatal_journal
         self.console = console
         self._sinks: List[Tuple[Callable[[Alert], None], Tuple[Severity, ...]]] = []
+        self._open: Set[str] = set()
         self.counts: Dict[str, int] = {s.value: 0 for s in ALL}
         self.sink_failures = 0
 
@@ -108,8 +120,27 @@ class Alerter:
     def warn(self, kind: str, message: str, **detail: Any) -> Alert:
         return self.emit(Severity.WARN, kind, message, **detail)
 
+    def trade(self, kind: str, message: str, **detail: Any) -> Alert:
+        return self.emit(Severity.TRADE, kind, message, **detail)
+
     def info(self, kind: str, message: str, **detail: Any) -> Alert:
         return self.emit(Severity.INFO, kind, message, **detail)
+
+    def recovery(self, kind: str, message: str, *, resolves: Iterable[str],
+                 **detail: Any) -> Alert:
+        # Tech: emit at WARN when any kind in `resolves` is still open (raised at
+        #       WARN or FATAL since its last recovery), else at INFO; close them.
+        #       The kinds it closed go in `detail` as `resolves`.
+        # Why:  a channel filtered to WARN + FATAL showed `feed_missed` and never
+        #       the all-clear, so every incident looked open on the phone. Capped
+        #       at WARN: good news is never "act now", and FATAL would also write
+        #       it to the fatal journal.
+        cleared = [k for k in resolves if k in self._open]
+        self._open.difference_update(cleared)
+        if cleared:
+            detail = {**detail, "resolves": ",".join(cleared)}
+        return self.emit(Severity.WARN if cleared else Severity.INFO,
+                         kind, message, **detail)
 
     def emit(self, severity: Severity, kind: str, message: str,
              **detail: Any) -> Alert:
@@ -122,6 +153,8 @@ class Alerter:
         alert = Alert(severity=severity, kind=kind, message=message,
                       when=datetime.now(), detail=dict(detail))
         self.counts[severity.value] += 1
+        if severity in (Severity.WARN, Severity.FATAL):
+            self._open.add(kind)
 
         if self.console:
             self._safe(self._to_console, alert)
@@ -137,12 +170,13 @@ class Alerter:
     # ---- destinations -------------------------------------------------------
 
     def _to_console(self, alert: Alert) -> None:
-        # Tech: fatals and warnings to stderr, info to stdout.
+        # Tech: fatals and warnings to stderr, trades and info to stdout.
         # Why:  stderr is what survives a redirect of normal output and what a
         #       terminal highlights; an attended run should not have to hunt for
         #       the bad line among a night of bar prints.
         import sys
-        stream = sys.stdout if alert.severity is Severity.INFO else sys.stderr
+        stream = (sys.stdout if alert.severity in (Severity.TRADE, Severity.INFO)
+                  else sys.stderr)
         print(alert.format(), file=stream, flush=True)
 
     def _to_recorder(self, alert: Alert) -> None:
@@ -176,5 +210,6 @@ class Alerter:
     def summary(self) -> Dict[str, int]:
         return {"alerts_fatal": self.counts[Severity.FATAL.value],
                 "alerts_warn": self.counts[Severity.WARN.value],
+                "alerts_trade": self.counts[Severity.TRADE.value],
                 "alerts_info": self.counts[Severity.INFO.value],
                 "alert_sink_failures": self.sink_failures}

@@ -2,10 +2,11 @@
 
 One bot, one chat, every deployment. Each process registers a
 `TelegramNotifier` as an `Alerter` sink; messages carry the deployment as a
-prefix (`[night] [INFO] position_opened: ...`) so one chat can serve all three.
+prefix (`[night] [TRADE] position_opened: ...`) so one chat can serve all three.
 
 **The level is a setting, not a constant.** Send `/settings` to the bot and it
-answers with three buttons — *All (INFO)*, *WARN + FATAL*, *FATAL only*. The
+answers with four buttons — *All (INFO)*, *Trades + WARN + FATAL*, *WARN +
+FATAL*, *FATAL only*. The
 choice is written to one `telegram_level.json` beside the restart state, which
 every deployment reads on every alert, so a press in the chat changes what all
 of them send, and it survives restarts. `level` in `[telegram]` is only the
@@ -51,10 +52,13 @@ TEXT_LIMIT = 4096                     # Telegram's own sendMessage cap
 # Tech: setting value -> the lowest severity sent, and the button label.
 # Why:  stored as the lowercase severity name so the file reads as what it
 #       means; FATAL-only is the floor because FATAL is never filtered.
-LEVELS: Dict[str, Severity] = {"info": Severity.INFO, "warn": Severity.WARN,
-                               "fatal": Severity.FATAL}
-LABELS = {"info": "All (INFO)", "warn": "WARN + FATAL", "fatal": "FATAL only"}
-_RANK = {Severity.INFO: 0, Severity.WARN: 1, Severity.FATAL: 2}
+#       Dict order is the button order, loudest setting first.
+LEVELS: Dict[str, Severity] = {"info": Severity.INFO, "trade": Severity.TRADE,
+                               "warn": Severity.WARN, "fatal": Severity.FATAL}
+LABELS = {"info": "All (INFO)", "trade": "Trades + WARN + FATAL",
+          "warn": "WARN + FATAL", "fatal": "FATAL only"}
+_RANK = {Severity.INFO: 0, Severity.TRADE: 1, Severity.WARN: 2,
+         Severity.FATAL: 3}
 
 
 @dataclass(frozen=True)

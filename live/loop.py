@@ -215,13 +215,15 @@ class LiveLoop:
                     session_for_pnl=session_for_pnl,
                     position_after=self.trader.position,
                 )
-            # Tech: one INFO alert per fill, phrased as an entry or an exit, with
+            # Tech: one TRADE alert per fill, phrased as an entry or an exit, with
             #       the round trip's own PnL on the exit.
             # Why:  a fill is the only thing in a soak that is both rare and
             #       *interesting* — at 0.37 orders/night this is roughly one
             #       message every three days, so it cannot cause alert fatigue and
-            #       it is the one event worth reading on a phone. INFO, not WARN:
-            #       nothing has gone wrong, this is the system doing its job.
+            #       it is the one event worth reading on a phone. TRADE, not WARN:
+            #       nothing has gone wrong, this is the system doing its job; and
+            #       not INFO, so a chat set to drop the routine re-logins still
+            #       hears it (the `/settings` "Trades + WARN + FATAL" button).
             #       Alerting on the fill rather than the order is deliberate — an
             #       order can be cancelled unfilled at the next boundary (§4.4),
             #       and a notification for a trade that never happened is worse
@@ -229,7 +231,7 @@ class LiveLoop:
             if self.alerter is not None:
                 pos = self.trader.position
                 if was_flat:
-                    self.alerter.info(
+                    self.alerter.trade(
                         "position_opened",
                         f"{'LONG' if pos > 0 else 'SHORT'} {abs(pos)} @ "
                         f"{fill.fill_price:.0f}",
@@ -237,7 +239,7 @@ class LiveLoop:
                         price=fill.fill_price, bar_idx=bar_idx)
                 else:
                     trade_pnl = self.portfolio.realized_pnl - pnl_before
-                    self.alerter.info(
+                    self.alerter.trade(
                         "position_closed",
                         f"closed @ {fill.fill_price:.0f} — "
                         f"{trade_pnl:+.0f} points",

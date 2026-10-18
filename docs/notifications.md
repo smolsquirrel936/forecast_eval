@@ -25,7 +25,7 @@ Run every command from the repo root (`night/`), prefixed with
  rails halt, fill, re-login, crash, ...
               │
               ▼
-          Alerter.emit ──► console (stderr for FATAL/WARN, stdout for INFO)
+          Alerter.emit ──► console (stderr for FATAL/WARN, stdout for TRADE/INFO)
               │        ──► session.jsonl / owner_session.jsonl   (always)
               │        ──► fatal.jsonl                           (deployments' FATALs)
               ▼
@@ -95,7 +95,7 @@ It lives in `config/secrets.toml`, the same file as the Shioaji keys.
 |---|---|---|---|
 | `bot_token` | yes | the token from @BotFather | never printed: `TelegramConfig`'s `repr` shows `<redacted>` |
 | `chat_id` | yes | the number `--find-chat` prints | quoted or bare both work (`"123"` or `123`); a group's id is negative |
-| `level` | no | `info` (default), `warn` or `fatal` | **the starting level only** — used until the first `/settings` press, then the level file wins (§4) |
+| `level` | no | `info` (default), `trade`, `warn` or `fatal` | **the starting level only** — used until the first `/settings` press, then the level file wins (§4) |
 
 ### 3.2 What happens with a bad or missing section
 
@@ -103,7 +103,7 @@ It lives in `config/secrets.toml`, the same file as the Shioaji keys.
 |---|---|
 | absent | runs without Telegram, silently. This is the opt-out |
 | `bot_token` or `chat_id` still `REPLACE_ME` (or empty) | prints `[WARN] telegram_disabled: [telegram] in ... still holds the example placeholder...` and runs without Telegram |
-| `level` not one of the three | prints `[WARN] telegram_disabled: [telegram] level='...' is not one of [...]` and runs without Telegram |
+| `level` not one of the four | prints `[WARN] telegram_disabled: [telegram] level='...' is not one of [...]` and runs without Telegram |
 | present and valid, but wrong (bad token, wrong chat) | runs, attaches Telegram, and every send fails: `telegram_failed` counts up (§8). Catch this with the test message before a run |
 | `secrets.toml` tracked by git | refused: the same guard as the Shioaji keys ([credentials.md](live/credentials.md)). Rotate the bot token too |
 
@@ -133,16 +133,22 @@ menu button — the entry appears once any process has started). It answers:
 ```
 Alerts sent to this chat: All (INFO).
 FATAL is always sent. The setting is shared by every deployment and survives restarts.
- [ ✓ All (INFO) ]
- [ WARN + FATAL ]
- [ FATAL only   ]
+ [ ✓ All (INFO)            ]
+ [ Trades + WARN + FATAL   ]
+ [ WARN + FATAL            ]
+ [ FATAL only              ]
 ```
 
 | Button | Sends | Typical use |
 |---|---|---|
-| All (INFO) | everything: fills, milestones, warnings, fatals | the default; a normal day is a message per fill plus re-login notices |
+| All (INFO) | everything: fills, milestones, routine re-logins, warnings, fatals | the default; a normal day is a message per fill plus eight re-login notices |
+| Trades + WARN + FATAL | fills, warnings and fatals | you want every position change and every problem, without the routine notices |
 | WARN + FATAL | warnings and fatals | you trust the trading, want to hear about trouble |
 | FATAL only | fatals | overnight, when only "act now" should buzz |
+
+Each button sends its own level and everything louder: INFO < TRADE < WARN <
+FATAL. A **recovery** (§6.5) is sent as WARN when it ends a warning, so any
+setting that showed you the problem also shows you the all-clear.
 
 How the setting behaves:
 
@@ -167,14 +173,14 @@ How the setting behaves:
 ## 5. Reading a message
 
 ```
-[night] [INFO] position_closed: closed @ 46350 — +150 points | side=SELL quantity=1 price=46350.0 points=150.0 position_after=0 bar_idx=812
-└──┬──┘ └─┬──┘ └─────┬──────┘ └──────────────┬──────────────┘ └────────────────────────────┬────────────────────────────────┘
+[night] [TRADE] position_closed: closed @ 46350 — +150 points | side=SELL quantity=1 price=46350.0 points=150.0 position_after=0 bar_idx=812
+└──┬──┘ └──┬──┘ └─────┬──────┘ └──────────────┬──────────────┘ └────────────────────────────┬────────────────────────────────┘
  sender  level      kind                 message                               detail (key=value, when present)
 ```
 
 - **sender** — `owner`, `day`, `night` or `fullday` (the `--strategy` name, not
   the file slug: fullday's files say `day_night`, its messages say `fullday`).
-- **level** — `FATAL`, `WARN` or `INFO` (§6).
+- **level** — `FATAL`, `WARN`, `TRADE` or `INFO` (§6).
 - **kind** — a fixed machine tag; the catalogue in §6 lists every one.
 - **message** — the sentence meant for a human.
 - **detail** — structured fields, appended after `|`. Prices are in index
@@ -224,18 +230,41 @@ What each alert means and what to do. "Ops" links point into
 | `venue_unanswered` | owner | the venue did not answer the start-up reconcile; the owner started on the ledgers alone |
 | `telegram_disabled` | both | the `[telegram]` section is incomplete. Console only — Telegram is, by definition, not attached |
 
-### 6.3 INFO — milestones and trades
+### 6.3 TRADE — position changes
 
 | Kind | Sender | Means |
 |---|---|---|
 | `position_opened` | deployment | a fill opened a position: `LONG 1 @ 46200`. Sent on the **fill**, never on the order |
 | `position_closed` | deployment | a fill closed it, with **this trade's** PnL in points |
+
+### 6.4 INFO — milestones
+
+| Kind | Sender | Means |
+|---|---|---|
 | `resumed` | deployment | `--resume` adopted a held position (from the venue or the ledger) |
-| `relogin` | both | the token was refreshed before an open: deployments at about 08:40 and 14:55, the owner at about 08:37 and 14:52, weekends included |
-| `session_relogin` | both | a lost session was re-logged into between the anchors: a deployment after 3-5 failed feed checks, the owner after 3 unanswered reconciles with `usage()` failing too |
-| `feed_recovered` | deployment | the feed is delivering again after a `feed_*` warning |
-| `roll_started` | deployment | the scheduled roll to the next month is beginning |
-| `owner_agrees_again` | owner | the venue and the book match again while frozen; still frozen until restarted |
+| `relogin` | both | the token was refreshed before an open: deployments at about 08:40 and 14:55, the owner at about 08:37 and 14:52, weekends included. WARN when it follows a failure (§6.5) |
+| `session_relogin` | both | a lost session was re-logged into between the anchors: a deployment after 3-5 failed feed checks, the owner after 3 unanswered reconciles with `usage()` failing too. WARN when it follows a failure (§6.5) |
+| `roll_started` | deployment | the scheduled roll to the next month is beginning. WARN when it follows a `roll_deferred` (§6.5) |
+
+### 6.5 Recoveries — WARN when they end a warning
+
+A recovery is sent at the level of the problem it ends: **WARN** when one of the
+kinds it resolves was raised (as WARN or FATAL) and has not been resolved since,
+**INFO** otherwise. A recovery that ends a FATAL is still WARN, because good
+news is never "act now". The resolved kinds are appended as
+`resolves=feed_missed`, for example.
+
+| Kind | Sender | Resolves |
+|---|---|---|
+| `feed_recovered` | deployment | `feed_missed`, `feed_unreachable`. In practice always WARN: it only fires after one of them |
+| `relogin` | both | `relogin_failed`, `relogin_abandoned`. The routine twice-daily re-login stays INFO |
+| `session_relogin` | both | `session_relogin_failed` |
+| `roll_started` | deployment | `roll_deferred` |
+| `owner_agrees_again` | owner | `owner_frozen`. In practice always WARN; the owner stays frozen until restarted |
+
+`session_down`, `deployment_silent`, `traffic_low` and `owner_session_lost`
+have no recovery alert. For `session_down`, `feed_recovered` is the evidence
+that the feed came back.
 
 What is deliberately **not** sent: process start and clean stop, every bar,
 every forecast and signal, orders that have not filled, and the owner's
@@ -323,7 +352,7 @@ second reader is answered `409 Conflict`. With four processes up:
 | nothing arrives, `telegram_failed` > 0 | network down, or token/chat wrong | run the test send; check the machine's connection |
 | `/settings` gets no answer | no process is running, or they are all backing off | wait a minute; with nothing running, the press is applied at the next start (within 24 h) |
 | a button press is ignored | it came from a different chat than `chat_id` | use the configured chat |
-| too many messages | INFO is on | press **WARN + FATAL** or **FATAL only** |
+| too many messages | INFO is on | press **Trades + WARN + FATAL** to keep the fills, or **WARN + FATAL** / **FATAL only** |
 | the `/settings` entry is missing from the bot menu | no process has started since the bot was created | start any process once; or just type `/settings` |
 
 ## 12. Privacy
@@ -341,8 +370,9 @@ Messages leave the machine and are stored by Telegram. What they carry:
 
 ## 13. For developers
 
-- **Raising a new alert:** call `alerter.fatal / warn / info(kind, message,
-  **detail)` at the call site. Telegram picks it up with no other change. Pick
+- **Raising a new alert:** call `alerter.fatal / warn / trade / info(kind,
+  message, **detail)` at the call site. An alert that ends an earlier warning
+  is `alerter.recovery(kind, message, resolves=(...), **detail)`. Telegram picks it up with no other change. Pick
   `kind` as a stable snake_case tag, and add it to §6. A condition that
   repeats every few seconds must alert on a *change* only (see
   `owner_cli._serve`'s `traffic_alerted` / `stale_alerted`).

@@ -1245,9 +1245,10 @@ def main(argv=None) -> int:
                              f"— retrying after more failed checks")
                 raise
             relogin.note_login(datetime.now())
-            alerter.info("session_relogin",
-                         "the venue stayed unreachable; re-logged in and "
-                         "re-asserted callbacks and the subscription")
+            alerter.recovery("session_relogin",
+                             "the venue stayed unreachable; re-logged in and "
+                             "re-asserted callbacks and the subscription",
+                             resolves=("session_relogin_failed",))
 
         feed = FeedWatch(
             # Tech: 5 s, not the SDK's 30 s default.
@@ -1404,9 +1405,10 @@ def main(argv=None) -> int:
             if schedule.due(stamp):
                 nxt, _note = _next_month_contract()
                 if nxt is not None and _roll_evidence(nxt, stamp):
-                    alerter.info("roll_started",
-                                 f"scheduled roll {schedule.month} -> "
-                                 f"{contract_month(nxt)} beginning")
+                    alerter.recovery("roll_started",
+                                     f"scheduled roll {schedule.month} -> "
+                                     f"{contract_month(nxt)} beginning",
+                                     resolves=("roll_deferred",))
                     rt.request_roll(stamp.isoformat())
             elif (schedule.lapsed(stamp)
                   and schedule.month not in lapsed_reported):
@@ -1523,8 +1525,14 @@ def main(argv=None) -> int:
                 #       feed check is gated would mean it never fired at all.
                 outcome = relogin.check(stamp)
                 if outcome is ReloginOutcome.RELOGGED:
-                    alerter.info("relogin",
-                                 "token refreshed and callbacks re-asserted")
+                    # Tech: a recovery of the window's failed attempts, if any.
+                    # Why:  routine, it stays INFO; after a `relogin_failed` or
+                    #       `relogin_abandoned` it is the all-clear for them, so
+                    #       it goes out at their WARN level.
+                    alerter.recovery("relogin",
+                                     "token refreshed and callbacks re-asserted",
+                                     resolves=("relogin_failed",
+                                               "relogin_abandoned"))
                     # Tech: check for a roll immediately after a re-login.
                     # Why:  §2.6 — the anchors sit in the pre-open quiet, which is
                     #       the one moment a contract change can be adopted before
@@ -1566,12 +1574,15 @@ def main(argv=None) -> int:
                     # Why:  a sustained outage produces the same verdict every
                     #       60 s, and a message a minute all night is how a
                     #       channel gets muted. Transitions are the information:
-                    #       it broke, and later, it came back.
+                    #       it broke, and later, it came back — the latter at
+                    #       the WARN level of the warning it ends.
                     verdict = feed.check(stamp)
                     if verdict is not None and verdict is not last_verdict:
                         if verdict is Verdict.QUIET and last_verdict is not None:
-                            alerter.info("feed_recovered",
-                                         "the feed is delivering again")
+                            alerter.recovery("feed_recovered",
+                                             "the feed is delivering again",
+                                             resolves=("feed_missed",
+                                                       "feed_unreachable"))
                         elif verdict is Verdict.MISSED:
                             alerter.warn("feed_missed",
                                          "the venue traded without us — "
