@@ -28,7 +28,7 @@ aggressive (60 s) where the old halt window had to be timid.
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
-| `FeedWatch(snapshot, resubscribe, interval=60.0, max_resubscribes=3, recorder=None, relogin=None, relogin_after=3)` | class | every action injected as a callable; `relogin=None` leaves UNREACHABLE a warning only |
+| `FeedWatch(snapshot, resubscribe, interval=60.0, max_resubscribes=3, recorder=None, relogin=None, relogin_after=3, relogin_offset=0)` | class | every action injected as a callable; `relogin=None` leaves UNREACHABLE a warning only |
 | `note_tick(exchange_ts, now)` | method | record the newest genuine print, on both clocks |
 | `check(now)` | method | run a check if one is due; returns the `Verdict` or `None` |
 | `summary()` | method | the counters the CLI prints and records |
@@ -89,6 +89,12 @@ transient gap terminal.
   answered. A failing re-login is recorded (`feed_relogin_failed`), never raised.
   This is the one login that happens in session; the anchors' "not on a live
   bar" rule protects bars that, here, are not arriving.
+- **The first attempt is staggered per deployment** (`relogin_offset`, the
+  deployment's `relogin.stagger_slot`: day 0, night 1, fullday 2). A venue-wide
+  drop reaches all three on the same clock, so equal counts would refresh them in
+  one second, up to 7 connections against the cap of 5. Attempts land at checks
+  3/6/9/12, 4/7/10/13 and 5/8/11/14: always a minute apart, four each before the
+  backstop. A new outage is staggered again.
 - **It never resets the silence marker.** The rails read the same silence, and a
   marker this reset would disarm the halt that catches an unhealable feed.
 - **Only genuine prints count.** A simtrade tick is not evidence the market

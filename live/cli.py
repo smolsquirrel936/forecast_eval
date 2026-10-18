@@ -92,7 +92,8 @@ from forecast_eval.live import telegram                           # noqa: E402
 from forecast_eval.live.feedwatch import FeedWatch, Verdict       # noqa: E402
 from forecast_eval.live.recorder import Recorder                  # noqa: E402
 from forecast_eval.live.relogin import (                          # noqa: E402
-    Outcome as ReloginOutcome, ReloginScheduler)
+    Outcome as ReloginOutcome, ReloginScheduler, deployment_relogin_anchors,
+    stagger_slot)
 from forecast_eval.live.roll import (                             # noqa: E402
     Roll, RollSchedule, RollWatch, front_month_at, roll_at)
 from forecast_eval.live.runtime import LiveRuntime                # noqa: E402
@@ -1267,6 +1268,7 @@ def main(argv=None) -> int:
             max_resubscribes=_repair_budget(args.staleness_seconds,
                                             args.feed_check_seconds),
             relogin=_session_relogin,
+            relogin_offset=stagger_slot(args.config),
             recorder=recorder,
         )
 
@@ -1447,12 +1449,14 @@ def main(argv=None) -> int:
         # Tech: the token scheduler, seeded with the start-up login's timestamp.
         # Why:  §2.24 — the session token expires 24 h after login and the SDK has
         #       no refresh. Without `note_login` the first anchor would compare
-        #       against nothing.
+        #       against nothing. The anchors are this deployment's staggered
+        #       ones (`relogin.DEPLOYMENT_STAGGER`), seconds apart from its peers.
         relogin = ReloginScheduler(relogin=_relogin, verify=_verify,
+                                   anchors=deployment_relogin_anchors(args.config),
                                    recorder=recorder)
         relogin.note_login(login_at)
         print(f"relogin anchors: "
-              + ", ".join(f"{a:%H:%M}/{v:%H:%M}" for a, v, _ in
+              + ", ".join(f"{a:%H:%M:%S}/{v:%H:%M}" for a, v, _ in
                           [(datetime.combine(date.today(), t[0]),
                             datetime.combine(date.today(), t[1]), t[2])
                            for t in relogin.anchors]))

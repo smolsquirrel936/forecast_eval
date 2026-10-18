@@ -365,18 +365,20 @@ gap: the ledgers still claim lots the venue no longer holds.
 |---|---|---|
 | 08:00 | trading day and quota roll; the backfill cap resets | — |
 | 08:37–08:39 | owner re-login | `relogin_failed` (it retries 60 s later, inside the window) |
-| 08:40–08:44 | all deployments re-login **in the same second** | `relogin_failed`, `VERIFY_FAILED` |
+| 08:40–08:44 | deployments re-login 40 s apart: day 08:40:00, night 08:40:40, fullday 08:41:20; all verify at 08:44 | `relogin_failed`, `VERIFY_FAILED` |
 | 08:45 | DAY opens | first bars arrive; no `feed_*` alerts |
 | 13:45 | DAY closes | — |
 | 14:52–14:54 | owner re-login | as at 08:37 |
-| 14:55–14:59 | deployments re-login | as at 08:40 |
+| 14:55–14:59 | deployments re-login (14:55:00 / 14:55:40 / 14:56:20) | as at 08:40 |
 | 15:00 | NIGHT opens | as at 08:45 |
 | 05:00 | NIGHT closes; silence until 08:45 is expected | — |
 
-The re-login spike can briefly mean up to 7 connections against Shioaji's
-**5 per `person_id`** cap, because `force_refresh=True` opens the new connection
-about 30 s before the old one drops. The owner goes first so its spike clears
-before the deployments'. What Shioaji does above 5 has never been measured.
+A `force_refresh=True` login opens its new connection about 30 s before the old
+one drops, against Shioaji's **5 per `person_id`** cap with four processes
+connected. Until 2026-10-18 the three deployments re-logged in the same second,
+briefly up to 7. They are now 40 s apart (`relogin.DEPLOYMENT_STAGGER`), so each
+spike clears before the next and the peak is 5; the owner still goes first.
+What Shioaji does above 5 has never been measured.
 
 ## 8. Reports while the simtrade runs
 
@@ -634,10 +636,11 @@ the first pause.
   checks whose snapshot *raised* (~3 min in session), and again every 3 more
   while it keeps failing — 4 attempts before the 900 s backstop
   ([feedwatch.md](live/feedwatch.md)). Alerts: `session_relogin` (INFO) or
-  `session_relogin_failed` (WARN). Still open: (a) all three deployments would
-  re-login in the same minute, the same collision the 08:40 / 14:55 anchors
-  make daily, against the 5-connection cap; (b) the **owner** has no FeedWatch,
-  so an owner whose session dies in session is still only caught at its
-  08:37 / 14:52 anchors, and whether the owner lost its session on 10-15 was
-  not recorded. Until a live recovery is seen, a `feed_unreachable` with no
-  `session_relogin` within ~5 min means restart by hand.
+  `session_relogin_failed` (WARN). The two follow-ups, also 2026-10-18:
+  the deployments' re-logins are **staggered** (anchors 40 s apart; lost-session
+  attempts a check apart, at checks 3/4/5 then every 3), and the **owner**
+  re-logs in after 3 unanswered reconciles (~90 s) when `usage()` fails too,
+  up to 4 times an outage, then FATAL `owner_session_lost`
+  ([owner_cli.md](live/owner_cli.md)). Whether the owner lost its session on
+  10-15 was not recorded. Until a live recovery is seen, a `feed_unreachable`
+  with no `session_relogin` within ~6 min means restart by hand.

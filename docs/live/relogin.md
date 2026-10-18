@@ -38,6 +38,21 @@ open − 5 min ............ open − 1 min ...... open
 | `summary()` | method | the counters the CLI prints and records |
 | `Outcome` | enum | `RELOGGED` / `FAILED` / `ABANDONED` / `VERIFIED` / `VERIFY_FAILED` |
 | `session_open_anchors(relogin_lead=5min, verify_lead=1min)` | function | `((08:40, 08:44, 08:45), (14:55, 14:59, 15:00))`, derived from `DAY_OPEN`/`NIGHT_OPEN` |
+| `in_window(now)` | method | whether a re-login or verify window is live; the owner's lost-session watch stands aside then |
+| `deployment_relogin_anchors(deployment)` | function | the anchors with the re-login start moved `stagger_slot × 40 s` later; verify unchanged |
+| `stagger_slot(deployment)` / `DEPLOYMENT_STAGGER` / `STAGGER_ORDER` | function / constants | day 0, night 1, fullday 2 (anything else 0); 40 s; the order |
+
+## The deployments are staggered (since 2026-10-18)
+`force_refresh=True` opens its new connection ~30 s before the old one drops
+(Q9 below). With the owner and three deployments connected, three refreshes in
+the same second briefly made **7** against the cap of 5, and what Shioaji does
+above 5 has never been measured. Each deployment now starts its re-login window
+`stagger_slot × 40 s` late (08:40:00 / 08:40:40 / 08:41:20, and 14:55 likewise),
+so each spike clears before the next and the peak is 5. Later, never earlier,
+so the owner's 08:37–08:39 window stays clear. Verify stays at open − 1 min for
+all three. The cost is retry room: fullday's window is 2 min 40 s, which still
+fits two attempts at the default 60 s backoff (tested). The same slot staggers
+FeedWatch's lost-session re-login ([feedwatch.md](feedwatch.md)).
 
 ## The verify window
 One minute before the open, an injected health check runs — **an authenticated
@@ -183,7 +198,8 @@ looking like it worked.**
 
 The connection spike is transient: it returns to 1 within ~30 s and stays there
 (30 samples over 15 min). §2.8b caps connections at 5 per `person_id`, and two
-re-logins a day six hours apart never approach it.
+re-logins a day six hours apart never approach it *per process*; four processes
+refreshing together did, which is what the stagger above is for.
 
 *No longer circumstantial:* a new connection with the old one torn down was only
 strong evidence of a fresh session — "the token's 24 h clock reset" needed a soak

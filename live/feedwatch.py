@@ -111,6 +111,14 @@ class FeedWatch:
     #       900 s backstop then still leaves room for four attempts before it
     #       halts, so a session that will not come back still reaches a human.
     relogin_after: int = 3
+    # Tech: extra failed checks before the *first* re-login of an outage only.
+    # Why:  three deployments see a venue-wide drop on the same clock, so equal
+    #       counts would refresh all three in one second — the connection spike
+    #       `relogin.DEPLOYMENT_STAGGER` exists to avoid. Offsets 0/1/2 put the
+    #       first attempts a check (60 s) apart, and since every later attempt
+    #       comes `relogin_after` checks after the last, they stay apart: 3, 6,
+    #       9, 12 / 4, 7, 10, 13 / 5, 8, 11, 14 — four each before the backstop.
+    relogin_offset: int = 0
 
     def __post_init__(self) -> None:
         self._last_exchange: Any = None   # newest print we received (exchange clock)
@@ -123,6 +131,7 @@ class FeedWatch:
         self.n_unreachable = 0
         self.n_resubscribes = 0
         self._failed_queries = 0          # consecutive checks whose query raised
+        self._relogins_this_outage = 0
         self.n_relogins = 0
         self.n_relogin_failures = 0
 
@@ -140,6 +149,7 @@ class FeedWatch:
         self._last_local = now
         self._resubscribes_this_silence = 0
         self._failed_queries = 0
+        self._relogins_this_outage = 0
 
     def check(self, now: Any) -> Optional[Verdict]:
         # Tech: run one liveness check if we have been silent for `interval`,
@@ -178,6 +188,7 @@ class FeedWatch:
         #       answer below is still UNREACHABLE, but it came from a session
         #       that answered, and a re-login would not change what it sends.
         self._failed_queries = 0
+        self._relogins_this_outage = 0
 
         raw_ts = getattr(snap, "ts", None)
         total = getattr(snap, "total_volume", None)
@@ -250,10 +261,15 @@ class FeedWatch:
         #       arriving — the alternative to a mid-session login is the halt.
         #       Exceptions are recorded, never raised: this runs on the consumer
         #       thread, and an escape would end the process it is trying to save.
-        if self.relogin is None or self._failed_queries < self.relogin_after:
+        if self.relogin is None:
+            return
+        needed = self.relogin_after + (
+            self.relogin_offset if self._relogins_this_outage == 0 else 0)
+        if self._failed_queries < needed:
             return
         failed = self._failed_queries
         self._failed_queries = 0
+        self._relogins_this_outage += 1
         try:
             self.relogin()
         except Exception as exc:                      # noqa: BLE001 — see Why

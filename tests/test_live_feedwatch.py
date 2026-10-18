@@ -388,3 +388,32 @@ def test_the_relogin_reaches_the_recorder():
         text = (Path(d) / "s.jsonl").read_text(encoding="utf-8")
     assert '"consecutive": 2' in text
     assert "feed_relogin" in text and '"after": 2' in text
+
+
+def test_the_deployments_relogin_a_check_apart_and_stay_apart():
+    """Three deployments see a venue-wide drop on the same clock. Offsets
+    0/1/2 (day/night/fullday) keep every attempt in a different minute, so no
+    two `force_refresh` connection spikes overlap — and each still gets four
+    attempts inside the 15 checks a 900 s backstop allows."""
+    attempts = {}
+    for offset in (0, 1, 2):
+        at = []
+        w = FeedWatch(snapshot=_Venue(error=_LOST), resubscribe=lambda: None,
+                      interval=INTERVAL, relogin_after=3, relogin_offset=offset)
+        w.relogin = lambda w=w, at=at: at.append(w.n_checks)
+        w.note_tick(T0, T0)
+        _check_minutes(w, range(1, 15))     # check 15 is the backstop's 900 s
+        attempts[offset] = at
+    assert attempts == {0: [3, 6, 9, 12], 1: [4, 7, 10, 13], 2: [5, 8, 11, 14]}
+
+
+def test_the_offset_applies_again_after_the_session_answers():
+    """A new outage is a new same-clock collision, so it is staggered again."""
+    w, logins = _lost_session_watch(relogin_after=3, relogin_offset=2)
+    _check_minutes(w, range(1, 6))
+    assert logins == [1]
+    t1 = T0 + timedelta(seconds=400)
+    w.note_tick(t1, t1)
+    for m in range(1, 5):
+        w.check(t1 + timedelta(seconds=60 * m + 1))
+    assert logins == [1], "four failures is under 3 + 2 for a fresh outage"
