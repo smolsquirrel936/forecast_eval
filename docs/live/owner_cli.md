@@ -141,13 +141,17 @@ deployment holding a lot is a risk decision (§7.4), not a mechanical one —
 closing its position would be trading on someone else's behalf.
 
 **A lost session is re-logged into between the anchors (since 2026-10-18).**
-On 2026-10-15 the deployments' sessions died at 09:52 and stayed dead 5 h; the
-owner had nothing that could act on a dead session before 14:52. Now every
-reconcile result goes to `OwnerSessionWatch`:
+`owner_session.jsonl` shows the owner lost its own session twice in its first
+week: 2026-10-14 05:01:55 (a TCP error, then 11 `SessionNotEstablished` until
+the owner was stopped at 05:06:47) and 2026-10-15 09:54:01, with the
+deployments, dead for **597 reconciles** until the 14:52 anchor re-login healed
+it. Night's 19:34 and 20:34 orders then placed and filled, so that re-login
+restores the order and deal streams after a session death. Now every reconcile
+result goes to `OwnerSessionWatch`:
 
 | | |
 |---|---|
-| suspect | 3 unanswered reconciles in a row (`None`, ~90 s), ahead of the deployments' first lost-session attempt (~3 min) |
+| suspect | 3 unanswered reconciles in a row (`None`): 31 s after the first on 10-15, since a call that blocks on its 30 s timeout fires the next at once; at most ~90 s. Ahead of the deployments' first lost-session attempt (~3 min). The only other runs logged 10-12 to 10-17 are 30 s timeouts around the 08:00 roll, at most 2 in a row |
 | confirm | `api.usage()` must raise too. The re-login logs out, cutting the deal stream, and 2026-10-06 lost a fill to that cut; a session that answers `usage()` is left alone (`owner_session_alive`) |
 | act | the anchors' own re-login (logout, plain login, `subscribe_trade`, `attach`), then `note_login` |
 | defer | inside the scheduler's own windows (`ReloginScheduler.in_window`), so two logins never stack |

@@ -158,12 +158,16 @@ def _relogin_tick(relogin: Any, now: datetime, alerter: Any = None) -> None:
 
 # Tech: unanswered reconciles in a row before the owner suspects its session,
 #       and the re-logins it then spends on one outage before it gives up.
-# Why:  2026-10-15 — the deployments' session died at 09:52 and stayed dead 5 h;
-#       the owner had no check that could act on it, only its 08:37 / 14:52
-#       anchors. Its 30 s reconcile already makes the authenticated call that
-#       fails on a dead session, so 3 unanswered (~90 s) is the evidence, and
-#       ahead of the deployments' first lost-session re-login (~3 min) — the
-#       owner goes first here as at the anchors. The owner has no staleness
+# Why:  MEASURED in `owner_session.jsonl`. On 2026-10-15 the owner's own
+#       session died at 09:54:01 with the deployments' and stayed dead until its
+#       14:52 anchor: 597 unanswered reconciles. On 2026-10-14 05:01:55 another
+#       loss ran 11 until the owner was stopped. The 30 s reconcile already makes
+#       the authenticated call that fails, so 3 unanswered is the evidence — 31 s
+#       after the first on 10-15, because a call that blocks on its timeout fires
+#       the next at once; never more than ~90 s. Ahead of the deployments' first
+#       lost-session re-login (~3 min), so the owner goes first here as at the
+#       anchors. The only other runs in the log (10-12 to 10-17) are 30 s
+#       `ShioajiTimeoutError`s around the 08:00 roll, at most 2 in a row. The owner has no staleness
 #       backstop to bound attempts, so the budget does: four, then a FATAL,
 #       because a dead owner session means no deployment can place or hear an
 #       order and a person has to look.
