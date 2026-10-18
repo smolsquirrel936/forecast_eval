@@ -179,7 +179,7 @@ summary { cursor: pointer; font-size: 13px; color: var(--ink-2); padding: 4px 0;
   <div id="perf-charts"></div>
 
   <h2 id="transactions">6 · Transactions</h2>
-  <p class="lede">Every order each deployment sent, what became of it, and the round trips it made, for the whole soak. A position still held is listed first. An order that never filled is marked: the owner cancels an unfilled limit after 15 minutes, and the deployment keeps its position.</p>
+  <p class="lede">Every order each deployment sent, what became of it, and the round trips it made, for the whole soak. A position still held is listed first. An order that never filled is marked: the owner cancels an unfilled limit after 15 minutes, and the deployment keeps its position. <i>Fill records</i> counts rows of <code>fills.csv</code>; it equals the filled orders when every fill is explained by an order, and a fill that matches no order is flagged.</p>
   <div class="table-wrap"><table id="tb-tx"></table></div>
   <div id="tx-runs"></div>
 
@@ -614,8 +614,10 @@ function renderTransactions() {
   table("tb-tx", ["", ...RUNS.map(runKey)], [
     ["Open position", ...RUNS.map(openTxt)],
     ["Orders sent", ...RUNS.map(r => fmt(r.transactions.orders.length))],
-    ["… filled / not filled", ...RUNS.map(r => `${r.transactions.orders.length - r.transactions.unfilled} / ${r.transactions.unfilled ? `<b style="color:var(--critical)">${r.transactions.unfilled}</b>` : 0}`)],
-    ["Fills", ...RUNS.map(r => fmt(r.transactions.fills))],
+    ["Orders: filled / not filled", ...RUNS.map(r => `${r.transactions.orders.length - r.transactions.unfilled} / ${r.transactions.unfilled ? `<b style="color:var(--critical)">${r.transactions.unfilled}</b>` : 0}`)],
+    // Never below the filled orders above: each fill is claimed by one order at most.
+    ["Fill records (<code>fills.csv</code>)", ...RUNS.map(r => fmt(r.transactions.fills) + (r.transactions.unmatched_fills
+      ? ` <b style="color:var(--critical)">· ${r.transactions.unmatched_fills} match no order</b>` : ""))],
     ["Closed round trips (wins)", ...RUNS.map(r => `${r.transactions.trades.length} (${r.transactions.wins})`)],
     ["Realised net P&L", ...RUNS.map(r => pts(r.transactions.net_points, r))],
     ["Fees on all fills", ...RUNS.map(r => fmt(r.transactions.fees_points, 1) + " pts")],
@@ -626,7 +628,8 @@ function renderTransactions() {
       ? `<div class="table-wrap"><table id="tx-tr-${i}"></table></div>` : `<div class="small">No closed round trip yet.</div>`;
     const orders = t.orders.length
       ? `<div class="table-wrap"><table id="tx-od-${i}"></table></div>` : `<div class="small">No order sent.</div>`;
-    return `<h3>${runKey(r)}</h3><div class="small">Open position: ${openTxt(r)}</div><h4>Closed round trips</h4>${trades}<h4>Orders</h4>${orders}`;
+    const warn = t.unmatched_fills ? `<div class="callout"><b>${t.unmatched_fills} of ${t.fills} fill records match no order.</b> An order filled in parts, a fill added to the ledger by hand, or a fill that arrived after the next order's bar. Compare <code>fills.csv</code> with <code>orders.csv</code>.</div>` : "";
+    return `<h3>${runKey(r)}</h3><div class="small">Open position: ${openTxt(r)}</div>${warn}<h4>Closed round trips</h4>${trades}<h4>Orders</h4>${orders}`;
   }).join("");
   RUNS.forEach((r, i) => {
     const t = r.transactions;

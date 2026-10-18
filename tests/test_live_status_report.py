@@ -408,7 +408,7 @@ def test_a_fill_is_claimed_once_and_only_on_its_own_side():
 def test_no_orders_is_an_empty_record():
     t = sr.collect_transactions([], [], [])
     assert t == {"orders": [], "fills": 0, "trades": [], "open": [], "unfilled": 0,
-                 "net_points": 0.0, "fees_points": 0.0, "wins": 0}
+                 "unmatched_fills": 0, "net_points": 0.0, "fees_points": 0.0, "wins": 0}
 
 
 def test_collect_carries_the_transactions_into_the_page(tmp_path, monkeypatch):
@@ -418,3 +418,25 @@ def test_collect_carries_the_transactions_into_the_page(tmp_path, monkeypatch):
     assert data["runs"][0]["transactions"]["orders"] == []
     page = sr.render(data)
     assert 'id="transactions"' in page and "renderTransactions()" in page
+
+
+def test_fill_records_never_fall_below_the_filled_orders():
+    """Each fill is claimed by one order at most, so the gap is the fills no
+    order explains — here a 2-lot order filled 1 + 1, and a hand-added row."""
+    orders = [{**_order("2026-10-01 09:00:00", "BUY", "OPEN", 100), "quantity": "2"}]
+    fills = [_fill("2026-10-01 09:00:30", "BUY", 100), _fill("2026-10-01 09:00:40", "BUY", 100),
+             _fill("2026-10-01 08:00:00", "SELL", 99)]
+    t = sr.collect_transactions(orders, fills, [])
+    assert [o["outcome"] for o in t["orders"]] == ["filled"]
+    assert t["fills"] == 3 and t["unmatched_fills"] == 2
+    assert sr.collect_transactions(NIGHT_ORDERS, NIGHT_FILLS, NIGHT_TRADES)["unmatched_fills"] == 0
+
+
+def test_unmatched_fills_raise_a_finding_and_none_raise_nothing(tmp_path, monkeypatch):
+    _fake_packages(tmp_path, monkeypatch)
+    out, log = _outputs(tmp_path)
+    data = sr.collect(out, log, NOW, processes=_procs(), hardware=HW)
+    assert not any("no order explains" in f["html"] for f in data["findings"])
+    data["runs"][0]["transactions"].update(fills=3, unmatched_fills=1)
+    hits = [f for f in sr.findings(data) if "no order explains" in f["html"]]
+    assert len(hits) == 1 and hits[0]["level"] == "warn" and "Night 1 of 3" in hits[0]["html"]

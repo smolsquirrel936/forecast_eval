@@ -66,6 +66,14 @@ appears in no file as such.
   an unfilled limit after 15 min, so that window holds at most its own fill.
   One with none is **no fill**: on 2026-10-17 night's two closes were cancelled
   this way and its long stayed open.
+- **Fill records ≥ filled orders, always.** "Orders: filled / not filled"
+  counts `orders.csv` rows by outcome; "Fill records" counts `fills.csv` rows.
+  Each fill is claimed by one order at most, so the records can only exceed the
+  filled orders, and they are equal when every fill is explained by an order.
+  The difference is `unmatched_fills`, flagged in the row, in a callout above
+  the deployment's tables, and as a WARN finding. Causes: an order filled in
+  parts, a fill added to the ledger by hand (2026-10-06), or a fill that
+  arrived after the next order's bar.
 - **The open position is the fills' FIFO remainder.** `trades.csv` holds only
   closed round trips.
 - **Times are cut to the second as ISO text.** `fills.csv` writes nanoseconds
@@ -80,7 +88,8 @@ appears in no file as such.
   only read. A line being written mid-read is skipped, not fatal.
 - **No free-form commentary.** Every key finding is a fixed rule with a
   threshold: VRAM ≥ 85 %, commit ≥ 80 %, heartbeat older than 5 min, any lost
-  minute, failed or unconfirmed re-logins, SDK errors. An unattended page can't
+  minute, failed or unconfirmed re-logins, SDK errors, any fill no order
+  explains. An unattended page can't
   rely on someone's judgement of the numbers.
 - **No history.** Hardware is one reading. Nothing records it over time.
 

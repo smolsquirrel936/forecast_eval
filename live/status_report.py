@@ -343,6 +343,12 @@ def collect_transactions(orders: List[Dict[str, str]], fills: List[Dict[str, str
     return {
         "orders": od, "fills": len(fl), "trades": tr, "open": open_lots,
         "unfilled": sum(o["outcome"] != "filled" for o in od),
+        # Tech: fills no order claimed. Never negative: a fill is claimed once.
+        # Why:  zero means every fill is explained by an order. More means an
+        #       order filled in parts, a fill added by hand (2026-10-06), or a
+        #       fill landing after the next order's bar, which the matching
+        #       window then misreads — each one a reason to read the files.
+        "unmatched_fills": len(fl) - len(claimed),
         "net_points": sum(t["net"] or 0.0 for t in tr),
         "fees_points": sum(f["fee"] or 0.0 for f in fl),
         "wins": sum((t["net"] or 0) > 0 for t in tr),
@@ -768,6 +774,15 @@ def findings(data: Mapping[str, Any]) -> List[Dict[str, str]]:
                  if nonflat else
                  "<b>Flat the whole time.</b> Every bar recorded position 0 and every owner position "
                  f"event reported 0 ({sum(r['position']['owner_events'] for r in runs):,} events).")})
+
+    unmatched = [r for r in runs if r["transactions"]["unmatched_fills"]]
+    if unmatched:
+        out.append({"level": "warn", "html":
+                    "<b>Fill records that no order explains:</b> "
+                    + esc(", ".join(f'{names[r["package"]]} {r["transactions"]["unmatched_fills"]} of '
+                                    f'{r["transactions"]["fills"]}' for r in unmatched))
+                    + ". An order filled in parts, a fill added to the ledger by hand, or a fill that "
+                      "arrived after the next order's bar; compare fills.csv with orders.csv (§6)."})
 
     logins = data["logins"]
     procs = [("Owner", data["owner"]["pid"])] if data["owner"] else []
