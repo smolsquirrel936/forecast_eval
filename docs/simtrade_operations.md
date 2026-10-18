@@ -495,8 +495,8 @@ off for one process.
 | Level | From the deployments | From the owner |
 |---|---|---|
 | FATAL | any rails halt, `flatten_incomplete`, a refused start, `crashed`, no credentials, `session_unverified`, an unsettled roll | `owner_frozen`, a refused start (exit 6 or 7), `crashed`, no credentials, `session_unverified` |
-| WARN | `feed_missed` / `feed_unreachable`, `session_down`, `relogin_failed` / `relogin_abandoned`, `account_changed`, `contract_rolled`, roll trouble | `deployment_silent`, `traffic_low`, `venue_unanswered`, `relogin_failed` / `relogin_abandoned` |
-| INFO | `position_opened`, `position_closed` with this trade's PnL, `resumed`, `relogin`, `feed_recovered`, `roll_started` | `relogin`, `owner_agrees_again` |
+| WARN | `feed_missed` / `feed_unreachable`, `session_down`, `relogin_failed` / `relogin_abandoned`, `session_relogin_failed`, `account_changed`, `contract_rolled`, roll trouble | `deployment_silent`, `traffic_low`, `venue_unanswered`, `relogin_failed` / `relogin_abandoned` |
+| INFO | `position_opened`, `position_closed` with this trade's PnL, `resumed`, `relogin`, `session_relogin`, `feed_recovered`, `roll_started` | `relogin`, `owner_agrees_again` |
 
 The owner's console repeats its traffic and silent-deployment warnings every
 30 s; it alerts only when they change.
@@ -617,6 +617,7 @@ the first pause.
 | 2026-10-12 | **`stop_pct` adopted on all three packages, user go** (on `simtrade_0929`): day 0.10 (`aace5c7`), night 0.10 (`260a033`, tightened from the inert 0.20 `9a29ae4`), fullday 0.10 (`c7e2178`). Sweeps: `PCTSTOP_POSTMORTEM.md`, `NIGHT_PCTSTOP_POSTMORTEM.md`, `FULLDAY_PCTSTOP_POSTMORTEM.md`; gates: the adopt rows in `results_*.tsv`. Consequence: a held lot can no longer be resumed (§5) — flatten it |
 | 2026-10-12 | **plan: clean restart.** Next session (08:45+): `flatten --dry-run --out-parent outputs`, then for real (must exit 0); archive `outputs/` (ends the 09-29 soaks, dissolves §6.2's ledger gap and the dead guards' backoff); seed the day and night caches (§6.6); owner first, then all three `--fresh-start`. The stops arm on every **new** entry — the flattened lots are not resumed, so the adoption guard never fires |
 | 2026-10-14 08:05 | **night and fullday refused `--resume`** (exit 5, `startup_refused`, gate `adopt_position`): both held lots opened after the 10-12 clean restart — night −1 @ 48760 (10-13 22:04), fullday +1 @ 48972 (10-12 22:36) — and the blanket exit-rule guard refused them under `stop_pct` 0.10. **Guard narrowed, user go:** `ExitRule.adoptable` (default False); `EntryPercentStop` and `FixedStopLoss` opt in, since they read only side and entry price. A held lot now resumes with the stop armed at the venue's entry (§5) |
+| 2026-10-15 09:52–10:08 | **broker session lost; day and fullday halted.** All three deployments' last print 09:52:25; no `session_down` event, nothing in `shioaji.log`. From 09:54 every FeedWatch check was `unreachable` (`SessionNotEstablished: Unable to wait for session '(c3,s1)_sinopac' to be established`, 14 in a row), which only warns, so nothing re-logged in. Day and fullday halted at 10:08:01 on `no market data for 900.6s`, losing 10:08–13:45 of the day session (no orders either way; fullday held +1 @ 48972). Night, outside its session, stayed alive and deaf for 5 h; its scheduled 14:55 `force_refresh` re-login healed it, the 14:59 check passed and bars ran from 15:00. **The SDK did not reconnect by itself in 5 h; our re-login did.** Day and fullday restarted 14:42 (`--resume`, fullday re-adopted +1 @ 48972). Fix deferred to the weekend — see open questions |
 
 **Open questions:**
 
@@ -628,3 +629,15 @@ the first pause.
   gate and night's long-only rule are the first suspects; fullday's 302 HOLDs
   at `min_prob` 0.50 point at the band or the trend filter instead.
 - **The flatten → restart path under the owner (§6.2) is unverified.**
+- **Fixed in code 2026-10-18, not yet seen live: a lost session is re-logged
+  into.** FeedWatch now calls the anchors' `_relogin` after 3 consecutive
+  checks whose snapshot *raised* (~3 min in session), and again every 3 more
+  while it keeps failing — 4 attempts before the 900 s backstop
+  ([feedwatch.md](live/feedwatch.md)). Alerts: `session_relogin` (INFO) or
+  `session_relogin_failed` (WARN). Still open: (a) all three deployments would
+  re-login in the same minute, the same collision the 08:40 / 14:55 anchors
+  make daily, against the 5-connection cap; (b) the **owner** has no FeedWatch,
+  so an owner whose session dies in session is still only caught at its
+  08:37 / 14:52 anchors, and whether the owner lost its session on 10-15 was
+  not recorded. Until a live recovery is seen, a `feed_unreachable` with no
+  `session_relogin` within ~5 min means restart by hand.

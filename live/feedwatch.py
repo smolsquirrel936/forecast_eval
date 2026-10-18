@@ -14,7 +14,8 @@ run. This module removes the guess by adding a second input: **ask the venue.**
        └─ snapshot
             ├─ venue's last trade is one we already have  → QUIET. do nothing.
             ├─ venue has traded since our newest print    → MISSED. resubscribe.
-            └─ the query itself fails                     → UNREACHABLE. back off.
+            └─ the query itself fails                     → UNREACHABLE. back off;
+                                                             re-login if it persists.
 
 The threshold stops being a decision and becomes a **polling interval**: getting
 it wrong now costs one 40 ms query instead of the run, which is why it can be
@@ -91,6 +92,25 @@ class FeedWatch:
     interval: float = 60.0
     max_resubscribes: int = 3
     recorder: Any = None
+    # Tech: the session-level repair, run after `relogin_after` consecutive
+    #       checks whose query raised. `None` leaves UNREACHABLE a warning only.
+    # Why:  MEASURED 2026-10-15 — the broker session died at 09:52 with no
+    #       `session_down`, every snapshot raised `SessionNotEstablished`, and
+    #       the SDK did not reconnect in 5 h. Re-subscribing cannot heal that:
+    #       there is no session to subscribe on. A `force_refresh` re-login did
+    #       heal it, at the 14:55 anchor, but day and fullday had already halted
+    #       on the 900 s backstop at 10:08. Injected for the same reason
+    #       `resubscribe` is — the CLI owns the API object.
+    relogin: Optional[Callable[[], None]] = None
+    # Tech: consecutive failed queries before the first re-login, and between
+    #       re-logins while the failures continue.
+    # Why:  one failed query is not a dead session — the 2026-10-01 re-login
+    #       timeout recovered on its own retry — and a refreshing login is a
+    #       new connection against the 5-per-person_id cap (§2.8b), not a free
+    #       poke. Three checks at the 60 s default is ~3 min of silence; the
+    #       900 s backstop then still leaves room for four attempts before it
+    #       halts, so a session that will not come back still reaches a human.
+    relogin_after: int = 3
 
     def __post_init__(self) -> None:
         self._last_exchange: Any = None   # newest print we received (exchange clock)
@@ -102,6 +122,9 @@ class FeedWatch:
         self.n_missed = 0
         self.n_unreachable = 0
         self.n_resubscribes = 0
+        self._failed_queries = 0          # consecutive checks whose query raised
+        self.n_relogins = 0
+        self.n_relogin_failures = 0
 
     def note_tick(self, exchange_ts: Any, now: Any) -> None:
         # Tech: remember the newest print on both clocks, and clear the
@@ -116,6 +139,7 @@ class FeedWatch:
         self._last_exchange = _stamp(exchange_ts)
         self._last_local = now
         self._resubscribes_this_silence = 0
+        self._failed_queries = 0
 
     def check(self, now: Any) -> Optional[Verdict]:
         # Tech: run one liveness check if we have been silent for `interval`,
@@ -144,8 +168,16 @@ class FeedWatch:
             snap = self.snapshot()
         except Exception as exc:                      # noqa: BLE001 — see Why
             self.n_unreachable += 1
-            self._record(Verdict.UNREACHABLE, error=repr(exc))
+            self._failed_queries += 1
+            self._record(Verdict.UNREACHABLE, error=repr(exc),
+                         consecutive=self._failed_queries)
+            self._maybe_relogin()
             return Verdict.UNREACHABLE
+        # Tech: any answer at all ends the run of failed queries.
+        # Why:  only a query that *raised* says the session is gone. A malformed
+        #       answer below is still UNREACHABLE, but it came from a session
+        #       that answered, and a re-login would not change what it sends.
+        self._failed_queries = 0
 
         raw_ts = getattr(snap, "ts", None)
         total = getattr(snap, "total_volume", None)
@@ -207,6 +239,30 @@ class FeedWatch:
                 self._record("feed_resubscribe_failed", error=repr(exc))
         return Verdict.MISSED
 
+    def _maybe_relogin(self) -> None:
+        # Tech: re-login once `relogin_after` queries in a row have raised, then
+        #       restart the count so the next attempt needs as many again.
+        # Why:  the count is the throttle — at most one refreshing login per
+        #       `relogin_after * interval`, with the staleness backstop bounding
+        #       the total, so no separate budget can drift from it. This runs
+        #       in session, which the scheduled anchors deliberately never do
+        #       (`relogin.py`); that rule protects live bars, and here none are
+        #       arriving — the alternative to a mid-session login is the halt.
+        #       Exceptions are recorded, never raised: this runs on the consumer
+        #       thread, and an escape would end the process it is trying to save.
+        if self.relogin is None or self._failed_queries < self.relogin_after:
+            return
+        failed = self._failed_queries
+        self._failed_queries = 0
+        try:
+            self.relogin()
+        except Exception as exc:                      # noqa: BLE001 — see Why
+            self.n_relogin_failures += 1
+            self._record("feed_relogin_failed", after=failed, error=repr(exc))
+            return
+        self.n_relogins += 1
+        self._record("feed_relogin", after=failed)
+
     def _record(self, event: Any, **fields: Any) -> None:
         if self.recorder is None:
             return
@@ -223,4 +279,6 @@ class FeedWatch:
             "feed_missed": self.n_missed,
             "feed_unreachable": self.n_unreachable,
             "feed_resubscribes": self.n_resubscribes,
+            "feed_relogins": self.n_relogins,
+            "feed_relogin_failures": self.n_relogin_failures,
         }

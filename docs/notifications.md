@@ -207,7 +207,8 @@ What each alert means and what to do. "Ops" links point into
 | Kind | Sender | Means |
 |---|---|---|
 | `feed_missed` | deployment | the venue traded without us; resubscribing. Sent when the feed's verdict *changes*, not every minute |
-| `feed_unreachable` | deployment | cannot reach the venue to check the feed |
+| `feed_unreachable` | deployment | cannot reach the venue to check the feed. If it lasts 3 checks (~3 min) the deployment re-logs in by itself |
+| `session_relogin_failed` | deployment | a re-login after a lost session failed; it retries after 3 more failed checks, and the 900 s backstop halts if none heals it |
 | `session_down` | deployment | the quote session dropped |
 | `relogin_failed` | both | a re-login attempt failed; it retries inside the window |
 | `relogin_abandoned` | both | the re-login window closed with no fresh token — expect `session_unverified` at the open |

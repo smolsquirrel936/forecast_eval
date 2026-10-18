@@ -1226,6 +1226,28 @@ def main(argv=None) -> int:
                     f"no tick since the re-login (count still {ticks['n']}) — "
                     f"the feed did not come back")
 
+        def _session_relogin():
+            # Tech: FeedWatch's session repair — the anchors' `_relogin`, plus
+            #       the token-age clock and an alert either way.
+            # Why:  2026-10-15 (simtrade_operations §11) — a session lost in
+            #       session was never re-logged into, and the 900 s backstop
+            #       halted day and fullday. The anchor path is the one measured
+            #       to heal it that day, so it is reused rather than re-derived.
+            #       `note_login` keeps the scheduler's token age true, since this
+            #       login refreshes the token as much as an anchor's does. The
+            #       re-raise is what makes FeedWatch count and record a failure.
+            try:
+                _relogin()
+            except Exception as exc:                  # noqa: BLE001
+                alerter.warn("session_relogin_failed",
+                             f"re-login after a lost session failed: {exc!r} "
+                             f"— retrying after more failed checks")
+                raise
+            relogin.note_login(datetime.now())
+            alerter.info("session_relogin",
+                         "the venue stayed unreachable; re-logged in and "
+                         "re-asserted callbacks and the subscription")
+
         feed = FeedWatch(
             # Tech: 5 s, not the SDK's 30 s default.
             # Why:  this runs on the consumer thread, so the default would stall
@@ -1244,6 +1266,7 @@ def main(argv=None) -> int:
             #       at all. It moves automatically if either constant does.
             max_resubscribes=_repair_budget(args.staleness_seconds,
                                             args.feed_check_seconds),
+            relogin=_session_relogin,
             recorder=recorder,
         )
 

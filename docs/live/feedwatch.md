@@ -17,7 +17,8 @@ silence for `interval`
    └─ snapshot
         ├─ venue's last trade is one we already have  → QUIET.  do nothing.
         ├─ venue traded since our newest print        → MISSED. unsub + resub.
-        └─ the query itself fails                     → UNREACHABLE. back off.
+        └─ the query itself fails                     → UNREACHABLE. back off;
+                                                         re-login after 3 in a row.
 ```
 
 The threshold stops being a decision and becomes a **polling interval**. Getting
@@ -27,7 +28,7 @@ aggressive (60 s) where the old halt window had to be timid.
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
-| `FeedWatch(snapshot, resubscribe, interval=60.0, max_resubscribes=3, recorder=None)` | class | both actions injected as callables |
+| `FeedWatch(snapshot, resubscribe, interval=60.0, max_resubscribes=3, recorder=None, relogin=None, relogin_after=3)` | class | every action injected as a callable; `relogin=None` leaves UNREACHABLE a warning only |
 | `note_tick(exchange_ts, now)` | method | record the newest genuine print, on both clocks |
 | `check(now)` | method | run a check if one is due; returns the `Verdict` or `None` |
 | `summary()` | method | the counters the CLI prints and records |
@@ -75,6 +76,19 @@ transient gap terminal.
   returns MISSED forever, and unbounded unsubscribe/subscribe is a submit storm.
   After the budget it stops and lets the backstop halt — which is correct, since
   a feed that will not heal needs a human. Any print refills the budget.
+- **A query that keeps raising means the session is gone, and gets a re-login.**
+  MEASURED 2026-10-15: the session died at 09:52 with no `session_down`, every
+  snapshot raised `SessionNotEstablished`, and the SDK had not reconnected 5 h
+  later. Re-subscribing cannot fix that, and UNREACHABLE only warned, so day and
+  fullday halted on the backstop at 10:08. Now `relogin_after` (3) consecutive
+  *raised* queries call `relogin` — in the CLI, the anchors' `force_refresh`
+  path, which healed night at 14:55 that day. The count restarts after each
+  attempt, so a dead session costs one login per 3 checks: 4 attempts at 3, 6, 9
+  and 12 min before the 900 s backstop. A malformed answer, a QUIET or MISSED
+  verdict, or any print restarts the count, since each proves the session
+  answered. A failing re-login is recorded (`feed_relogin_failed`), never raised.
+  This is the one login that happens in session; the anchors' "not on a live
+  bar" rule protects bars that, here, are not arriving.
 - **It never resets the silence marker.** The rails read the same silence, and a
   marker this reset would disarm the halt that catches an unhealable feed.
 - **Only genuine prints count.** A simtrade tick is not evidence the market

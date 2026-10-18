@@ -503,6 +503,15 @@ tests) — ~2 000 lines. The same standing risk as before, back again.
 4. **An SDK self-reconnect dropping callbacks is unmeasured** — the re-assertion
    closure is in FeedWatch's repair path as a precaution, untested against a real
    socket drop.
+   **Update 2026-10-15 — a real drop was seen, and it is worse:** the SDK did
+   *not* reconnect at all. At 09:52 all three deployments lost the session
+   silently (no `session_down`, `SessionNotEstablished` on every snapshot) and
+   stayed down — night for 5 h — until a scheduled `force_refresh` re-login
+   healed it at 14:55. FeedWatch never repairs on `unreachable`, so day and
+   fullday hit the 900 s backstop at 10:08. **Fixed in code 2026-10-18**
+   (FeedWatch re-logs in after 3 consecutive raised snapshots; not yet seen
+   live); details in `docs/simtrade_operations.md` §11 (log 2026-10-15, open
+   questions).
 5. **No external watcher** for `kill -9` / power loss — deferred by decision.
 
 ### 5. Older V5 items, unchanged

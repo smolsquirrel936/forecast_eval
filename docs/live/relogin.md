@@ -246,6 +246,12 @@ api.set_order_callback(...)            # re-register  <- broker/shioaji.py:155
   [FeedWatch](feedwatch.md)'s repair path too, not just after our own re-login:
   its subscription-only `_resubscribe` cannot fix a dropped callback however
   many times it retries.
+- **Seen live 2026-10-15: the SDK did not reconnect at all.** The session died
+  silently at 09:52 (`SessionNotEstablished` on every call, no `session_down`)
+  and stayed dead for 5 h; only the 14:55 `force_refresh` re-login revived it.
+  Re-asserting callbacks is therefore not enough — the repair has to re-login.
+  **Since 2026-10-18 FeedWatch does**: 3 consecutive raised snapshots in
+  session call this same `_relogin` ([feedwatch.md](feedwatch.md)).
 
 ### `usage()` proves the token, not the feed — so the check does both
 A silently failed re-subscribe would still pass a token-only verification at
