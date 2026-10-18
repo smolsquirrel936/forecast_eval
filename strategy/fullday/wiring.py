@@ -51,21 +51,21 @@ PARAMS: Dict[str, Any] = {
     "forced_close": False,
     # percent-stop knob — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param stop_pct=...``.
-    "stop_pct": 0.1,
+    "stop_pct": 0.05,
 }
 
-# Tech: the knob's tuned value — 0.10, ADOPTED on simtrade_0929 (2026-10-12).
-# Why:  the fullday pct-stop sweep (FULLDAY_PCTSTOP_POSTMORTEM.md, ledger
-#       rows fullday_pctstop_iter01-04) found no above-incumbent cell — 0.03
-#       churns (Calmar 2.0740) and 0.10 costs one firing per 6 train years
-#       (2.7895 vs the 2.8213 incumbent, -110 net, DD unchanged) because
-#       the stopped trade recovered before its signal exit. 0.10 is adopted
-#       anyway, as the catastrophe rail: its firings land only on
-#       already-extreme trades (the train firing is the 11.46%-MAE trade;
-#       on the held-out window, never scored for the decision, it caught
-#       the two 2026 crash trades, MAE 11.98%/11.52%) — the day_pctstop
-#       rail shape, a user decision recorded 2026-10-12. An explicit
-#       ``--param stop_pct=...`` still overrides it.
+# Tech: the knob's tuned value — 0.05, ADOPTED on simtrade_0929 (2026-10-18).
+# Why:  the 2026-10-18 width comparison (outputs/stopcmp_20261018_145644,
+#       warmup 5000, --train-bars 1651591) scored train-70% Calmar none
+#       2.8213 / 0.03 2.0734 / 0.05 3.2466 / 0.07 2.6855 / 0.10 2.7895 /
+#       0.20 and 0.30 = none (inert). 0.05 is the only above-incumbent
+#       cell: 142 trades, net +9674 (-136), DD -3477 -> -2980, 12 train
+#       firings. It is an ISOLATED peak — 0.07 falls below the incumbent on
+#       both windows (whole-data 4.5121) — so the width is fragile. The
+#       whole-data figure (7.6706 vs none 6.1216 and 0.10 7.3612) includes
+#       the held-out 30%, which the split loop never scored. Replaces 0.10
+#       (c7e2178, the catastrophe rail). User decision 2026-10-18. An
+#       explicit ``--param stop_pct=...`` still overrides it.
 
 # Tech: the emitter knobs deliberately absent from PARAMS — `short_window`,
 #       `min_trend_ticks`, `path_momentum`, `trend_filter`.

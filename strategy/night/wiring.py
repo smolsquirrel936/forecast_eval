@@ -51,21 +51,21 @@ PARAMS: Dict[str, Any] = {
     "forced_close": False,
     # percent-stop knob — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param stop_pct=...``.
-    "stop_pct": 0.1,
+    "stop_pct": 0.05,
 }
 
-# Tech: the knob's tuned value — 0.10, ADOPTED on simtrade_0929 (2026-10-12).
-# Why:  night's first adoption was the inert 0.20 (9a29ae4 — zero measured
-#       cost, armed, never fires); tightened to the firing rail by user go
-#       the same day, the fullday_pctstop catastrophe-rail shape. The
-#       measured cost is one firing per 9 years of tape (night_pctstop_
-#       iter04: 377 vs 376 trades, net -315, DD -3989 -> -5083, Calmar
-#       5.6650 vs the 7.2974 incumbent) because night's worst-MAE trade
-#       (16.83%) RECOVERS before its signal exit, so the stop sells the
-#       trough; the compensation is a hard loss cap at 10% adverse
-#       excursion, bounding any future crash beyond anything recorded.
-#       See NIGHT_PCTSTOP_POSTMORTEM.md. An explicit ``--param
-#       stop_pct=...`` still overrides it.
+# Tech: the knob's tuned value — 0.05, ADOPTED on simtrade_0929 (2026-10-18).
+# Why:  the 2026-10-18 width comparison (outputs/stopcmp_20261018_145644,
+#       whole night window, warmup 6000) scored none 7.2974 / 0.03 7.0854 /
+#       0.05 9.1078 / 0.07 8.8814 / 0.10 5.6650 / 0.20 and 0.30 = none
+#       (inert, max MAE 16.83%). 0.05 is the best cell and 0.07 sits close
+#       beside it — the one active width with a neighbour that also beats
+#       the incumbent: 381 trades, net +30271 (+1164), DD -3989 -> -3324,
+#       11 firings in the tape. It replaces 0.10 (260a033, the catastrophe
+#       rail), whose single firing sold the 2024-08-05 gap at -15% and
+#       widened DD to -5083. In-sample: night's settings were tuned on this
+#       same window (no held-out tail). User decision 2026-10-18. An
+#       explicit ``--param stop_pct=...`` still overrides it.
 
 # Tech: the emitter knobs deliberately absent from PARAMS — `short_window`,
 #       `min_trend_ticks`, `path_momentum`, `trend_filter`.

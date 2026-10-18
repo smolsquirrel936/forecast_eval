@@ -114,10 +114,9 @@ class TestWiring:
         #       shared rule at exactly that width.
         # Why:  all three packages now carry adopted widths — day 0.10
         #       (day_pctstop_iter05, its one above-incumbent cell), night
-        #       0.10 (the catastrophe rail, tightened from the inert 0.20
-        #       by user go 2026-10-12, NIGHT_PCTSTOP_POSTMORTEM) and
-        #       fullday 0.10 (the catastrophe rail, user decision
-        #       2026-10-12, FULLDAY_PCTSTOP_POSTMORTEM). The invariant is
+        #       0.05 and fullday 0.05 (user decision 2026-10-18 from the
+        #       stopcmp_20261018_145644 width comparison; both were 0.10,
+        #       the catastrophe rail, adopted 2026-10-12). The invariant is
         #       that the package default and the built rule agree — pinning
         #       "None" here would make an adoption itself a test failure
         #       instead of a recorded decision.
