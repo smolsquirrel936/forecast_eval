@@ -350,3 +350,71 @@ def test_explicit_output_still_wins(tmp_path, monkeypatch):
                     "--now", NOW.isoformat()]) == 0
     assert page.exists()
     assert list(tmp_path.glob("simtrade_status_report_*.html")) == []
+
+
+# ---- transactions ------------------------------------------------------------
+
+def _order(ts, side, intent, limit):
+    return {"timestamp": ts, "side": side, "limit_price": str(limit), "intent": intent,
+            "quantity": "1"}
+
+
+def _fill(ts, side, price):
+    return {"timestamp": ts, "side": side, "fill_price": str(price), "quantity": "1",
+            "fee": "9.5"}
+
+
+# Night's soak as recorded 2026-10-12..17: four filled orders, then a long that
+# two closing orders could not get out of (both cancelled unfilled).
+NIGHT_ORDERS = [_order("2026-10-12 21:32:00", "BUY", "OPEN", 49098),
+                _order("2026-10-13 21:48:00", "SELL", "CLOSE", 48735),
+                _order("2026-10-15 20:33:00", "BUY", "OPEN", 47042),
+                _order("2026-10-17 04:05:00", "SELL", "CLOSE", 46270),
+                _order("2026-10-17 04:36:00", "SELL", "CLOSE", 46222)]
+NIGHT_FILLS = [_fill("2026-10-12 21:33:00.642668962", "BUY", 49097),
+               _fill("2026-10-13 21:49:09.907921076", "SELL", 48735),
+               _fill("2026-10-15 20:34:02.904072046", "BUY", 47037)]
+NIGHT_TRADES = [{"entry_ts": "2026-10-12 21:33:00", "exit_ts": "2026-10-13 21:49:09",
+                 "side": "LONG", "entry_price": "49097", "exit_price": "48735",
+                 "pnl_points": "-362", "fees_points": "19.0", "net_pnl_points": "-381.0"}]
+
+
+def test_transactions_match_orders_to_fills_and_mark_the_unfilled():
+    t = sr.collect_transactions(NIGHT_ORDERS, NIGHT_FILLS, NIGHT_TRADES)
+    assert [(o["outcome"], o["fill_price"]) for o in t["orders"]] == [
+        ("filled", 49097.0), ("filled", 48735.0), ("filled", 47037.0),
+        ("no fill", None), ("no fill", None)]
+    assert t["unfilled"] == 2 and t["fills"] == 3
+
+
+def test_the_open_position_is_what_the_fills_leave_over():
+    """`trades.csv` has no row for a held lot; the fills are the only record."""
+    t = sr.collect_transactions(NIGHT_ORDERS, NIGHT_FILLS, NIGHT_TRADES)
+    assert t["open"] == [{"side": "LONG", "qty": 1, "entry": 47037.0,
+                          "since": "2026-10-15T20:34:02"}]
+    assert t["net_points"] == -381.0 and t["wins"] == 0
+    assert t["fees_points"] == pytest.approx(28.5)
+
+
+def test_a_fill_is_claimed_once_and_only_on_its_own_side():
+    orders = [_order("2026-10-01 09:00:00", "BUY", "OPEN", 100),
+              _order("2026-10-01 09:01:00", "BUY", "OPEN", 100)]
+    t = sr.collect_transactions(orders, [_fill("2026-10-01 09:00:30", "BUY", 100),
+                                         _fill("2026-10-01 09:00:40", "SELL", 101)], [])
+    assert [o["outcome"] for o in t["orders"]] == ["filled", "no fill"]
+    assert t["open"] == [], "a buy then a sell nets flat"
+
+
+def test_no_orders_is_an_empty_record():
+    t = sr.collect_transactions([], [], [])
+    assert t == {"orders": [], "fills": 0, "trades": [], "open": [], "unfilled": 0,
+                 "net_points": 0.0, "fees_points": 0.0, "wins": 0}
+
+
+def test_collect_carries_the_transactions_into_the_page(tmp_path, monkeypatch):
+    _fake_packages(tmp_path, monkeypatch)
+    out, log = _outputs(tmp_path)
+    data = sr.collect(out, log, NOW, processes=_procs(), hardware=HW)
+    assert data["runs"][0]["transactions"]["orders"] == []
+    page = sr.render(data)
+    assert 'id="transactions"' in page and "renderTransactions()" in page

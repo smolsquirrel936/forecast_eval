@@ -14,8 +14,9 @@ uv run --no-sync python -m forecast_eval.live.status_report --json status.json -
 
 ## Responsibility
 It answers "how are the running soaks doing?" without anyone reading logs by
-hand. It covers basic info, data received, decisions, position, stability
-(logins) and hardware (VRAM and commit charge). The same inputs and `--now`
+hand. It covers basic info, data received, decisions, position, trading
+performance, transactions, stability (logins) and hardware (VRAM and commit
+charge). The same inputs and `--now`
 always give the same page, except the hardware section, which is a live
 snapshot by nature.
 
@@ -28,6 +29,7 @@ snapshot by nature.
 | Ticks | every folder's `ticks.csv` |
 | Orders | every folder's `orders.csv`, summed |
 | Fills, trades, PnL, `params.json`, warm-up | the **newest** folder only: a `--resume` replays the soak's earlier fills into it, so summing would double-count |
+| Transactions (§6) | every folder's `orders.csv`, with the newest folder's `fills.csv` and `trades.csv` (`collect_transactions`) |
 | Heartbeat, failures | `live_restart_<slug>.json` |
 | Owner's position view | `events_<slug>.jsonl` |
 | Successful logins, SDK errors | `shioaji.log` (“Stored new token” per PID, UTC converted to local time) |
@@ -50,6 +52,24 @@ correct:
   the replayed ledger into each resumed run (`fills_replayed`), so the newest
   `fills.csv`/`trades.csv` already hold the soak. Orders are not replayed and
   are summed.
+
+## The transaction record (§6, since 2026-10-18)
+Per deployment: the position still held, every order with its outcome, and
+every closed round trip with its net P&L in points and TWD. Added because the
+other sections count orders and fills but never list them, and a held lot
+appears in no file as such.
+
+- **Order outcome is matched, not recorded.** `orders.csv` and `fills.csv`
+  share no order id (the venue's `ordno` is only in `owner_session.jsonl`), so
+  an order takes the first unclaimed fill on its side between its bar and the
+  next order's. A deployment holds at most `max_position` and the owner cancels
+  an unfilled limit after 15 min, so that window holds at most its own fill.
+  One with none is **no fill**: on 2026-10-17 night's two closes were cancelled
+  this way and its long stayed open.
+- **The open position is the fills' FIFO remainder.** `trades.csv` holds only
+  closed round trips.
+- **Times are cut to the second as ISO text.** `fills.csv` writes nanoseconds
+  after a space, which JavaScript's `Date` is not guaranteed to parse.
 
 ## What it deliberately does not do
 - **Never imports a strategy or the broker.** `PARAMS` is parsed, not
@@ -82,7 +102,8 @@ correct:
 | `render(data, template)` | function | the HTML page, with the data embedded and `</` escaped |
 | `find_processes(procs)` | function | owner + one leaf process per `--strategy` |
 | `find_deployments(outputs)` | function | `Deployment`s, keyed by soak id |
-| `collect_run(dep, outputs, now)` | function | one deployment's sessions, ticks, decisions, positions, stability |
+| `collect_run(dep, outputs, now)` | function | one deployment's sessions, ticks, decisions, positions, transactions, stability |
+| `collect_transactions(orders, fills, trades)` | function | orders with their matched outcome, closed trades, the open lot, totals |
 | `parse_shioaji_log(path, pids, tz)` | function | logins, attempts and errors per PID |
 | `read_hardware(pids)` | function | VRAM/RAM per PID, GPU totals, commit charge. Each probe degrades to `None` on its own |
 | `findings(data)` | function | the rule-based key findings |
