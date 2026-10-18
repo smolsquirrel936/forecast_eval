@@ -16,7 +16,7 @@ places orders on.** `live/config.py` holds only the provenance record.
 | Forecaster | Toto2-1B (`Datadog/Toto-2.0-1B`), context 3008 bars, horizon 30 bars |
 | Emitter | `ThresholdEmitter`, trend filter + path momentum on, `full_confidence_prob` 0.9 |
 | Trader | limit orders at `aggression_ticks` 0, `max_position` 1, no-flip, no pyramiding |
-| Exit rule | none — positions close only on an opposite signal |
+| Exit rule | `EntryPercentStop` (`exits/pct_stop.py`) at each package's `stop_pct` — closes when the price moves `entry_price × stop_pct` against the position, checked every tick, filled at the next print. Otherwise positions close only on an opposite signal |
 | `forced_close` | `False` — positions carry across sessions, nights and weekends |
 
 ## Day — `day_split_iter02`
@@ -27,10 +27,11 @@ places orders on.** `live/config.py` holds only the provenance record.
 | `min_prob` | 0.65 |
 | `stride_bars` | 30 |
 | sides | long and short |
+| `stop_pct` | **0.10** (since 2026-10-12, `aace5c7`) |
 
 - **Source:** `autoresearch_split_0.7_day` @ `58e81b0`, the split loop's
   **baseline**. Its code is identical to `main` — iter01 and iter02 only added
-  ledger rows — so this branch carries no day change at all.
+  ledger rows. The only day change on this branch is the stop.
 - **Score:** Calmar **5.1186**, 79 trades, on the **train 70 %** of the day eval
   window (split at 2021-12-02 13:23).
 - **Rationale:** the band and gate are the W5b day search's cell
@@ -38,6 +39,12 @@ places orders on.** `live/config.py` holds only the provenance record.
   (DAYNIGHT_TOTO2_RESET_PLAN). The loop's later keeps — `min_prob` 0.60
   (iter06, 5.3356) and a same-day loss cooldown (iter08, 5.6063) — are **not**
   taken.
+- **Stop:** `stop_pct` 0.10 is `day_pctstop_iter05`
+  (`autoresearch_day_pctstop_1012` @ `6aaa7bb`), the sweep's one cell above the
+  incumbent: train Calmar **5.3659**, 80 trades, net +8 012, max drawdown
+  −1 493. It fired twice, both in 2011, and never on the held-out tail. Every
+  narrower width is much worse (stopcmp_20261018_145644, train Calmar: 0.03
+  3.80, 0.05 2.06, 0.07 1.99); 0.20 and wider never fire (max MAE 17.44 %).
 - **Live source record:** `PINNED_DAY` still reads `3c3ae38`, Calmar
   **1.6937**, and the banner prints that. It is accurate — the same settings —
   but measured on the **whole** eval window of a different research run. 1.6937
@@ -53,6 +60,7 @@ places orders on.** `live/config.py` holds only the provenance record.
 | `min_trend_ticks` | **10** — the emitter's class default in this package (shared default 3) |
 | `stride_bars` | **15** |
 | sides | long and short |
+| `stop_pct` | **0.05** (since 2026-10-18, `bb7a602`) |
 
 - **Source:** `autoresearch_night_1004` @ `4cbc1e6`. `strategy/night/` is copied
   from that commit file for file; the branch forked from this branch at
@@ -75,6 +83,15 @@ places orders on.** `live/config.py` holds only the provenance record.
   the drawdown; two-sided shorts were acting as fast exits from longs), stride
   10, horizon 15 and 60, context 1504, a time stop and two fixed stop-losses,
   and a quantile fan gate.
+- **Stop:** `stop_pct` 0.05, from the width comparison in
+  `outputs/stopcmp_20261018_145644` (whole window, warmup 6000): Calmar
+  **9.1078**, 381 trades, net +30 271, max drawdown −3 324, 11 firings in the
+  tape. The other widths: none 7.2974, 0.03 7.0854, 0.07 8.8814, 0.10 5.6650;
+  0.20 and wider never fire (max MAE 16.83 %). 0.07 beside it also beats no
+  stop, so 0.05 is not an isolated point. The stop's history on this branch:
+  0.20 (`9a29ae4`, inert) → 0.10 (`260a033`, 2026-10-12) → 0.05 (`bb7a602`,
+  2026-10-18). At 0.10 its one firing sold the 2024-08-05 gap at −15 % and
+  widened the drawdown to −5 083.
 - **Live source record:** `PINNED` has `source_commit`/`source_calmar` `None`
   (the row is in `autoresearch_night_1004`'s `results_night.tsv`, not
   `results.tsv`); the banner prints `UNTUNED calmar=nan` and `source_note` names
@@ -82,7 +99,8 @@ places orders on.** `live/config.py` holds only the provenance record.
 - **Mid-soak swap.** Night's soak (`soak_20260929_082008_180784`) ran
   `night_iter10` until this change. Its earlier run folders record the old
   `strategy_sha`, which `live/status_report.py` shows as differing from the
-  package on disk.
+  package on disk. The stop adoptions changed `strategy_sha` again, for night
+  and fullday on 2026-10-12 and 2026-10-18 and for day on 2026-10-12.
 
 ## Fullday — `fullday_split_iter07`
 
@@ -92,6 +110,7 @@ places orders on.** `live/config.py` holds only the provenance record.
 | `min_prob` | **0.50** |
 | `stride_bars` | **15** |
 | sides | long and short |
+| `stop_pct` | **0.05** (since 2026-10-18, `bb7a602`) |
 
 - **Source:** `autoresearch_split_0.7_fullday` @ `394ce85` (the later `620b338`
   only repaired a ledger row).
@@ -109,6 +128,13 @@ places orders on.** `live/config.py` holds only the provenance record.
 
   Not taken: the later keeps — buy band 0.0009 (iter08), a 500-tick stop-loss
   (iter09), buy band 0.0008 and sell band −0.0009 (iter12–13, 5.7392).
+- **Stop:** `stop_pct` 0.05, from the width comparison in
+  `outputs/stopcmp_20261018_145644` (warmup 5000, `--train-bars 1651591`):
+  train Calmar **3.2466**, 142 trades, net +9 674, max drawdown −2 980, 12
+  train firings. The other widths (train): none 2.8213, 0.03 2.0734, 0.07
+  2.6855, 0.10 2.7895; 0.20 and wider never fire (max MAE 11.98 %). Whole data,
+  including the never-scored held-out 30 %: 0.05 7.6706, none 6.1216, 0.10
+  7.3612, 0.07 4.5121. Replaced 0.10 (`c7e2178`, 2026-10-12).
 - **Live source record:** `PINNED_FULLDAY` stays `None`/`None`; its note and
   `wiring.py` docstring now name this commit instead of "UNTUNED, DAY's band".
 
@@ -128,10 +154,11 @@ places orders on.** `live/config.py` holds only the provenance record.
 5. **Fullday's probability gate is nearly idle at 0.50.** It still rejects a
    signal whose own direction has probability under one half (`emitter.py:180`),
    but moving 0.55 → 0.50 left the trade count at 134 — the loop's "gate
-   vacuous". Fullday also has **no stop-loss** (that arrived at iter09, not taken).
+   vacuous". The loop's 500-tick stop-loss (iter09) is not taken; fullday's
+   only stop is the 5 % `stop_pct` (caution 15).
 6. **Positions are long-lived.** `forced_close=False` everywhere; W5b measured a
    median hold of **20 days** for day's settings. Positions ride through the
-   other sessions and weekends unmanaged.
+   other sessions and weekends, managed only by the percent stop.
 7. **The account can hold up to 3 lots in one direction** — fullday overlaps
    both day and night, and the owner nets them into one account book. No
    `--max-daily-loss-points` and no `--kill-file` are set (decided 2026-09-29).
@@ -180,6 +207,20 @@ places orders on.** `live/config.py` holds only the provenance record.
 14. **Old run folders moved.** `outputs/` was renamed to
     `output_backup_260929/` on 2026-09-29; every `outputs/...` path in the plans
     and in AGENTS.md (the autoresearch run folders, `archive_*`) now lives there.
+15. **The stops.** Every stop width was chosen on bars it was scored on.
+    Night's has no held-out tail at all. Fullday's 0.05 is an **isolated
+    peak**: 0.07 falls below no stop on both windows, so a small shift in the
+    market could put it on the wrong side. Day's 0.10 is flanked by worse
+    cells on both sides (0.08 4.79, 0.12 5.09). Other points:
+    - **Gaps:** a stop fills at the next print past its level, so a gap fills
+      far beyond the width. Night's 2024-08-05 firing filled at −15 % against
+      a 10 % stop.
+    - **Re-entry:** a stopped position can be re-entered on the next signal.
+      This is where narrow stops lose: day at 0.05 re-entered lower and lost
+      about 4 000 points.
+    - **Resume:** a position carried into a `--resume` start is judged against
+      the current width at once. One already beyond it closes on the first
+      tick.
 
 ## How to run
 
