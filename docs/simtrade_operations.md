@@ -498,18 +498,24 @@ off for one process.
 |---|---|---|
 | FATAL | any rails halt, `flatten_incomplete`, a refused start, `crashed`, no credentials, `session_unverified`, an unsettled roll | `owner_frozen`, a refused start (exit 6 or 7), `crashed`, no credentials, `session_unverified` |
 | WARN | `feed_missed` / `feed_unreachable`, `session_down`, `relogin_failed` / `relogin_abandoned`, `session_relogin_failed`, `account_changed`, `contract_rolled`, roll trouble | `deployment_silent`, `traffic_low`, `venue_unanswered`, `relogin_failed` / `relogin_abandoned` |
-| INFO | `position_opened`, `position_closed` with this trade's PnL, `resumed`, `relogin`, `session_relogin`, `feed_recovered`, `roll_started` | `relogin`, `owner_agrees_again` |
+| TRADE | `position_opened`, `position_closed` with this trade's PnL | |
+| INFO | `resumed`, `relogin`, `session_relogin`, `roll_started` | `relogin` |
+| recovery | `feed_recovered`; `relogin`, `session_relogin`, `roll_started` after a failure | `owner_agrees_again`; `relogin`, `session_relogin` after a failure |
+
+A recovery is WARN when it ends a warning and INFO otherwise
+([notifications.md §6.5](notifications.md)), so a setting that showed the
+problem shows the all-clear too.
 
 The owner's console repeats its traffic and silent-deployment warnings every
 30 s; it alerts only when they change.
 
 **Choosing the level.** Send `/settings` to the bot and press *All (INFO)*,
-*WARN + FATAL* or *FATAL only*. The choice is saved in
+*Trades + WARN + FATAL*, *WARN + FATAL* or *FATAL only*. The choice is saved in
 `outputs/telegram_level.json` and applies to **all four processes**, without a
 restart, and it is kept across restarts. FATAL is always sent. The default is
 INFO, which means a message per fill plus a `relogin` notice from each process
 before every open (08:40 and 14:55, weekends included): eight a day across the
-four.
+four. *Trades + WARN + FATAL* keeps the fills and drops those.
 
 **After a stop**, each process prints its `telegram_*` counters with the rest
 of its summary (§4). `telegram_failed` above 0 means messages were not
@@ -636,8 +642,8 @@ the first pause.
   into.** FeedWatch now calls the anchors' `_relogin` after 3 consecutive
   checks whose snapshot *raised* (~3 min in session), and again every 3 more
   while it keeps failing — 4 attempts before the 900 s backstop
-  ([feedwatch.md](live/feedwatch.md)). Alerts: `session_relogin` (INFO) or
-  `session_relogin_failed` (WARN). The two follow-ups, also 2026-10-18:
+  ([feedwatch.md](live/feedwatch.md)). Alerts: `session_relogin` (INFO, WARN after
+  a failed attempt) or `session_relogin_failed` (WARN). The two follow-ups, also 2026-10-18:
   the deployments' re-logins are **staggered** (anchors 40 s apart; lost-session
   attempts a check apart, at checks 3/4/5 then every 3), and the **owner**
   re-logs in after 3 unanswered reconciles (31 s to ~90 s) when `usage()`

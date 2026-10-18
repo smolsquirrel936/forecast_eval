@@ -159,7 +159,8 @@ result goes to `OwnerSessionWatch`:
 
 Records: `owner_session_relogin`, `owner_session_relogin_failed`,
 `owner_session_probe_failed`, `owner_session_alive`, `owner_session_lost`,
-`owner_session_answered`. Alerts: `session_relogin` (INFO),
+`owner_session_answered`. Alerts: `session_relogin` (INFO, or WARN after a
+failed one),
 `session_relogin_failed` (WARN), `owner_session_lost` (FATAL).
 
 `SIGINT`/`SIGTERM` set a flag checked *between* passes, so a stop never lands
@@ -180,7 +181,8 @@ alerts are additions beside them.
 | FATAL | `no_credentials`, `crashed`, `session_unverified` | as in [cli.py](cli.md); `crashed` re-raises unchanged |
 | WARN | `deployment_silent`, `traffic_low` | **on a change only**: the console still repeats them every 30 s |
 | WARN | `venue_unanswered`, `relogin_failed`, `relogin_abandoned` | start-up reconcile got no answer; a re-login went wrong |
-| INFO | `relogin`, `owner_agrees_again` | a fresh token; the venue matches again while frozen |
+| WARN | `owner_agrees_again` | the venue matches again while frozen — a recovery of `owner_frozen`, so WARN ([alerts.md](alerts.md)) |
+| INFO | `relogin` | a fresh token; WARN when it follows a `relogin_failed` / `relogin_abandoned` |
 
 Before this, a freeze reached only the owner's console, and the phone heard
 about it about two minutes later as three `owner silent` halts.

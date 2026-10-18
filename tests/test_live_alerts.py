@@ -53,6 +53,68 @@ def test_a_new_sink_defaults_to_fatal_only(tmp_path):
     assert [x.severity for x in seen] == [Severity.FATAL]
 
 
+def test_trade_is_its_own_level_and_counted(tmp_path):
+    seen = []
+    a = _alerter(tmp_path)
+    a.add_sink(seen.append, levels=(Severity.TRADE,))
+    a.trade("position_opened", "LONG 1 @ 46200")
+    a.info("relogin", "token refreshed")
+    assert [x.kind for x in seen] == ["position_opened"]
+    assert a.summary()["alerts_trade"] == 1
+    assert a.summary()["alerts_info"] == 1
+
+
+# ---- a recovery goes out at the level of the problem it ends ----------------
+
+def test_a_recovery_with_nothing_open_is_info(tmp_path):
+    """The routine 08:40 re-login: nothing failed, so it stays INFO."""
+    a = _alerter(tmp_path)
+    r = a.recovery("relogin", "token refreshed", resolves=("relogin_failed",))
+    assert r.severity is Severity.INFO
+    assert "resolves" not in r.detail
+
+
+def test_a_recovery_after_its_warning_is_warn(tmp_path):
+    """Under WARN + FATAL the phone saw `feed_missed`; it must also see the
+    all-clear, or the incident looks open forever."""
+    a = _alerter(tmp_path)
+    a.warn("feed_missed", "resubscribing")
+    r = a.recovery("feed_recovered", "delivering again",
+                   resolves=("feed_missed", "feed_unreachable"))
+    assert r.severity is Severity.WARN
+    assert r.detail["resolves"] == "feed_missed"
+
+
+def test_a_recovery_closes_what_it_resolved(tmp_path):
+    """One warning, one all-clear: the next recovery with nothing new open
+    is routine again."""
+    a = _alerter(tmp_path)
+    a.warn("relogin_failed", "retrying")
+    a.recovery("relogin", "ok", resolves=("relogin_failed",))
+    assert a.recovery("relogin", "ok",
+                      resolves=("relogin_failed",)).severity is Severity.INFO
+
+
+def test_a_recovery_ignores_warnings_it_does_not_resolve(tmp_path):
+    a = _alerter(tmp_path)
+    a.warn("traffic_low", "50 MB left")
+    r = a.recovery("relogin", "ok", resolves=("relogin_failed",))
+    assert r.severity is Severity.INFO
+    assert a.recovery("feed_recovered", "x",
+                      resolves=("traffic_low",)).severity is Severity.WARN
+
+
+def test_a_recovery_from_a_fatal_is_capped_at_warn(tmp_path):
+    """Good news is never "act now", and must not land in the fatal journal."""
+    a = _alerter(tmp_path)
+    a.fatal("owner_frozen", "reconcile failed")
+    r = a.recovery("owner_agrees_again", "match again",
+                   resolves=("owner_frozen",))
+    assert r.severity is Severity.WARN
+    lines = (tmp_path / "fatal.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+
+
 # ---- the alert path must never take down the run ---------------------------
 
 def test_a_throwing_sink_is_swallowed_and_counted(tmp_path):
@@ -232,7 +294,7 @@ def test_an_entry_is_announced_with_its_side_and_price(tmp_path):
     seen = _traded(tmp_path, [_fill("BUY", 46200.0, 0)])
     assert len(seen) == 1
     assert seen[0].kind == "position_opened"
-    assert seen[0].severity is Severity.INFO
+    assert seen[0].severity is Severity.TRADE
     assert "LONG 1 @ 46200" in seen[0].message
 
 
@@ -248,6 +310,7 @@ def test_an_exit_carries_this_trade_s_pnl_not_the_running_total(tmp_path):
     seen = _traded(tmp_path, [_fill("BUY", 46200.0, 0),
                               _fill("SELL", 46350.0, 1)])
     assert [s.kind for s in seen] == ["position_opened", "position_closed"]
+    assert [s.severity for s in seen] == [Severity.TRADE, Severity.TRADE]
     assert seen[1].detail["points"] == pytest.approx(150.0)
     assert "+150 points" in seen[1].message
 
