@@ -246,3 +246,23 @@ def test_matches_offline_pipeline_on_real_rpt_bars():
         assert got.volume == want.volume
         assert got.session == want.session
     assert agg.n_late_dropped == 0
+
+
+# ---- the contract roll's discard (2026-10-20) ------------------------------
+
+def test_a_discarded_bucket_is_never_emitted_and_its_minute_can_reopen():
+    agg = TickAggregator(drop_non_session=False)
+    base = datetime(2026, 10, 20, 15, 40)
+    agg.add_tick(base, 46419.0, 1)                     # the old month
+    agg.discard_open()
+    agg.add_tick(base + timedelta(seconds=4), 46578.0, 2)
+    (bar,) = agg.add_tick(base + timedelta(minutes=1), 46580.0, 1)
+    assert bar.timestamp == base
+    assert bar.price == 46578.0 and bar.volume == 2
+    assert agg.n_buckets_discarded == 1
+
+
+def test_discarding_with_nothing_open_is_harmless():
+    agg = TickAggregator(drop_non_session=False)
+    agg.discard_open()
+    assert agg.flush(datetime(2026, 10, 20, 16, 0)) == []

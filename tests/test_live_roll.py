@@ -1023,3 +1023,99 @@ def test_night_policy_is_the_module_constant_so_the_pinned_context_does_not_move
 
 def test_front_month_series_handles_an_empty_column():
     assert len(front_month_series([], NIGHT)) == 0
+
+
+# ---- 2026-10-20: the re-open priced from the old month ----------------------
+#
+# simtrade_operations §11. The switch happened at 15:40:02 and the ladder's
+# rung 1 went out the same second at 46419, the last October bar's price, while
+# November traded ~46578. Prints are scaled down here; the gap is what matters.
+
+OLD, NEW = "TXFJ6", "TXFK6"
+
+
+def _switched_runtime():
+    """A runtime at the scheduled roll's switch: old leg closed, one bar of the
+    old month half-built, and a ladder reference left over from that month."""
+    rt, rec = _rolling_runtime()
+    rt.request_roll()
+    rt.trader.position = 0
+    rt.portfolio.position = 0
+    for ts in pd.date_range("2026-10-20 15:38:00", periods=119, freq="1s"):
+        rt.on_tick(ts, 17500.0, 1, code=OLD)
+    assert rt.roll_state == "switch"
+    assert rt._ladder_market is not None and rt._ladder_market.price == 17500.0
+    rt.broker.cancel()            # the cheap strategy's own order, not the roll's
+    assert not rt.broker.has_pending()
+    rt.switch_contract({NEW})
+    rt.resume_roll()
+    return rt, rec
+
+
+def test_the_switch_leaves_the_ladder_nothing_old_to_price_from():
+    rt, rec = _switched_runtime()
+    rt.broker.has_pending = lambda: False
+    assert rt.advance_roll_ladder() is None
+    assert [f for e, f in rec.events if e == "roll_ladder_attempt"] == []
+
+
+def test_the_re_open_is_priced_from_the_first_new_month_bar():
+    rt, rec = _switched_runtime()
+    rt.on_tick(pd.Timestamp("2026-10-20 15:40:01"), 17500.0, 1, code=OLD)
+    for ts in pd.date_range("2026-10-20 15:40:02", periods=63, freq="1s"):
+        rt.on_tick(ts, 17660.0, 1, code=NEW)
+    resumed = [f for e, f in rec.events if e == "roll_exposure_resumed"]
+    assert resumed and resumed[0]["direction"] == "BUY"
+    assert resumed[0]["timestamp"] == pd.Timestamp("2026-10-20 15:40")
+    assert resumed[0]["price"] is None or resumed[0]["price"] >= 17660.0 - 25
+    assert rt._ladder_market.price == 17660.0
+    assert rt.n_foreign_dropped == 1
+
+
+def test_the_re_open_starts_the_ladder_at_rung_one():
+    # The close leg's shape: rung 2 waits out the interval rather than firing on
+    # the next clock second behind a plain order.
+    rt, _rec = _switched_runtime()
+    for ts in pd.date_range("2026-10-20 15:40:02", periods=63, freq="1s"):
+        rt.on_tick(ts, 17660.0, 1, code=NEW)
+    assert rt._ladder_attempt == 1
+    rt.broker.has_pending = lambda: False
+    assert rt.advance_roll_ladder() is None
+
+
+def test_prints_without_a_code_still_count_after_a_switch():
+    # A source that stamps no code (replays, tests) must not be silenced.
+    rt, _rec = _switched_runtime()
+    for ts in pd.date_range("2026-10-20 15:40:02", periods=63, freq="1s"):
+        rt.on_tick(ts, 17660.0, 1)
+    assert rt.n_foreign_dropped == 0
+    assert rt._ladder_market.price == 17660.0
+
+
+def test_no_print_is_filtered_before_a_roll():
+    from forecast_eval.tests.test_live_runtime import _bars, _runtime
+    rt = _runtime()
+    rt.warm_up(_bars(60, start="2026-08-18 16:00"))
+    for ts in pd.date_range("2026-08-19 16:00", periods=10, freq="1s"):
+        rt.on_tick(ts, 17500.0, 1, code="ANYTHING")
+    assert rt.n_foreign_dropped == 0
+
+
+# ---- 2026-10-20: the exchange's front month vs ours -------------------------
+
+def test_the_exchange_front_month_moves_when_the_expiring_month_stops():
+    from forecast_eval.live.roll import exchange_front_month
+    assert exchange_front_month(datetime(2026, 10, 20, 14, 59)) == "202610"
+    assert exchange_front_month(datetime(2026, 10, 21, 8, 44)) == "202610"
+    assert exchange_front_month(datetime(2026, 10, 21, 13, 29)) == "202610"
+    assert exchange_front_month(datetime(2026, 10, 21, 13, 30)) == "202611"
+    assert exchange_front_month(datetime(2026, 10, 21, 14, 59)) == "202611"
+    assert exchange_front_month(datetime(2026, 12, 31, 23, 0)) == "202701"
+
+
+def test_the_exchange_front_month_trails_our_roll_by_about_a_day():
+    from forecast_eval.live.roll import exchange_front_month
+    day = SessionPolicy.day()
+    ts = datetime(2026, 10, 20, 14, 59)
+    assert front_month_at(ts, day) == "202611"
+    assert exchange_front_month(ts) == "202610"

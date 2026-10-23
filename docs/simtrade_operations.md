@@ -239,6 +239,15 @@ at start-up, and an expired month can no longer be fetched from the broker.
 holds), so the cache picks up the old month's bars while they are still
 served. Otherwise a later warm-up has a hole where that month was.
 
+**The owner follows each deployment's month** (fixed 2026-10-24 on `main`,
+after the 10-20 roll). Every intent names its month, and the owner places it
+there, so the owner needs no restart at a roll. Its own `--contract` is used
+only to seed a restart from the ledgers, which carry no month. **Between a
+deployment's roll and the old month's expiry, restart the owner with the dated
+code the deployments hold** (e.g. `--contract TXFK6`; `TXF202611` does not
+resolve). `TXFR1` still names the expiring month in that window, and the
+start-up reconcile then refuses with `account mirror … != venue …`.
+
 ### 6.6 A deployment refuses at start-up: `emitter priming incomplete`
 
 The warm-up window held fewer than 3 non-HOLD signals, so the trend filter
@@ -599,6 +608,9 @@ the first pause.
 | Mon 2026-10-12, 08:45+ | flatten the three held lots, then the clean restart (log, 2026-10-12) |
 | about 2026-10-19 / 10-20 | restart all deployments before the October expiry (§6.5) |
 | 2026-10-20 / 10-21 | deployments roll; October contract settles |
+| Sat–Sun 2026-10-24 / 10-25 | **fix the three roll defects** (open questions, 2026-10-20) and correct night's and fullday's entry prices |
+| until 2026-11-18 | every restart (owner and deployments) needs `--contract TXFK6` |
+| 2026-11-17 / 11-18 | November roll; must not run on the unfixed roll code |
 
 **Log:**
 
@@ -629,9 +641,39 @@ the first pause.
 | 2026-10-14 05:01–05:06 | **owner lost its session** (found 2026-10-18 in `owner_session.jsonl`): a TCP connection error at 05:01:55, then 11 `SessionNotEstablished` reconciles until the owner stopped at 05:06:47; restarted 08:04 and 08:30 |
 | 2026-10-14 08:05 | **night and fullday refused `--resume`** (exit 5, `startup_refused`, gate `adopt_position`): both held lots opened after the 10-12 clean restart — night −1 @ 48760 (10-13 22:04), fullday +1 @ 48972 (10-12 22:36) — and the blanket exit-rule guard refused them under `stop_pct` 0.10. **Guard narrowed, user go:** `ExitRule.adoptable` (default False); `EntryPercentStop` and `FixedStopLoss` opt in, since they read only side and entry price. A held lot now resumes with the stop armed at the venue's entry (§5) |
 | 2026-10-15 09:52–10:08 | **broker session lost; day and fullday halted.** All three deployments' last print 09:52:25; no `session_down` event, nothing in `shioaji.log`. From 09:54 every FeedWatch check was `unreachable` (`SessionNotEstablished: Unable to wait for session '(c3,s1)_sinopac' to be established`, 14 in a row), which only warns, so nothing re-logged in. Day and fullday halted at 10:08:01 on `no market data for 900.6s`, losing 10:08–13:45 of the day session (no orders either way; fullday held +1 @ 48972). Night, outside its session, stayed alive and deaf for 5 h; its scheduled 14:55 `force_refresh` re-login healed it, the 14:59 check passed and bars ran from 15:00. **The SDK did not reconnect by itself in 5 h; our re-login did.** Day and fullday restarted 14:42 (`--resume`, fullday re-adopted +1 @ 48972). **The owner lost its session too** (read from `owner_session.jsonl` 2026-10-18): `list_positions` failed from 09:54:01, `Session connect timeout` then `SessionNotEstablished`, 597 reconciles in a row until its 14:52 anchor re-login; night's 19:34 and 20:34 orders then placed and filled. Fix deferred to the weekend — see open questions |
+| 2026-10-20 12:45–15:41 | **October → November roll: the deployments rolled, the owner did not.** Day (flat) switched to `TXFK6` at 12:45:02. Fullday closed its short BUY @46424 (2nd ladder attempt; @46399 cancelled), switched 12:48:01, re-opened SELL limit 46413 → filled **@46421**. Night closed its long SELL @46420 (2nd attempt, filled 15:39:32; −429 pts), switched 15:40:02, re-opened BUY limit 46419 → filled **@46418** in 3 s while November traded ~46578. The owner resolves `--contract` once at start-up (`owner_cli.py:495`, here `TXFR1` → `TXFJ6` on 10-19 04:29) and places every order on it (`owner_process.py:337`), so **both re-open legs were October trades**: night's BUY closed fullday's SELL at the venue. Venue account flat on both months; `reconcile` cannot see it (venue `TXFJ6` 0 = ledgers +1 −1). Books: night +1 @46418, fullday −1 @46421, October prices against November, **~160 pts wrong each, opposite signs**. Separately, the re-open leg is priced from the last **old-month** bar (46413, 46419), so it would be ~160 pts off even with a rolled owner |
+| 2026-10-20 14:59 | **false FATAL `session_unverified` from day and fullday.** `_verify` (`live/cli.py:1201`) requires a tick between the 14:55/14:56 re-login and 14:59; held on `TXFK6`, the first trial prints came at 14:59:50 and 14:59:55, after the check (14:59:00) and its recovery (~14:59:21). Not a dead feed: `usage()` passed, `TXFK6` had no trial print from 14:50 either (before the re-login), and normal ticks resumed at 15:00 with no repair. Night, still on `TXFJ6` (~12 trial prints a minute), passed. `roll_backwards_ignored` at the same re-logins is correct: `TXFR1` still names 202610 until expiry |
+| 2026-10-20 16:17–16:18 | **owner restarted alone on November.** Ctrl-C 16:17:24. `--contract TXF202611` refused at once (`RuntimeError: contract 'TXF202611' not found via api.Contracts.Futures.TXF`; nothing placed). **`--contract TXFK6` works** (the container is keyed by code): serving 16:18:43, seeded day 0, night +1 @46418, day_night −1 @46421, account +0, agreed with the venue. 79 s silent, under the deployments' 90 s `owner_timeout`: no halt. Ticks checked after: all three on `TXFK6`, per-minute counts identical, lag ~1.07 s |
 
 **Open questions:**
 
+- **Roll defects found 2026-10-20 (log rows above); fix deferred to the weekend
+  of 10-24/25, must land before the 11-18 roll.** Unfixed:
+  1. The owner never rolls its order contract. It must follow the deployments'
+     roll, or refuse an intent for a month it does not hold.
+  2. The roll's re-open leg is priced from the last old-month bar, not the new
+     month.
+  3. `_verify`'s tick half false-fails on a held month that is not yet the
+     front one (sparse trial prints). It may fire again on 10-21 at 08:44 and
+     14:59.
+
+  **All three fixed on `main` 2026-10-24, not yet on `simtrade_0929` or
+  demonstrated live.**
+  1. Each intent names its month, and the owner places, sizes and reconciles
+     per month ([owner_process.md](live/owner_process.md)).
+  2. `LiveRuntime.switch_contract` drops the old month's half-built bar,
+     queued prints and ladder reference. The re-open's rung 1 goes out on the
+     first new-month bar ([roll.md](live/roll.md)).
+  3. The tick half is skipped while the held month is later than the
+     exchange's front month ([cli.md](live/cli.md)).
+
+  The live code takes effect only after `main` is merged into `simtrade_0929`
+  and every process (owner and deployments) is restarted on it.
+
+  Also pending: night's and fullday's ledger entry prices are October prices
+  (night +1 @46418, fullday −1 @46421). Until 11-18 **restart everything with
+  `--contract TXFK6`**: `TXFR1` names October until it settles, and
+  `TXF202611` does not resolve.
 - **The 2026-10-06 `PermissionError`** on the day restart came from uncommitted
   code, and nothing recorded which file. If a restart on committed code hits it,
   the `crashed` record and the console traceback now name the file.

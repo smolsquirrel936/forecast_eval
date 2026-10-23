@@ -86,7 +86,8 @@ from forecast_eval.live import credentials                       # noqa: E402
 from forecast_eval.live.ledger import (FillLedger, ledger_path,     # noqa: E402
                                        net_position, open_position)
 from forecast_eval.live.contracts import (                        # noqa: E402
-    contract_month, dated_months, resolve_txf, txf_root)
+    contract_codes, contract_month, dated_months, month_code, resolve_txf,
+    txf_root)
 from forecast_eval.live.alerts import Alerter                     # noqa: E402
 from forecast_eval.live import telegram                           # noqa: E402
 from forecast_eval.live.feedwatch import FeedWatch, Verdict       # noqa: E402
@@ -95,7 +96,8 @@ from forecast_eval.live.relogin import (                          # noqa: E402
     Outcome as ReloginOutcome, ReloginScheduler, deployment_relogin_anchors,
     stagger_slot)
 from forecast_eval.live.roll import (                             # noqa: E402
-    Roll, RollSchedule, RollWatch, front_month_at, roll_at)
+    Roll, RollSchedule, RollWatch, exchange_front_month, front_month_at,
+    roll_at)
 from forecast_eval.live.runtime import LiveRuntime                # noqa: E402
 from forecast_eval.live import soak_epoch                         # noqa: E402
 from forecast_eval.live.startup import (                          # noqa: E402
@@ -227,6 +229,21 @@ def _repair_budget(staleness_seconds: float, interval_seconds: float) -> int:
     if interval_seconds <= 0:
         return 1
     return max(1, int(staleness_seconds / interval_seconds))
+
+
+def _tick_check_applies(held_month: str, now: datetime) -> bool:
+    """Should `_verify` demand a tick since the re-login? False = skip it."""
+    # Tech: True unless the held month is later than the exchange's front month.
+    # Why:  2026-10-20 14:59 (simtrade_operations §11) — day and fullday, rolled
+    #       onto November at 12:45, failed the check with a false FATAL
+    #       `session_unverified`. A back month gets almost no pre-open trial
+    #       prints: TXFK6 had none from 14:50 to 14:59:50, while TXFJ6 had about
+    #       twelve a minute. The window is ours-rolled-to-expiry, about a day a
+    #       month; FeedWatch still checks the feed once the session opens. A
+    #       month we cannot read keeps the check.
+    if not held_month:
+        return True
+    return held_month <= exchange_front_month(now)
 
 
 def _preflight_orders(args: Any) -> Optional[str]:
@@ -863,8 +880,11 @@ def main(argv=None) -> int:
             #       could get wrong. No `ShadowBroker` wrapper: V4's fill-gap
             #       measurement compares OUR fill model against the venue's, and
             #       the owner is neither.
+            # `contract_code` stamps each intent with the month this run holds,
+            # so the owner places it there (`ClientBroker.contract_code`).
             broker = ClientBroker(out.parent, cfg.policy.cache_slug(),
-                                  rails=rails)
+                                  rails=rails,
+                                  contract_code=month_code(contract))
             recorder.record("wire_history_skipped",
                             events=broker.skipped_events)
         elif args.broker == "dryrun":
@@ -1222,6 +1242,13 @@ def main(argv=None) -> int:
             #       training a reader to ignore the one record that matters.
             if not cfg.policy.is_trading_day(datetime.now()):
                 return
+            if not _tick_check_applies(contract_month(contract),
+                                       datetime.now()):
+                recorder.record("verify_tick_skipped",
+                                held_month=contract_month(contract),
+                                reason="held month is not yet the exchange's "
+                                       "front month")
+                return
             if ticks["n"] == ticks["at_relogin"]:
                 raise RuntimeError(
                     f"no tick since the re-login (count still {ticks['n']}) — "
@@ -1295,6 +1322,14 @@ def main(argv=None) -> int:
             contract = rolled.contract
             if live_broker is not None:
                 live_broker.switch_contract(contract)
+            # Tech: the owner's wire and the runtime's bar stream are holders too.
+            # Why:  2026-10-20 (simtrade_operations §11) — neither was moved.
+            #       The client kept no month at all, so the owner placed the
+            #       re-open on October; the runtime kept October's half-built bar
+            #       and queued prints, and priced the re-open from them.
+            if isinstance(broker, ClientBroker):
+                broker.switch_contract(contract)
+            rt.switch_contract(contract_codes(contract))
             _subscribe(drop_first=False)
             # Tech: re-baseline the verify window's tick counter.
             # Why:  it asserts a tick has arrived *since* the last re-login. The

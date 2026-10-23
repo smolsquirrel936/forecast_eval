@@ -113,5 +113,14 @@ boundary and routes it through `_anomaly` — the same mechanism
 [broker/shioaji.py](shioaji.md) uses, so there is one place to look when a live
 run halts.
 
+## Each intent names its month
+
+`contract_code` (the dated code, e.g. `TXFK6`) is sent as `contract` on every
+`submit`, and `switch_contract` moves it at the roll. The owner places the order
+on that month. On 2026-10-20 it had placed both roll re-opens on October,
+because the deployments had rolled and nothing told the owner
+([simtrade_operations §11](../../simtrade_operations.md)). With no code set, no
+field is sent, and the owner uses its own start-up month.
+
 ## Related
 [live/intents.py](../intents.md) · [live/broker/base.py](base.md) · [live/broker/shioaji.py](shioaji.md) · [live/state.py](../state.md) · [STRATEGY_SPLIT_PLAN.md](../../../STRATEGY_SPLIT_PLAN.md)

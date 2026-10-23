@@ -237,10 +237,19 @@ class LiveRuntime:
         #       is kept from the last bar because a limit needs a reference price
         #       and the clock does not carry one — re-pricing against a stale bar
         #       is fine, since the ladder's escalation is what reaches the market,
-        #       not the reference.
+        #       not the reference. Not across a roll: the months trade ~160
+        #       points apart, far past any rung, so `switch_contract` clears it.
         self._ladder_attempt = 0
         self._ladder_last = None
         self._ladder_market = None
+        # Tech: the codes a print must carry to reach the bar stream, or None
+        #       before any roll (no filter).
+        # Why:  2026-10-20 (simtrade_operations §11) — after the switch, prints
+        #       of the old month already queued behind it would still build bars,
+        #       and the re-open would be priced from them. Set only by a roll, so
+        #       a code mismatch can never silence a run that has not rolled.
+        self._contract_codes: Optional[set] = None
+        self.n_foreign_dropped = 0
         self.emitter = self.strategy["emitter"]
         # Tech: warmup_bars=0 because the context arrives via `seed_history`.
         # Why:  in the backtest `warmup_bars` is the train/eval split; live it
@@ -479,6 +488,24 @@ class LiveRuntime:
                                  **settled)
         return settled
 
+    def switch_contract(self, codes: Any) -> None:
+        """Build bars from the new month only, starting now (§2.6)."""
+        # Tech: accept only prints stamped with `codes` from here on, discard the
+        #       half-built bar, and forget the ladder's reference bar.
+        # Why:  2026-10-20 (simtrade_operations §11) — night re-opened BUY at
+        #       46419 off the last October bar while November traded ~46578, and
+        #       fullday SELL at 46413 the same way. Three things held an
+        #       old-month price: the open bucket, prints still queued, and
+        #       `_ladder_market`, which the clock re-priced within the second.
+        #       With all three cleared, the first bar either roll leg can be
+        #       priced from is one built entirely from the new month.
+        self._contract_codes = {str(c) for c in codes if c}
+        self.aggregator.discard_open()
+        self._ladder_market = None
+        if self.recorder is not None:
+            self.recorder.record("runtime_contract_switched",
+                                 codes=sorted(self._contract_codes))
+
     @property
     def roll_state(self):
         """Where the scheduled roll has got to; `None` when none is running."""
@@ -594,16 +621,7 @@ class LiveRuntime:
                 self._roll_state = "switch"
                 return
             self._roll_state = "closing"
-            self._reset_ladder()
-            self._ladder_attempt = 1
-            self._ladder_last = _monotonic()
-            rolling = getattr(self.broker, "rolling", None)
-            ticks = ladder_ticks(1)
-            if rolling is None:
-                order = self._submit_roll_leg(market, ticks)
-            else:
-                with rolling(ticks):
-                    order = self._submit_roll_leg(market, ticks)
+            order, ticks = self._submit_first_rung(market)
             if self.recorder is not None:
                 self.recorder.record(
                     "roll_close_submitted", timestamp=market.timestamp,
@@ -622,6 +640,25 @@ class LiveRuntime:
             self._note_roll_fill("roll_leg_opened")
             self._roll_state = None
             self._reset_ladder()
+
+    def _submit_first_rung(self, market: Any):
+        # Tech: submit the current roll leg at rung 1 and start the ladder's
+        #       clock from it; return the order and its aggression.
+        # Why:  both legs start the same way, so the re-open is not left to a
+        #       plain order that `has_pending` would hold the ladder behind.
+        #       Starting the clock here is what makes rung 2 wait out
+        #       `ROLL_LADDER_INTERVAL` instead of firing on the next second.
+        self._reset_ladder()
+        self._ladder_attempt = 1
+        self._ladder_last = _monotonic()
+        rolling = getattr(self.broker, "rolling", None)
+        ticks = ladder_ticks(1)
+        if rolling is None:
+            order = self._submit_roll_leg(market, ticks)
+        else:
+            with rolling(ticks):
+                order = self._submit_roll_leg(market, ticks)
+        return order, ticks
 
     def _note_roll_fill(self, event: str) -> None:
         # Tech: mark the newest fill as a roll leg and record it.
@@ -664,7 +701,14 @@ class LiveRuntime:
                                      position=self.trader.position)
             return
         direction = "BUY" if want > 0 else "SELL"
-        order = self.trader.on_signal(direction, market, strength=1.0)
+        # Tech: a scheduled roll's re-open goes out as the ladder's rung 1; a
+        #       settled leg's re-entry stays an ordinary signal.
+        # Why:  see `_submit_first_rung`. This bar is the first new-month bar
+        #       (`switch_contract`), so it is the earliest true reference.
+        if self._roll_state == "reopening":
+            order, _ticks = self._submit_first_rung(market)
+        else:
+            order = self.trader.on_signal(direction, market, strength=1.0)
         if self.recorder is not None:
             self.recorder.record(
                 "roll_exposure_resumed", timestamp=market.timestamp,
@@ -856,6 +900,13 @@ class LiveRuntime:
         if self.tick_capture is not None:
             self.tick_capture.write(timestamp, price, volume,
                                     simtrade=simtrade, code=code)
+        # Tech: after a roll, a print of another month is captured and dropped.
+        # Why:  see `switch_contract`. It is not data either: counting it would
+        #       let the old month's last prints keep the staleness rail quiet.
+        if (self._contract_codes is not None and code
+                and code not in self._contract_codes):
+            self.n_foreign_dropped += 1
+            return
         if not (simtrade and self.aggregator.drop_simtrade):
             self.rails.note_data(timestamp)
         for bar in self.aggregator.add_tick(timestamp, price, volume,

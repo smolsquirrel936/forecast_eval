@@ -152,9 +152,22 @@ plus the position:
 api.unsubscribe(old)           # best effort; the month may already be gone
 contract = rolled.contract     # the name every closure reads
 live_broker.switch_contract()  # broker contract + accepted code set
+broker.switch_contract()       # --broker client: the month intents name
+rt.switch_contract(codes)      # bars from the new month only
 _subscribe(drop_first=False)   # the new object, on a fresh subscription
 ticks["at_relogin"] = ticks["n"]   # re-baseline the verify window's tick counter
 ```
+
+See [roll.md](roll.md) for why the last two were added after 2026-10-20.
+
+**`_verify`'s tick half skips a back month.** `_tick_check_applies` is False
+while the held month is later than the exchange's front month
+(`roll.exchange_front_month`). That window runs from our scheduled roll to the
+expiring month's 13:30 close, about one day a month. On 2026-10-20 at 14:59,
+day and fullday held November, which had no trial print between the 14:55
+re-login and the check. The result was a false FATAL `session_unverified`. The
+skip is recorded as `verify_tick_skipped`; `usage()` still runs, and FeedWatch
+still checks the feed once the session opens.
 
 Two paths reach it. `_check_schedule` is the **plan**: inside the roll window it
 snapshots both months (recording their volumes, which is how the naive

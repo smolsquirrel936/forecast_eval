@@ -28,6 +28,7 @@ as different from itself.
 | `contract_codes(contract)` | function | every code identifying this contract — `code` **and** `target_code` |
 | `describe_contract_match(contract, captured)` | function | `(note, is_mismatch)` against codes seen in a capture |
 | `contract_month(contract)` | function | `delivery_month` as a plain string; `''` when it has none |
+| `month_code(contract)` | function | the dated code of the month traded (`TXFK6`): `target_code` for an alias, else `code`. The month's name on the owner wire. `resolve_txf` accepts it, while `TXF202611` does not resolve |
 | `dated_months(root)` | function | every dated month under a root, nearest delivery first — **aliases excluded** |
 | `ROUTES` | constant | the ordered candidates below |
 

@@ -44,6 +44,7 @@ class _FakeAPI:
 
     def __init__(self, positions=None, raise_on_place=False):
         self.placed = []
+        self.contracts = []
         self.cancelled = []
         self.callback = None
         self.positions = positions if positions is not None else []
@@ -59,6 +60,7 @@ class _FakeAPI:
         self._n += 1
         oid = f"OID{self._n}"
         self.placed.append((order, oid))
+        self.contracts.append(contract)
         return _FakeTrade(oid, ordno=f"NO{self._n}")
 
     def cancel_order(self, trade):
@@ -731,3 +733,153 @@ def test_a_payload_that_cannot_be_read_is_still_counted(tmp_path):
     owner._on_event(type("S", (), {"name": "FuturesDeal"})(), "not a mapping")
     assert owner.events_seen == {"FUTURESDEAL": 1}
     assert owner.anomalies, "and it is still an anomaly"
+
+
+# ---- the month each order is for (2026-10-20) -------------------------------
+#
+# simtrade_operations §11: the owner placed every order on the month it resolved
+# at start-up, so night's and fullday's roll re-opens were October trades, and
+# night's BUY closed fullday's SELL at the venue. Here `_Contract` (TXFI6) is the
+# start-up month and TXFJ6 the month the deployments roll to.
+
+class _Month:
+    def __init__(self, code):
+        self.code = self.target_code = code
+
+
+def _resolving_owner(tmp_path, positions=None, **kw):
+    resolved = []
+
+    def resolve(code):
+        resolved.append(code)
+        if code != "TXFJ6":
+            raise RuntimeError(f"contract {code!r} not found")
+        return _Month(code)
+
+    owner, api = _owner(tmp_path, api=_FakeAPI(positions=positions),
+                        slugs=("night", "day_night"), resolve=resolve, **kw)
+    return owner, api, resolved
+
+
+def _submit(tmp_path, slug, side, contract=None):
+    ClientBroker(tmp_path, slug, contract_code=contract).submit(
+        OrderEvent(timestamp=TS, side=side, limit_price=100.0, intent="OPEN",
+                   quantity=1), current_price=100.0)
+
+
+def test_an_order_is_placed_on_the_month_its_intent_names(tmp_path):
+    owner, api, resolved = _resolving_owner(tmp_path)
+    _submit(tmp_path, "day_night", "SELL", contract="TXFJ6")
+    owner.poll()
+    assert resolved == ["TXFJ6"]
+    assert api.contracts[-1].code == "TXFJ6"
+
+
+def test_an_intent_naming_no_month_goes_to_the_start_up_month(tmp_path):
+    owner, api, resolved = _resolving_owner(tmp_path)
+    _submit(tmp_path, "night", "BUY")
+    owner.poll()
+    assert resolved == []
+    assert api.contracts[-1].code == "TXFI6"
+
+
+def test_a_month_is_resolved_once(tmp_path):
+    owner, api, resolved = _resolving_owner(tmp_path)
+    _submit(tmp_path, "day_night", "SELL", contract="TXFJ6")
+    owner.poll()
+    _submit(tmp_path, "day_night", "SELL", contract="TXFJ6")
+    owner.poll()
+    assert resolved == ["TXFJ6"]
+    assert len(api.contracts) == 2
+
+
+def test_a_lot_in_one_month_is_not_covered_by_an_order_in_another(tmp_path):
+    # Night still holds +1 on the old month while fullday re-opens short on the
+    # new one: that is a New on the new month, never a Cover of night's lot.
+    owner, api, _ = _resolving_owner(tmp_path)
+    owner.seed_from({"night": 1, "day_night": 0})
+    _submit(tmp_path, "day_night", "SELL", contract="TXFJ6")
+    owner.poll()
+    (placed, _oid), = api.placed
+    assert placed.octype == "New"
+    assert owner.book.net_in("TXFI6") == 1
+
+
+def test_a_month_the_owner_cannot_resolve_is_refused_not_placed(tmp_path):
+    owner, api, resolved = _resolving_owner(tmp_path)
+    _submit(tmp_path, "day_night", "SELL", contract="TXF202611")
+    owner.poll()
+    assert api.placed == []
+    events = JsonlStream(event_path(tmp_path, "day_night")).read_new()
+    assert any(e["kind"] == "rejected" and "TXF202611" in e["reason"]
+               for e in events)
+
+
+def test_without_a_resolver_a_new_month_is_refused(tmp_path):
+    owner, api = _owner(tmp_path, slugs=("night",))
+    _submit(tmp_path, "night", "BUY", contract="TXFJ6")
+    owner.poll()
+    assert api.placed == []
+
+
+def test_a_deal_moves_the_net_of_the_month_it_was_placed_in(tmp_path):
+    owner, api, _ = _resolving_owner(tmp_path)
+    _submit(tmp_path, "day_night", "SELL", contract="TXFJ6")
+    owner.poll()
+    _deal(owner, "NO1", side="Sell")
+    assert owner.book.net_in("TXFJ6") == -1
+    assert owner.book.net_in("TXFI6") == 0
+    assert owner.book.account_net == -1
+
+
+def test_reconcile_compares_each_month_on_its_own(tmp_path):
+    # The 10-20 books: +1 on one month and -1 on the other sum to the venue's
+    # flat account, and that sum is exactly what hid the wrong month.
+    owner, api, _ = _resolving_owner(tmp_path, positions=[])
+    owner.seed_from({"night": 1, "day_night": 0})
+    _submit(tmp_path, "day_night", "SELL", contract="TXFJ6")
+    owner.poll()
+    _deal(owner, "NO1", side="Sell")
+    assert owner.book.account_net == 0
+    assert owner.reconcile() is False
+    assert any("in TXFI6" in a for a in owner.anomalies)
+
+
+def test_reconcile_agrees_when_each_month_matches(tmp_path):
+    owner, api, _ = _resolving_owner(tmp_path, positions=[
+        _Row(1, "Buy", code="TXFI6"), _Row(1, "Sell", code="TXFJ6")])
+    owner.seed_from({"night": 1, "day_night": 0})
+    _submit(tmp_path, "day_night", "SELL", contract="TXFJ6")
+    owner.poll()
+    _deal(owner, "NO1", side="Sell")
+    assert owner.reconcile() is True
+    assert owner.anomalies == []
+
+
+def test_a_fill_in_flight_in_one_month_does_not_excuse_another(tmp_path):
+    # Venue one lot long of the book on the new month. A BUY working THERE is
+    # the 10-06 race and waits; a BUY working on the OLD month explains nothing,
+    # though summed across months it would have.
+    clock = _Clock()
+    owner, api, _ = _resolving_owner(tmp_path, positions=[], clock=clock)
+    _submit(tmp_path, "day_night", "SELL", contract="TXFJ6")
+    owner.poll()
+    _deal(owner, "NO1", side="Sell")                    # book -1 on TXFJ6
+    clock.t += owner.reconcile_grace + 1             # the deal is old news
+    _submit(tmp_path, "night", "BUY")                   # working on TXFI6
+    owner.poll()
+    assert owner.reconcile() is False
+    assert any("in TXFJ6" in a for a in owner.anomalies)
+
+
+def test_a_fill_in_flight_in_its_own_month_still_waits(tmp_path):
+    clock = _Clock()
+    owner, api, _ = _resolving_owner(tmp_path, positions=[], clock=clock)
+    _submit(tmp_path, "day_night", "SELL", contract="TXFJ6")
+    owner.poll()
+    _deal(owner, "NO1", side="Sell")
+    clock.t += owner.reconcile_grace + 1             # the deal is old news
+    _submit(tmp_path, "night", "BUY", contract="TXFJ6")
+    owner.poll()
+    assert owner.reconcile() is True
+    assert "in TXFJ6" in owner.reconcile_note

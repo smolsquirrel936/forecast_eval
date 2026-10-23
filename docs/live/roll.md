@@ -166,9 +166,19 @@ the four that held the expired object at once:
 api.unsubscribe(old)          # best effort; the month may already be gone
 contract = rolled.contract    # the name every closure reads
 live_broker.switch_contract() # broker contract + accepted code set
+broker.switch_contract()      # under --broker client: the month intents name
+rt.switch_contract(codes)     # bars from the new month only; ladder forgets its bar
 _subscribe(drop_first=False)  # the new object, on a fresh subscription
 ticks["at_relogin"] = …       # re-baseline the verify window's tick counter
 ```
+
+**The last two holders were added after the 2026-10-20 roll**
+([simtrade_operations §11](../simtrade_operations.md)). Without them the owner
+placed both re-opens on October, and the runtime priced them from the last
+October bar, about 160 points under November. `rt.switch_contract` discards the
+half-built bar, drops queued prints of any other month, and clears the ladder's
+reference bar. The first leg after the switch is therefore priced from a bar
+built entirely from the new month, one minute later.
 
 Then the position: [runtime](runtime.md)`.settle_rolled_leg()` closes the
 expiring leg in both mirrors and arms the same exposure for re-entry on the first
@@ -207,7 +217,9 @@ not control. So the price escalates until it goes through.
   stays the loop's, so the single-consumer invariant is untouched.
 - **Each leg starts from rung 1.** The close's escalation says nothing about the
   open's, and starting the second leg at the cap would pay for the first leg's
-  problem twice.
+  problem twice. The re-open's rung 1 goes out on the first **new-month** bar
+  (`_submit_first_rung`), the same way the close's does. It is never sent from
+  the clock against a bar of the old month, which is what happened on 2026-10-20.
 
 ### The gate this hangs on, and why it is defensive
 The ladder only submits when nothing is pending. §2.19 measured that **an expired

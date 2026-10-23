@@ -92,6 +92,16 @@ making.
 sum, and adoption is not a trade. A fill would reach a deployment's `poll_fills`
 and book a phantom trade into its `Portfolio`.
 
+## Nets are kept per month, too
+
+`net_in(code)` is the net in one dated month, and `account_net` stays the total.
+`register(..., code=)` tags a leg with its month, and a deal moves that month's
+net. A caller that names no month means `default_code`, the owner's start-up
+month. Between the deployments' roll instants (day and fullday at 12:45, night
+at 15:30) the account holds two months at once, and a lot on one cannot cover a
+lot on the other. So `plan_legs` is sized against `net_in`, never against the
+total.
+
 ## Cancel keeps the leg
 
 `mark_cancel_requested` flags and returns the legs; it does not drop them. §2.2 —

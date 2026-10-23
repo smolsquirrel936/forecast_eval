@@ -72,6 +72,7 @@ class ClientBroker(Broker):
         on_anomaly: Optional[Callable[[str], None]] = None,
         owner_timeout: float = DEFAULT_OWNER_TIMEOUT,
         heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
+        contract_code: Optional[str] = None,
     ) -> None:
         # Tech: open both halves of the wire, resume the outbound sequence past
         #       anything already on disk, and hold the optional observers.
@@ -89,6 +90,13 @@ class ClientBroker(Broker):
         self.owner_timeout = owner_timeout
         self.heartbeat_seconds = heartbeat_seconds
         self._last_beat: Optional[float] = None
+        # Tech: the dated month this deployment trades, stamped on every submit.
+        # Why:  2026-10-20 (simtrade_operations §11) — the owner placed night's
+        #       and fullday's roll re-opens on October because it only knew the
+        #       month IT had resolved at start-up. Deployments roll at different
+        #       instants, so the month an order is for is the deployment's to
+        #       say. None sends no field, which an owner reads as its own month.
+        self.contract_code = contract_code
 
         # Tech: this deployment's view of its own working order, its undelivered
         #       fills, and the last position the owner reported for it.
@@ -148,8 +156,18 @@ class ClientBroker(Broker):
             timestamp=order.timestamp.isoformat(),
             current_price=current_price,
             urgent=self._urgent,
+            **({"contract": self.contract_code} if self.contract_code else {}),
         )
         self._pending = order
+
+    def switch_contract(self, contract: Any) -> None:
+        """Stamp later intents with a new month after a roll (§2.6)."""
+        # Tech: replace the stamped code with the new contract's dated code.
+        # Why:  same role as `ShioajiBroker.switch_contract` — the roll moves
+        #       every holder of the contract in one place (`cli._apply_roll`).
+        #       Here the holder is the field the owner places by.
+        from ..contracts import month_code
+        self.contract_code = month_code(contract) or None
 
     def cancel(self) -> None:
         # Tech: write a `cancel` intent; leave `_pending` set.

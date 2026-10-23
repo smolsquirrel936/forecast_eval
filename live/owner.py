@@ -103,6 +103,7 @@ class Working:
     octype: str
     quantity: int
     trade: Any = None
+    code: str = ""
     order_id: Optional[str] = None
     ordno: Optional[str] = None
     filled: int = 0
@@ -123,7 +124,7 @@ class OrderBook:
     """
 
     def __init__(self, *, on_anomaly: Optional[Callable[[str], None]] = None,
-                 recorder: Any = None) -> None:
+                 recorder: Any = None, default_code: str = "") -> None:
         # Tech: the working legs, the dedup set, the running account net, and the
         #       optional observers.
         # Why:  a list rather than a per-slug slot because §18.9's split gives one
@@ -136,6 +137,16 @@ class OrderBook:
         self._working: List[Working] = []
         self._seen_deals: Set[Tuple[Any, Any]] = set()
         self._net = 0
+        # Tech: the account net split by dated month code. A caller that names
+        #       no month means `default_code`, the owner's start-up month.
+        # Why:  2026-10-20 (simtrade_operations §11) — between the deployments'
+        #       roll instants the account holds two months at once, and a lot on
+        #       one cannot cover a lot on the other. `plan_legs` must size a
+        #       Cover against the month the order is for, which the total cannot
+        #       say; `_net` stays the total because that is what the account
+        #       holds across months.
+        self._net_by_code: Dict[str, int] = {}
+        self.default_code = default_code
         # Tech: each deployment's own signed size, from the fills routed to it.
         # Why:  two different reconciliations need two different operands. The
         #       OWNER compares `account_net` against `list_positions` — that is
@@ -166,6 +177,16 @@ class OrderBook:
         with self._lock:
             return self._net
 
+    def net_in(self, code: str = "") -> int:
+        """What this book believes the account holds in ONE month."""
+        with self._lock:
+            return self._net_by_code.get(code or self.default_code, 0)
+
+    def codes(self) -> List[str]:
+        """Every month this book has seeded, placed or booked in."""
+        with self._lock:
+            return list(self._net_by_code)
+
     def net_for(self, slug: str) -> int:
         """What THIS deployment holds, from the fills routed to it."""
         with self._lock:
@@ -188,7 +209,7 @@ class OrderBook:
         with self._lock:
             self._slug_net[slug] = int(signed_qty)
 
-    def seed_net(self, signed_qty: int) -> None:
+    def seed_net(self, signed_qty: int, code: str = "") -> None:
         # Tech: set the account net without booking a fill.
         # Why:  the owner restarts into an account that is already holding, and
         #       §16's `account_net_position` (the sum of the deployments' fill
@@ -197,6 +218,7 @@ class OrderBook:
         #       phantom trade into a Portfolio.
         with self._lock:
             self._net = int(signed_qty)
+            self._net_by_code = {code or self.default_code: int(signed_qty)}
 
     def working_for(self, slug: str) -> List[Working]:
         with self._lock:
@@ -213,7 +235,7 @@ class OrderBook:
 
     def register(self, slug: str, order: OrderEvent, leg: Leg, *,
                  trade: Any = None, order_id: Optional[str] = None,
-                 ordno: Optional[str] = None) -> Working:
+                 ordno: Optional[str] = None, code: str = "") -> Working:
         # Tech: start tracking one placed leg.
         # Why:  registration is separate from placement because this module never
         #       talks to the venue — the owner places, then hands back whatever
@@ -222,8 +244,10 @@ class OrderBook:
         with self._lock:
             working = Working(slug=slug, order=order, octype=leg.octype,
                               quantity=leg.quantity, trade=trade,
-                              order_id=order_id, ordno=ordno)
+                              order_id=order_id, ordno=ordno,
+                              code=code or self.default_code)
             self._working.append(working)
+            self._net_by_code.setdefault(working.code, 0)
             return working
 
     def mark_cancel_requested(self, slug: str) -> List[Working]:
@@ -323,6 +347,8 @@ class OrderBook:
             #       making.
             signed = quantity if side == "BUY" else -quantity
             self._net += signed
+            self._net_by_code[working.code] = (
+                self._net_by_code.get(working.code, 0) + signed)
             self._update_entry(working.slug, signed, quantity, float(price))
             self._slug_net[working.slug] = (
                 self._slug_net.get(working.slug, 0) + signed)
@@ -334,7 +360,7 @@ class OrderBook:
                     "owner_deal", slug=working.slug, ordno=ordno,
                     exchange_seq=exchange_seq, side=side, price=price,
                     quantity=quantity, octype=working.octype,
-                    account_net=self._net)
+                    code=working.code, account_net=self._net)
 
             return working.slug, FillEvent(
                 timestamp=timestamp, side=side, fill_price=float(price),
