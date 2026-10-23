@@ -19,8 +19,9 @@ including session classification — so the live stream and an offline replay ha
 | `TickAggregator(*, drop_simtrade=True, drop_non_session=True, policy=None, flush_grace=0)` | class | `policy` defaults to both sessions; `flush_grace` to zero |
 | `add_tick(timestamp, price, volume, *, simtrade=False)` | method | returns 0 or 1 completed bars |
 | `flush(now)` | method | closes a bar whose minute has ended (plus the grace), on the wall clock |
+| `discard_open()` | method | drops the half-built bar unemitted, and leaves its minute open to reopen. Used by a contract roll (`LiveRuntime.switch_contract`) so no bar mixes two months |
 | `LIVE_FLUSH_GRACE` | constant | 2 s — what `LiveRuntime` passes; see below |
-| `n_ticks` / `n_simtrade_dropped` / `n_late_dropped` / `n_bars_emitted` / `n_bars_dropped_off_session` | attribute | ingest counters |
+| `n_ticks` / `n_simtrade_dropped` / `n_late_dropped` / `n_bars_emitted` / `n_bars_dropped_off_session` / `n_buckets_discarded` | attribute | ingest counters |
 
 ## The RPT convention (measured, not assumed)
 - **1 minute, left-labelled** — bar `T` covers `[T, T+1min)`. A day session

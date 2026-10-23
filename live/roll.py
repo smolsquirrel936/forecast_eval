@@ -197,6 +197,26 @@ ROLL_AT = time(15, 30)
 #       expiry as it always did.
 ROLL_WINDOW = timedelta(hours=1)
 
+# Tech: when an expiring month stops trading on its last trading day.
+# Why:  TAIFEX closes the expiring TXF at 13:30, a quarter hour before the rest
+#       of the day session; from then on the exchange's front month — what
+#       `TXFR1` names — is the next one.
+EXPIRY_CLOSE = time(13, 30)
+
+
+def exchange_front_month(ts: Any) -> str:
+    """The month the EXCHANGE calls front at `ts` — `TXFR1`'s month, not ours.
+
+    Not `front_month_at`: that is the run's roll schedule, which moves a day
+    early. Between our roll and the expiry the run holds a month the exchange
+    still treats as the back one, and this is how to tell that window apart.
+    """
+    this_month = f"{ts.year}{ts.month:02d}"
+    expiry = datetime.combine(last_trading_day(this_month), EXPIRY_CLOSE)
+    if datetime(ts.year, ts.month, ts.day, ts.hour, ts.minute) < expiry:
+        return this_month
+    return _next_month(this_month)
+
 
 def last_trading_day(yyyymm: str) -> date:
     """The third Wednesday of a delivery month — TAIFEX's last trading day."""

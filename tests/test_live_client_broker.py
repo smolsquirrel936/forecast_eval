@@ -365,3 +365,27 @@ def test_the_heartbeat_interval_is_well_inside_the_owners_timeout():
     from forecast_eval.live.broker.client import DEFAULT_HEARTBEAT_SECONDS
     from forecast_eval.live.owner_process import DEFAULT_DEPLOYMENT_TIMEOUT
     assert DEFAULT_DEPLOYMENT_TIMEOUT >= 3 * DEFAULT_HEARTBEAT_SECONDS
+
+
+# ---- the month an intent is for (2026-10-20) --------------------------------
+
+def test_submit_names_the_month_this_deployment_trades(tmp_path):
+    c = _client(tmp_path, contract_code="TXFJ6")
+    c.submit(_order(), current_price=100.0)
+    (record,) = JsonlStream(intent_path(tmp_path, "day")).read_new()
+    assert record["contract"] == "TXFJ6"
+
+
+def test_a_roll_moves_the_month_later_intents_name(tmp_path):
+    c = _client(tmp_path, contract_code="TXFJ6")
+    c.switch_contract(type("C", (), {"code": "TXFR2", "target_code": "TXFK6"})())
+    c.submit(_order(), current_price=100.0)
+    (record,) = JsonlStream(intent_path(tmp_path, "day")).read_new()
+    assert record["contract"] == "TXFK6", "the dated month, never the alias"
+
+
+def test_no_month_sends_no_field(tmp_path):
+    c = _client(tmp_path)
+    c.submit(_order(), current_price=100.0)
+    (record,) = JsonlStream(intent_path(tmp_path, "day")).read_new()
+    assert "contract" not in record

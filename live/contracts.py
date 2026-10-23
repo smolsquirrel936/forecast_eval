@@ -81,6 +81,19 @@ def contract_codes(contract: Any) -> set:
                              getattr(contract, "target_code", None)) if c}
 
 
+def month_code(contract: Any) -> str:
+    """The dated code of the month this contract trades, e.g. `'TXFK6'`."""
+    # Tech: `target_code` when the object is an alias, else its own `code`.
+    # Why:  the owner places each deployment's order on the month that
+    #       deployment holds (2026-10-20, simtrade_operations §11), so the two
+    #       processes need one name for a month that survives the wire. The alias
+    #       cannot be it — `TXFR1` names October on one side of a roll and
+    #       November on the other — and the dated code is what `resolve_txf`
+    #       accepts (`TXF202611` does not resolve; `TXFK6` does).
+    return str(getattr(contract, "target_code", None)
+               or getattr(contract, "code", None) or "")
+
+
 def describe_contract_match(contract: Any, captured: Any) -> Tuple[str, bool]:
     """Compare a resolved contract against codes seen in a capture."""
     # Tech: return a human note and whether this is a genuine mismatch — genuine

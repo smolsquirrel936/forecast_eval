@@ -99,6 +99,7 @@ class TickAggregator:
         self.n_late_dropped = 0
         self.n_bars_emitted = 0
         self.n_bars_dropped_off_session = 0
+        self.n_buckets_discarded = 0
 
     # ---- ingest ------------------------------------------------------------
 
@@ -185,6 +186,20 @@ class TickAggregator:
         if now < self._bucket_start + BAR_LENGTH + self.flush_grace:
             return []
         return self._close()
+
+    def discard_open(self) -> None:
+        """Drop the half-built bar without emitting it."""
+        # Tech: clear the open bucket; `_last_emitted` is left alone, so the same
+        #       minute can reopen from the next accepted print.
+        # Why:  a contract roll (`LiveRuntime.switch_contract`). The bucket holds
+        #       the old month's prints, and closing it would hand the loop a bar
+        #       ~160 points from the month now traded. The minute itself is not
+        #       finished, so it is not marked emitted: the new month's prints in
+        #       it still make that minute's bar.
+        self._bucket_start = None
+        self._last_price = None
+        self._volume = 0
+        self.n_buckets_discarded += 1
 
     # ---- internals ---------------------------------------------------------
 

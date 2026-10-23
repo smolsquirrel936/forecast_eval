@@ -35,7 +35,7 @@ no `name`, so the dispatch falls back to `str(state)` and the ambiguity is real.
 
 | where | compares | a disagreement means |
 |---|---|---|
-| here, `reconcile()` | `OrderBook.account_net` vs `list_positions` | a real desync with the venue |
+| here, `reconcile()` | `OrderBook.net_in(code)` vs `list_positions`, per month the owner knows | a real desync with the venue |
 | each deployment | its `Trader.position` vs `net_for(slug)`, sent as a `position` event | an event was lost on the wire |
 
 §16 moved the first comparison onto the sum of the fill ledgers because no single
@@ -80,6 +80,30 @@ still booked and forwarded, and positions are still published. That is the
 difference from the old exit: the fill being disputed still lands. The first
 reason is latched, and nothing unfreezes in-process; as with
 [state.py](state.md)'s rails, a dispute is settled by a person and a restart.
+
+## Each order goes to the month its intent names (2026-10-20)
+
+The owner resolved `--contract` once and placed every order on it. At the
+October → November roll the deployments switched to `TXFK6`, but the owner kept
+placing on `TXFJ6`. Night's and fullday's re-opens were therefore October trades
+(night's BUY closed fullday's SELL at the venue), and the summed reconcile read
+a flat account as agreeing ([simtrade_operations §11](../simtrade_operations.md)).
+
+- **Placement.** `_submit` reads the intent's `contract`
+  ([ClientBroker](broker/client.md)) and places on that month's contract.
+  `resolve` (from `owner_cli`, `resolve_txf(api, code)`) is called once per new
+  month and cached. An intent with no `contract` uses the start-up month. A
+  month that cannot be resolved is answered `rejected` and not placed, because
+  trading the wrong month is the defect itself.
+- **Sizing.** `plan_legs` uses `net_in(code)`, so a November order never
+  `Cover`s an October lot.
+- **Reconcile.** Each known month is compared on its own, and the in-flight
+  grace only counts legs and recent deals in that month. Messages name the
+  month (`... in TXFJ6`) only once the owner knows more than one, so
+  single-month alerts read as before.
+- **Seeding.** The ledgers carry no month, so `seed_from` books the whole seed
+  to the start-up month. `--contract` must still name the month the deployments
+  hold. A wrong one is refused by the start-up reconcile, not traded on.
 
 ## A restart does not replay the intent streams
 

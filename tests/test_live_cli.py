@@ -639,3 +639,22 @@ def test_the_client_banner_names_the_owner_not_the_venue():
 def test_the_offline_brokers_are_not_order_placing():
     assert set(cli.ORDER_PLACING_BROKERS).isdisjoint({"dryrun", "sim"})
     assert set(cli.ORDER_PLACING_BROKERS) <= set(cli.BROKERS)
+
+
+# ---- 2026-10-20: `_verify`'s tick half on a back month ----------------------
+
+def test_the_tick_check_is_skipped_on_a_month_the_exchange_still_calls_back():
+    # simtrade_operations §11: the false FATAL `session_unverified` at 14:59,
+    # and the 10-21 08:44 check it warned could repeat.
+    assert not cli._tick_check_applies("202611", datetime(2026, 10, 20, 14, 59))
+    assert not cli._tick_check_applies("202611", datetime(2026, 10, 21, 8, 44))
+
+
+def test_the_tick_check_applies_on_the_front_month():
+    assert cli._tick_check_applies("202610", datetime(2026, 10, 20, 14, 59))
+    assert cli._tick_check_applies("202611", datetime(2026, 10, 21, 14, 59))
+    assert cli._tick_check_applies("202611", datetime(2026, 11, 2, 8, 44))
+
+
+def test_a_month_that_cannot_be_read_keeps_the_tick_check():
+    assert cli._tick_check_applies("", datetime(2026, 10, 20, 14, 59))

@@ -495,11 +495,17 @@ def _main(args: Any, out_parent: Path, alerter: Alerter) -> int:
         contract, note = resolve_txf(api, args.contract)
         print(f"contract {note}")
 
+        # Tech: `resolve` turns a dated code from a deployment's intent into the
+        #       contract the owner places on.
+        # Why:  2026-10-20 (simtrade_operations §11) — the owner never rolled;
+        #       it now follows each deployment's month instead of holding one.
+        #       By code because `TXF202611` does not resolve and `TXFK6` does.
         owner = OwnerProcess(
             api, contract, directory=out_parent, slugs=args.slugs,
             fee_rate=args.fee_rate, tick_size=args.tick_size,
             flatten_aggression_ticks=args.flatten_aggression_ticks,
             recorder=recorder,
+            resolve=lambda code: resolve_txf(api, code)[0],
         )
         skipped = {s: n for s, n in owner.skipped_intents.items() if n}
         if skipped:

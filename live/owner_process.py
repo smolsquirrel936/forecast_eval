@@ -115,6 +115,7 @@ class OwnerProcess:
         clock: Callable[[], float] = time.monotonic,
         recorder: Any = None,
         on_anomaly: Optional[Callable[[str], None]] = None,
+        resolve: Optional[Callable[[str], Any]] = None,
     ) -> None:
         # Tech: hold the injected session objects, open both halves of the wire
         #       for every deployment, and resume each outbound sequence.
@@ -125,6 +126,19 @@ class OwnerProcess:
         #       make a continuation look like a duplicate stream (`intents.py`).
         self.api = api
         self.contract = contract
+        # Tech: every month this owner can place on, keyed by dated code, seeded
+        #       with the start-up contract; `resolve` adds one on first use.
+        # Why:  2026-10-20 (simtrade_operations §11) — the owner resolved
+        #       `--contract` once and placed every order on it, so night's and
+        #       fullday's roll re-opens went to October while both deployments
+        #       had rolled to November. Deployments roll at different instants
+        #       (day and fullday 12:45, night 15:30), so between them the
+        #       account holds two months and no single owner contract is right;
+        #       each submit names its month (`ClientBroker.contract_code`).
+        from .contracts import month_code
+        self.code = month_code(contract)
+        self._contracts: Dict[str, Any] = {self.code: contract}
+        self._resolve = resolve
         self.account = account if account is not None else getattr(
             api, "futopt_account", None)
         self._sj = sj
@@ -142,7 +156,7 @@ class OwnerProcess:
         self.reconcile_grace = reconcile_grace
         self._clock = clock
         self._mismatch_since: Optional[float] = None
-        self._recent: Deque[Tuple[float, int]] = deque()
+        self._recent: Deque[Tuple[float, int, str]] = deque()
         self.reconcile_note: Optional[str] = None
         self.frozen: Optional[str] = None
         # Tech: the observers are assigned BEFORE the book is constructed.
@@ -160,7 +174,8 @@ class OwnerProcess:
         #       for a diagnostic that only ever needs to distinguish 2 from 4.
         self.events_seen: Dict[str, int] = {}
         self.book = book if book is not None else OrderBook(
-            on_anomaly=self._anomaly, recorder=recorder)
+            on_anomaly=self._anomaly, recorder=recorder,
+            default_code=self.code)
 
         self._in: Dict[str, JsonlStream] = {
             slug: JsonlStream(intent_path(directory, slug))
@@ -240,7 +255,12 @@ class OwnerProcess:
             self.book.seed_slug_net(slug, net)
             self.book.seed_slug_entry(slug, entry)
             total += net
-        self.book.seed_net(total)
+        # Tech: the whole seed is booked to the start-up month.
+        # Why:  the ledgers carry no month, so this is the one assumption a
+        #       restart makes — and why `--contract` must name the month the
+        #       deployments hold (simtrade_operations §6.5). A wrong one is
+        #       refused by the start-up reconcile rather than traded on.
+        self.book.seed_net(total, code=self.code)
 
     # ---- the intent side ---------------------------------------------------
 
@@ -302,17 +322,58 @@ class OwnerProcess:
             self._anomaly(f"{slug}: malformed submit intent: {intent!r} ({exc!r})")
             return
 
-        legs = plan_legs(order.side, order.quantity, self.book.account_net)
+        # Tech: the month this order is for — the intent's, or ours when it
+        #       names none — and the contract object that trades it.
+        # Why:  see `_contracts`. A month that cannot be resolved is refused,
+        #       not placed on ours: trading the wrong month is the 10-20 defect,
+        #       and the rejection halts the deployment where a person sees it.
+        code = str(intent.get("contract") or self.code)
+        contract = self._contract_for(code)
+        if contract is None:
+            self._emit(slug, "rejected",
+                       reason=f"owner cannot resolve contract {code!r}")
+            return
+
+        # Tech: size the legs against the net in THIS month.
+        # Why:  §18.9's crossing rule is about lots the order can close, and a
+        #       November order cannot close an October lot.
+        legs = plan_legs(order.side, order.quantity, self.book.net_in(code))
         if not legs:
             self._anomaly(f"{slug}: submit planned no legs: {intent!r}")
             return
 
         urgent = bool(intent.get("urgent"))
         for leg in legs:
-            self._place(slug, order, leg, urgent=urgent)
+            self._place(slug, order, leg, urgent=urgent,
+                        contract=contract, code=code)
+
+    def _contract_for(self, code: str) -> Optional[Any]:
+        # Tech: the contract object for a dated code — cached, else resolved once
+        #       through `resolve` and kept; None when it cannot be.
+        # Why:  the roll is the only time a new month appears, and it appears in
+        #       a deployment's intent before the owner has heard of it. A failed
+        #       resolve is recorded and answered with None rather than raised, so
+        #       one bad intent cannot take down the owner of three deployments.
+        if code in self._contracts:
+            return self._contracts[code]
+        if self._resolve is None:
+            if self.recorder is not None:
+                self.recorder.record("owner_contract_unknown", code=code)
+            return None
+        try:
+            contract = self._resolve(code)
+        except Exception as exc:                        # noqa: BLE001
+            if self.recorder is not None:
+                self.recorder.record("owner_contract_unresolved", code=code,
+                                     error=repr(exc))
+            return None
+        self._contracts[code] = contract
+        if self.recorder is not None:
+            self.recorder.record("owner_contract_added", code=code)
+        return contract
 
     def _place(self, slug: str, order: OrderEvent, leg: Leg, *,
-               urgent: bool) -> None:
+               urgent: bool, contract: Any = None, code: str = "") -> None:
         # Tech: build the venue order for one leg, send it, and register whatever
         #       correlation ids came back.
         # Why:  `Leg.octype` is mapped onto the venue's enum here and nowhere else
@@ -334,7 +395,8 @@ class OwnerProcess:
             account=self.account,
         )
         try:
-            trade = self.api.place_order(self.contract, venue_order)
+            trade = self.api.place_order(
+                self.contract if contract is None else contract, venue_order)
         except Exception as exc:                        # noqa: BLE001
             self._anomaly(f"{slug}: place_order raised: {exc!r}")
             self._emit(slug, "rejected", reason=f"place_order raised: {exc!r}")
@@ -343,6 +405,7 @@ class OwnerProcess:
             slug, order, leg, trade=trade,
             order_id=_dig(trade, "order", "id"),
             ordno=_dig(trade, "order", "ordno"),
+            code=code or self.code,
         )
         # Tech: record which deployment each venue order belongs to.
         # Why:  `ordno -> slug` lived only in memory, so when the owner stopped
@@ -352,6 +415,7 @@ class OwnerProcess:
             self.recorder.record(
                 "owner_placed", slug=slug, side=order.side, price=price,
                 octype=leg.octype, quantity=leg.quantity,
+                contract=code or self.code,
                 order_id=working.order_id, ordno=working.ordno)
 
     def _cancel(self, slug: str) -> None:
@@ -467,6 +531,11 @@ class OwnerProcess:
         price = float(msg.get("price", 0.0))
         quantity = int(msg.get("quantity", 0))
         action = str(msg.get("action", ""))
+        # Tech: the month of the leg this deal is for, read before booking.
+        # Why:  `_recent` keeps the race per month (`_in_flight_explains`), and
+        #       a fully filled leg is finished by `on_deal` itself.
+        leg = self.book.match(msg.get("trade_id"), msg.get("ordno"))
+        code = leg.code if leg is not None and leg.code else self.code
         booked = self.book.on_deal(
             ordno=msg.get("ordno"),
             trade_id=msg.get("trade_id"),
@@ -487,7 +556,7 @@ class OwnerProcess:
         #       of the venue, and the leg is already finished by then.
         self._recent.append((self._clock(),
                              fill.quantity if fill.side == "BUY"
-                             else -fill.quantity))
+                             else -fill.quantity, code))
         self._emit(slug, "fill", timestamp=fill.timestamp.isoformat(),
                    side=fill.side, fill_price=fill.fill_price,
                    quantity=fill.quantity, fee=fill.fee)
@@ -527,8 +596,8 @@ class OwnerProcess:
         True also covers a difference that orders still in flight explain, for
         up to `reconcile_grace` seconds; `reconcile_note` then says so.
         """
-        # Tech: read `list_positions` for our contract, compare against
-        #       `OrderBook.account_net`, and raise an anomaly on a disagreement.
+        # Tech: read `list_positions`, compare each month we know against
+        #       `OrderBook.net_in`, and raise an anomaly on a disagreement.
         # Why:  this is the check §16 could only approximate from three files on
         #       disk. Made here it is exact and current, which is what retires
         #       §16's freshness race. A venue that will not answer degrades to
@@ -543,12 +612,30 @@ class OwnerProcess:
             return None
         if positions is None:
             return None
-        venue = net_position(positions, contract_codes(self.contract))
-        booked = self.book.account_net
+        # Tech: compare each month this owner knows on its own — the venue's
+        #       rows for that month against the book's net in it.
+        # Why:  2026-10-20 — summed across months, night's October BUY against
+        #       fullday's October SELL read as an agreeing 0 while both were in
+        #       the wrong month. Per month, a lot in the wrong one is a desync.
         split = {s: self.book.net_for(s) for s in self.slugs}
-        if venue == booked:
+        many = len(self._contracts) > 1
+        off: Dict[str, Tuple[int, int]] = {}
+        for code, contract in self._contracts.items():
+            venue = net_position(positions, contract_codes(contract))
+            booked = self.book.net_in(code)
+            if venue != booked:
+                off[code] = (booked, venue)
+
+        def _where(code: str) -> str:
+            # Tech: name the month only when there is more than one.
+            # Why:  the single-month messages stay exactly what operators and
+            #       the alert history already read.
+            return f" in {code}" if many else ""
+
+        if not off:
             if self._mismatch_since is not None and self.recorder is not None:
-                self.recorder.record("owner_reconcile_settled", net=venue)
+                self.recorder.record("owner_reconcile_settled",
+                                     net=self.book.account_net)
             self._mismatch_since = None
             self.reconcile_note = None
             return True
@@ -560,31 +647,38 @@ class OwnerProcess:
         #       desync. The grace is bounded because a callback that never comes
         #       IS one (§23.6 measured closes that filled and were never booked).
         now = self._clock()
-        if self._in_flight_explains(venue - booked, now):
+        if all(self._in_flight_explains(venue - booked, now, code)
+               for code, (booked, venue) in off.items()):
             if self._mismatch_since is None:
                 self._mismatch_since = now
             waited = now - self._mismatch_since
             if waited <= self.reconcile_grace:
-                self.reconcile_note = (
-                    f"account mirror {booked} != venue {venue}, explained by "
-                    f"orders in flight — waiting {waited:.0f}s of "
-                    f"{self.reconcile_grace:.0f}s")
+                self.reconcile_note = "; ".join(
+                    f"account mirror {booked} != venue {venue}{_where(code)}, "
+                    f"explained by orders in flight — waiting {waited:.0f}s of "
+                    f"{self.reconcile_grace:.0f}s"
+                    for code, (booked, venue) in off.items())
                 if self.recorder is not None:
-                    self.recorder.record("owner_reconcile_pending",
-                                         booked=booked, venue=venue,
-                                         waited=waited, per_deployment=split)
+                    for code, (booked, venue) in off.items():
+                        self.recorder.record("owner_reconcile_pending",
+                                             booked=booked, venue=venue,
+                                             contract=code, waited=waited,
+                                             per_deployment=split)
                 return True
-            self._anomaly(
-                f"account mirror {booked} != venue {venue} for {waited:.0f}s, "
-                f"past the {self.reconcile_grace:.0f}s grace for fills in "
-                f"flight (per deployment: {split})")
+            for code, (booked, venue) in off.items():
+                self._anomaly(
+                    f"account mirror {booked} != venue {venue}{_where(code)} "
+                    f"for {waited:.0f}s, past the {self.reconcile_grace:.0f}s "
+                    f"grace for fills in flight (per deployment: {split})")
             return False
-        self._anomaly(
-            f"account mirror {booked} != venue {venue} "
-            f"(per deployment: {split})")
+        for code, (booked, venue) in off.items():
+            self._anomaly(
+                f"account mirror {booked} != venue {venue}{_where(code)} "
+                f"(per deployment: {split})")
         return False
 
-    def _in_flight_explains(self, diff: int, now: float) -> bool:
+    def _in_flight_explains(self, diff: int, now: float,
+                            code: Optional[str] = None) -> bool:
         # Tech: True when `diff` (venue minus book) fits inside the unbooked
         #       remainder of working legs on its side, plus deals booked within
         #       the grace on the opposite side.
@@ -596,11 +690,13 @@ class OwnerProcess:
         #       ours explains, and must not be waited out.
         while self._recent and now - self._recent[0][0] > self.reconcile_grace:
             self._recent.popleft()
+        code = self.code if code is None else code
         sign = 1 if diff > 0 else -1
         in_flight = sum(w.remaining for w in self.book.all_working()
-                        if (1 if w.order.side == "BUY" else -1) == sign)
-        lagging = sum(abs(s) for _, s in list(self._recent)
-                      if (1 if s > 0 else -1) == -sign)
+                        if (1 if w.order.side == "BUY" else -1) == sign
+                        and (w.code or self.code) == code)
+        lagging = sum(abs(s) for _, s, c in list(self._recent)
+                      if (1 if s > 0 else -1) == -sign and c == code)
         return abs(diff) <= in_flight + lagging
 
     def freeze(self, reason: str) -> None:
