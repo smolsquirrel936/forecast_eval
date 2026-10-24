@@ -122,5 +122,21 @@ because the deployments had rolled and nothing told the owner
 ([simtrade_operations §11](../../simtrade_operations.md)). With no code set, no
 field is sent, and the owner uses its own start-up month.
 
+## `settle` — a lot the exchange settled at expiry
+
+`settle(signed_qty, *, price, timestamp)` writes a `settle` intent for the month
+currently stamped. `cli._apply_roll` calls it when `RollWatch` caught an expiry
+with a lot still open, after `LiveRuntime.settle_rolled_leg` and before
+`switch_contract`, so the intent names the month that expired. The owner takes
+the lot off its book and answers `settled` ([owner_process](../owner_process.md)).
+
+Until that answer, `broker_position()` and `broker_position_detail()` return
+None, so the rail skips its comparison: the owner's earlier `position` reports
+predate the settlement, and comparing one against the settled mirror would halt
+on the wire's lag. The stream is ordered, so every report after `settled`
+includes it. The wait is bounded by `owner_timeout`; past it the run halts with
+`owner did not confirm the settlement of <code>`, because an owner that ignores
+the intent (one older than it) has not settled.
+
 ## Related
 [live/intents.py](../intents.md) · [live/broker/base.py](base.md) · [live/broker/shioaji.py](shioaji.md) · [live/state.py](../state.md) · [STRATEGY_SPLIT_PLAN.md](../../../STRATEGY_SPLIT_PLAN.md)

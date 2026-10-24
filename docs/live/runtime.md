@@ -28,7 +28,7 @@ first live decision, and only the first is obvious.
 | `adopt_position(*, timestamp, fallback=None)` | method | seed both mirrors from the venue's held position — or from `fallback` when the broker has no venue — or `None` when flat; raises when the state cannot be adopted |
 | `venue_position` | attribute | what the venue answered at start-up; `None` when none was asked |
 | `fetch_warmup_bars(api, contract, start, end, *, cache_path=None, front_month_at=None)` | method | [fetch_bars_continuous](backfill.md) with *this* runtime's policy — the caller never picks one; `contract` may be a list, spliced on volume |
-| `settle_rolled_leg(*, price, timestamp, session="NIGHT")` | method | close the expiring month in both mirrors and arm the same exposure for re-entry (§2.6) |
+| `settle_rolled_leg(*, price, timestamp, session=None)` | method | close the expiring month in both mirrors, add the settlement to `loop.fills` (so the ledger and `trades.csv` see it), and arm the same exposure for re-entry (§2.6) |
 | `request_roll(now=None)` / `resume_roll(now=None)` | methods | the scheduled roll's two halves — close on the old month, then re-open on the new once the caller has switched |
 | `switch_contract(codes)` | method | from now on, only prints carrying `codes` build bars. It also discards the half-built bar and clears the ladder's reference bar, so the re-open is priced from the new month (2026-10-20). Prints with no code still pass, and before any roll nothing is filtered |
 | `n_foreign_dropped` | attribute | prints of another month that arrived after a switch; captured but never aggregated |

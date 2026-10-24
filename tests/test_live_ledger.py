@@ -219,3 +219,101 @@ def test_open_position_averages_what_is_left_open():
              _f("2026-09-01 16:02", "SELL", 105.0)]
     held = open_position(fills)
     assert (held.signed_qty, held.avg_price) == (1, 110.0)   # FIFO closed the 100
+
+
+# ---- the month each row traded (2026-10-20, simtrade_operations §11) --------
+#
+# The owner seeds a restart from these files, and between two deployments' rolls
+# the account holds two months. A row that does not say its month leaves the
+# owner to assume one: its own `--contract`, which is why every restart in that
+# window needed a dated code by hand.
+
+import csv as _csv
+
+
+def test_each_row_carries_the_month_it_traded(tmp_path):
+    led = FillLedger(tmp_path / "fills_night.csv", soak_id="s", contract="TXFJ6")
+    led.sync([_f("2026-10-13 22:04", "BUY", 48760.0)])
+    led.contract = "TXFK6"
+    led.sync([_f("2026-10-13 22:04", "BUY", 48760.0),
+              _f("2026-10-20 15:40", "BUY", 46581.0)])
+    rows = pd.read_csv(tmp_path / "fills_night.csv")
+    assert list(rows["contract"]) == ["TXFJ6", "TXFK6"]
+
+
+def test_replay_by_month_keeps_each_month_apart(tmp_path):
+    led = FillLedger(tmp_path / "fills_night.csv", contract="TXFJ6")
+    led.sync([_f("2026-10-13 22:04", "BUY", 48760.0),
+              _f("2026-10-20 15:39", "SELL", 46420.0)])
+    led.contract = "TXFK6"
+    led.sync([_f("2026-10-13 22:04", "BUY", 48760.0),
+              _f("2026-10-20 15:39", "SELL", 46420.0),
+              _f("2026-10-20 15:40", "BUY", 46581.0)])
+    months = FillLedger(tmp_path / "fills_night.csv").replay_by_month()
+    assert {code: net_position(f) for code, f in months.items()} == {
+        "TXFJ6": 0, "TXFK6": 1}
+
+
+def _legacy(path, rows):
+    """A ledger as written before the `contract` column."""
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = _csv.writer(fh)
+        w.writerow(LEDGER_COLUMNS[:-1])
+        for ts, side, px in rows:
+            w.writerow([ts, side, px, 1, 0.0, "s"])
+
+
+def test_a_ledger_from_before_the_column_replays_under_no_month(tmp_path):
+    path = tmp_path / "fills_night.csv"
+    _legacy(path, [("2026-10-20 15:40", "BUY", 46581.0)])
+    assert list(FillLedger(path).replay_by_month()) == [""]
+    assert net_position(FillLedger(path).replay()) == 1
+
+
+def test_stamp_months_gives_unstamped_rows_the_held_month(tmp_path):
+    """The open lot in old rows is the one the restarted deployment adopts, so
+    it is on the month that deployment holds; closed pairs net to zero on any
+    one month."""
+    path = tmp_path / "fills_night.csv"
+    _legacy(path, [("2026-10-13 22:04", "BUY", 48760.0),
+                   ("2026-10-20 15:39", "SELL", 46420.0),
+                   ("2026-10-20 15:40", "BUY", 46581.0)])
+    led = FillLedger(path)
+    assert led.stamp_months("TXFK6") == 3
+    rows = pd.read_csv(path)
+    assert list(rows.columns) == LEDGER_COLUMNS
+    assert set(rows["contract"]) == {"TXFK6"}
+    assert led.stamp_months("TXFK6") == 0            # already stamped throughout
+
+
+def test_stamp_months_leaves_a_stamped_row_alone(tmp_path):
+    path = tmp_path / "fills_night.csv"
+    led = FillLedger(path, contract="TXFJ6")
+    led.sync([_f("2026-10-13 22:04", "BUY", 48760.0)])
+    with path.open("a", newline="", encoding="utf-8") as fh:
+        _csv.writer(fh).writerow(["2026-10-20 15:39", "SELL", 46420.0, 1, 0.0,
+                                  "", ""])
+    assert FillLedger(path).stamp_months("TXFK6") == 1
+    assert list(pd.read_csv(path)["contract"]) == ["TXFJ6", "TXFK6"]
+
+
+def test_appending_to_an_old_ledger_stamps_it_first(tmp_path):
+    """A seven-field row under a six-field header is a file pandas refuses."""
+    path = tmp_path / "fills_night.csv"
+    _legacy(path, [("2026-10-20 15:40", "BUY", 46581.0)])
+    led = FillLedger(path, contract="TXFK6")
+    inherited = led.replay()
+    led.sync(inherited + [_f("2026-10-21 09:00", "SELL", 46600.0)])
+    rows = pd.read_csv(path)
+    assert list(rows["contract"]) == ["TXFK6", "TXFK6"]
+
+
+def test_an_old_ledger_with_no_month_to_stamp_keeps_its_columns(tmp_path):
+    path = tmp_path / "fills_night.csv"
+    _legacy(path, [("2026-10-20 15:40", "BUY", 46581.0)])
+    led = FillLedger(path)
+    inherited = led.replay()
+    led.sync(inherited + [_f("2026-10-21 09:00", "SELL", 46600.0)])
+    rows = pd.read_csv(path)
+    assert list(rows.columns) == LEDGER_COLUMNS[:-1]
+    assert len(rows) == 2

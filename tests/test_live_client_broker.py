@@ -389,3 +389,46 @@ def test_no_month_sends_no_field(tmp_path):
     c.submit(_order(), current_price=100.0)
     (record,) = JsonlStream(intent_path(tmp_path, "day")).read_new()
     assert "contract" not in record
+
+
+# ---- settling a lot the exchange settled at expiry -------------------------
+
+class _Tick:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+def test_settle_names_the_held_month_and_the_size(tmp_path):
+    c = _client(tmp_path, contract_code="TXFJ6")
+    c.settle(-1, price=46420.0, timestamp=TS)
+    (record,) = JsonlStream(intent_path(tmp_path, "day")).read_new()
+    assert (record["kind"], record["contract"], record["signed_qty"]) == (
+        "settle", "TXFJ6", -1)
+    assert record["price"] == 46420.0
+
+
+def test_positions_from_before_the_owner_settled_are_not_compared(tmp_path):
+    owner = _owner(tmp_path)
+    owner.append("position", signed_qty=1, avg_price=100.0)
+    c = _client(tmp_path, contract_code="TXFJ6")
+    c.settle(1, price=100.0, timestamp=TS)
+    owner.append("position", signed_qty=1, avg_price=100.0)   # written earlier
+    assert c.broker_position() is None
+    owner.append("settled", contract="TXFJ6", signed_qty=1)
+    owner.append("position", signed_qty=0)
+    assert c.broker_position() == 0
+
+
+def test_an_owner_that_never_confirms_a_settlement_halts_the_run(tmp_path):
+    rails, clock = _Rails(), _Tick()
+    owner = _owner(tmp_path)
+    c = _client(tmp_path, contract_code="TXFJ6", rails=rails, clock=clock)
+    c.settle(1, price=100.0, timestamp=TS)
+    clock.t += c.owner_timeout + 1
+    owner.append("position", signed_qty=1, avg_price=100.0)
+    assert c.broker_position() is None
+    assert any("did not confirm the settlement of TXFJ6" in r
+               for r, _ in rails.halts)

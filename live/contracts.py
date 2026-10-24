@@ -94,6 +94,34 @@ def month_code(contract: Any) -> str:
                or getattr(contract, "code", None) or "")
 
 
+# Tech: a dated futures code — root, month letter A (January) to L (December),
+#       last digit of the year: `TXFK6` is November 2026.
+# Why:  the month has to be read off the code alone when the contract object is
+#       gone: an expired month drops out of the contract table, and a ledger row
+#       or an intent carries only the code.
+_DATED = re.compile(r"^[A-Z]{3}([A-L])(\d)$")
+
+
+def code_month(code: Any, today: Any) -> str:
+    """The delivery month a dated code names, e.g. `'TXFK6'` -> `'202611'`.
+
+    `''` for anything that is not a dated code, such as the alias `TXFR1`.
+    """
+    # Tech: decode the month letter, then take the year ending in the code's
+    #       digit that lies within five years of `today`.
+    # Why:  the code carries one digit of year. TXF lists months about a year
+    #       out, so the nearest decade is the only one a held or listed month
+    #       can be in.
+    m = _DATED.match(str(code or ""))
+    if m is None:
+        return ""
+    month = ord(m.group(1)) - ord("A") + 1
+    digit = int(m.group(2))
+    year = next(y for y in range(today.year - 5, today.year + 5)
+                if y % 10 == digit)
+    return f"{year}{month:02d}"
+
+
 def describe_contract_match(contract: Any, captured: Any) -> Tuple[str, bool]:
     """Compare a resolved contract against codes seen in a capture."""
     # Tech: return a human note and whether this is a genuine mismatch — genuine

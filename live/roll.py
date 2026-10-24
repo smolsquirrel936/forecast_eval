@@ -218,6 +218,17 @@ def exchange_front_month(ts: Any) -> str:
     return _next_month(this_month)
 
 
+def month_expired(yyyymm: str, now: Any) -> bool:
+    """Has delivery month `yyyymm` stopped trading at `now`?"""
+    # Tech: true once the exchange's front month is later than `yyyymm`.
+    # Why:  an expired month is cash-settled by the exchange, so no order can
+    #       touch it and the venue's report of it no longer bears on anything we
+    #       place. The owner uses this to settle its book and to stop comparing
+    #       that month (owner_process). Same calendar as the roll, holidays not
+    #       modelled (`roll_at`).
+    return bool(yyyymm) and yyyymm < exchange_front_month(now)
+
+
 def last_trading_day(yyyymm: str) -> date:
     """The third Wednesday of a delivery month — TAIFEX's last trading day."""
     # Tech: enumerate the month's Wednesdays and take the third.

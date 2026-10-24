@@ -188,3 +188,28 @@ def test_the_description_carries_the_resolved_code_not_just_the_alias():
     Surfacing both at start-up is what made that mismatch visible (§7.2)."""
     _, note = resolve_txf(_V1Api(), "TXFR1")
     assert "TXFR1" in note and "TXFH6" in note and "202608" in note
+
+
+# ---- reading the month off a dated code -------------------------------------
+
+from datetime import date as _date
+
+from forecast_eval.live.contracts import code_month
+
+
+@pytest.mark.parametrize("code, month", [
+    ("TXFJ6", "202610"), ("TXFK6", "202611"), ("TXFH6", "202608"),
+    ("TXFA7", "202701"), ("TXFL6", "202612"),
+])
+def test_code_month_reads_the_letter_and_the_year(code, month):
+    assert code_month(code, _date(2026, 10, 24)) == month
+
+
+def test_code_month_takes_the_nearest_decade():
+    assert code_month("TXFC9", _date(2030, 1, 5)) == "202903"
+    assert code_month("TXFA1", _date(2030, 12, 5)) == "203101"
+
+
+@pytest.mark.parametrize("code", ["TXFR1", "TXFR2", "", None, "TXF202611"])
+def test_code_month_is_empty_for_anything_not_dated(code):
+    assert code_month(code, _date(2026, 10, 24)) == ""

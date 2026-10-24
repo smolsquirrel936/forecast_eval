@@ -88,9 +88,10 @@ instant a fill is booked** — §18.10 measured `list_positions` catching up in
 ~0.1 s, which is fast but is still after a decision the owner may already be
 making.
 
-`seed_net()` sets it without booking a fill: a restart adopts from §16's ledger
-sum, and adoption is not a trade. A fill would reach a deployment's `poll_fills`
-and book a phantom trade into its `Portfolio`.
+`seed_net()` and `seed_months()` set it without booking a fill: a restart adopts
+from §16's ledgers, and adoption is not a trade. A fill would reach a
+deployment's `poll_fills` and book a phantom trade into its `Portfolio`.
+`seed_months({(slug, code): net})` is the per-month form the owner uses.
 
 ## Nets are kept per month, too
 
@@ -100,7 +101,16 @@ net. A caller that names no month means `default_code`, the owner's start-up
 month. Between the deployments' roll instants (day and fullday at 12:45, night
 at 15:30) the account holds two months at once, and a lot on one cannot cover a
 lot on the other. So `plan_legs` is sized against `net_in`, never against the
-total.
+total. `held_in(slug, code)` is one deployment's net in one month.
+
+## `settle` takes an expired lot off the book
+
+A lot carried past its month's expiry (the scheduled roll missed, so `RollWatch`
+caught the expiry) is cash-settled by the exchange with no deal, so no
+`on_deal` would ever remove it. `settle(slug, code)` zeroes that deployment's
+net in that month and moves its total, the month's net and the account net by
+the same amount. It returns the size taken, records `owner_settled`, and books
+no fill: the deployment has already settled its own mirror.
 
 ## Cancel keeps the leg
 

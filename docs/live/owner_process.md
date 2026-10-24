@@ -101,9 +101,42 @@ a flat account as agreeing ([simtrade_operations §11](../simtrade_operations.md
   grace only counts legs and recent deals in that month. Messages name the
   month (`... in TXFJ6`) only once the owner knows more than one, so
   single-month alerts read as before.
-- **Seeding.** The ledgers carry no month, so `seed_from` books the whole seed
-  to the start-up month. `--contract` must still name the month the deployments
-  hold. A wrong one is refused by the start-up reconcile, not traded on.
+- **Seeding.** `seed_from` takes `{slug: {code: held}}` from the ledgers'
+  `contract` column ([ledger](ledger.md)) and seeds each lot on its own month,
+  so a restart between a roll and the old month's expiry no longer needs a
+  dated `--contract` (2026-10-24). Rows with no month, and a bare
+  `{slug: held}`, go to the start-up month as before. A lot on a month that has
+  expired is not seeded (`owner_seed_expired`): the exchange settled it, and a
+  deployment that was not running at expiry never wrote the settlement.
+  A seeded month is compared against the venue on its own code, resolved or
+  not.
+
+## A lot settled at expiry (2026-10-24)
+
+When the scheduled roll is missed, `RollWatch` catches the expiry and the
+exchange cash-settles the lot with no deal. The deployment settled its own
+mirror, but the owner's book kept the lot on the dead month, and its next
+reconcile flagged a desync that needed a person.
+
+- **The `settle` intent.** [ClientBroker](broker/client.md)`.settle` names the
+  month and size. `_settle` takes that deployment's lots off that month
+  (`OrderBook.settle`) and answers `settled` with the size it took. A size
+  that differs from the deployment's is an anomaly. It places nothing, so a
+  frozen owner still does it. It is not refused for a month the calendar still
+  calls live: the calendar has no holidays, and the alias moving is what the
+  deployment acted on (`owner_settle_unexpired` records the case).
+- **The re-open follows in the same stream**, so it is sized on a book that
+  already agrees: a `New` on the new month.
+- **Reconcile skips an expired month** (`roll.month_expired` on
+  `contracts.code_month`, read from the `wall_clock` argument). Between the
+  expiry and the deployment's `settle` the book still holds the lot, and when
+  the venue stops reporting it is unmeasured. Either way that gap would freeze
+  the owner over a settlement going as planned. A non-zero side is recorded as
+  `owner_reconcile_expired`, which is how that timing gets measured.
+- **Not covered:** a deployment that is not running at expiry sends no
+  `settle`, so a running owner keeps its lot on the expired month (not
+  compared, but still published to that deployment). Restart the owner before
+  that deployment; the restarted owner drops the lot when seeding.
 
 ## A restart does not replay the intent streams
 

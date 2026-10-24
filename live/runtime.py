@@ -470,6 +470,11 @@ class LiveRuntime:
         self.portfolio.apply_fill(fill, session=session)
         self.trader.on_fill(side, abs(held), fill_price=float(price),
                             bar_idx=-1, timestamp=timestamp)
+        # Tech: the settlement joins the loop's fill list.
+        # Why:  that list is what the ledger appends and `trades.csv` pairs.
+        #       Left out, the ledger read the settled lot and its re-open as two
+        #       open lots, and `roll_fills` named a timestamp no fill carried.
+        self.loop.fills.append(fill)
         self._roll_entry = held
         # Tech: the synthetic settlement counts as a roll leg.
         # Why:  it closes one contract and the re-entry opens another, which is

@@ -81,16 +81,39 @@ deliberately not a ledger row at all.
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
-| `FillLedger(path, *, soak_id)` | class | append this deployment's fills; replay the soak's |
+| `FillLedger(path, *, soak_id, contract)` | class | append this deployment's fills, each stamped with `contract`; replay the soak's |
 | `FillLedger.replay()` | method | the current soak's fills, in file order |
-| `FillLedger.sync(fills)` | method | append everything past the high-water mark |
+| `FillLedger.replay_by_month()` | method | the same rows as `{code: fills}`; rows with no month under `''` |
+| `FillLedger.stamp_months(code)` | method | give every row with no month `code`, adding the column if absent; returns the count |
+| `FillLedger.sync(fills)` | method | append everything past the high-water mark; an old six-column file is stamped first when `contract` is set |
 | `FillLedger.mark_written(n)` | method | hold the first `n` back from the file |
 | `FillLedger.summary()` | method | `fills_replayed` / `fills_appended` / `ledger_failures` |
 | `ledger_path(out_parent, policy)` | function | `fills_<slug>.csv`, keyed like the bar cache |
 | `net_position(fills)` | function | the signed lots a fill sequence leaves |
 | `open_position(fills)` | function | the lot a fill sequence leaves open, and its entry price |
 | `account_net_position(out_parent)` | function | signed lots **every** deployment's ledger says the ACCOUNT holds; `None` when absent or unreadable (§16) |
-| `LEDGER_COLUMNS` | constant | a `FillEvent`'s columns, plus `soak_id` |
+| `LEDGER_COLUMNS` | constant | a `FillEvent`'s columns, plus `soak_id` and `contract` (the only optional one) |
+
+## Each row names its month (2026-10-24)
+
+`contract` is the dated code the fill traded (`TXFK6`). A restarted owner seeds
+each deployment from these files ([owner_cli](owner_cli.md)), and between two
+deployments' rolls the account holds two months. Before the column, the owner
+booked every seeded lot to its own `--contract`, so each restart in that window
+needed a dated code by hand ([simtrade_operations §6.5](../simtrade_operations.md)).
+
+- The deployment sets `contract` at start-up and moves it in `cli._apply_roll`,
+  after syncing the old month's fills, so a roll's close and its re-open land
+  on their own months.
+- **Rows from before the column.** `cli.py` calls `stamp_months` at start-up with
+  the month it holds. Any lot still open in those rows is the one that run
+  adopts, so it is on that month, and closed pairs net to zero on any single
+  month. Left unstamped, the first stamped close of a lot opened in them would
+  split it across two months.
+- A reader that ignores the column (`account_net_position`, the flatten tool)
+  is unaffected. A writer with no month (`tools/session_artifacts.py`) keeps an
+  old six-column file at six columns, since a seven-field row under a six-field
+  header is a file pandas refuses to read.
 
 ## Why the schema check comes before the emptiness check
 

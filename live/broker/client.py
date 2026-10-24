@@ -25,6 +25,7 @@ against a book it can no longer see (§18.3 item 6).
 """
 from __future__ import annotations
 
+import time
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator, List, Optional
 
@@ -73,6 +74,7 @@ class ClientBroker(Broker):
         owner_timeout: float = DEFAULT_OWNER_TIMEOUT,
         heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
         contract_code: Optional[str] = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         # Tech: open both halves of the wire, resume the outbound sequence past
         #       anything already on disk, and hold the optional observers.
@@ -97,6 +99,11 @@ class ClientBroker(Broker):
         #       instants, so the month an order is for is the deployment's to
         #       say. None sends no field, which an owner reads as its own month.
         self.contract_code = contract_code
+        # Tech: the month of a `settle` the owner has not confirmed yet, and when
+        #       it was sent (`clock`); None when nothing is waiting.
+        # Why:  see `settle`.
+        self._clock = clock
+        self._settling: Optional[tuple] = None
 
         # Tech: this deployment's view of its own working order, its undelivered
         #       fills, and the last position the owner reported for it.
@@ -169,6 +176,25 @@ class ClientBroker(Broker):
         from ..contracts import month_code
         self.contract_code = month_code(contract) or None
 
+    def settle(self, signed_qty: int, *, price: float, timestamp: Any) -> None:
+        """Tell the owner the exchange settled this lot on the held month."""
+        # Tech: write a `settle` intent for the month currently stamped, and
+        #       stop answering `broker_position` until the owner's `settled`.
+        # Why:  `RollWatch` caught an expiry with a lot still open, and the
+        #       exchange cash-settled it with no deal (`cli._apply_roll`). The
+        #       mirror is settled locally, and without this the owner's book
+        #       kept the lot on the dead month. Called before `switch_contract`,
+        #       so the intent names the month that expired. Until the owner
+        #       confirms, its position reports predate the settlement: comparing
+        #       against one would halt on a desync that is only the wire's lag.
+        code = self.contract_code
+        self._out.append(
+            "settle", signed_qty=int(signed_qty), price=float(price),
+            timestamp=timestamp.isoformat(),
+            **({"contract": code} if code else {}),
+        )
+        self._settling = (code, self._clock())
+
     def cancel(self) -> None:
         # Tech: write a `cancel` intent; leave `_pending` set.
         # Why:  `base.Broker` is explicit that a live cancel is asynchronous, so
@@ -220,7 +246,7 @@ class ClientBroker(Broker):
         #       stale number, which would halt on a disagreement that is our own
         #       staleness rather than a real desync.
         self._drain()
-        if self._owner_is_gone():
+        if self._owner_is_gone() or self._awaiting_settled():
             return None
         return self._venue_position
 
@@ -230,9 +256,26 @@ class ClientBroker(Broker):
         #       (`base.HeldPosition`) — a resumed run that invented an entry would
         #       book a fictional number on the closing fill.
         self._drain()
-        if self._owner_is_gone():
+        if self._owner_is_gone() or self._awaiting_settled():
             return None
         return self._venue_detail
+
+    def _awaiting_settled(self) -> bool:
+        # Tech: True while a `settle` is unconfirmed; past `owner_timeout` the
+        #       wait ends in an anomaly.
+        # Why:  `settle`. The wait is bounded because an owner that keeps
+        #       talking but never confirms — one older than the `settle` intent
+        #       ignores it — has not settled, and that must halt rather than
+        #       switch the reconciliation off for good.
+        if self._settling is None:
+            return False
+        code, since = self._settling
+        if self._clock() - since <= self.owner_timeout:
+            return True
+        self._settling = None
+        self._anomaly(f"owner did not confirm the settlement of {code} within "
+                      f"{self.owner_timeout:.0f}s")
+        return True
 
     # ---- the wire ----------------------------------------------------------
 
@@ -255,7 +298,7 @@ class ClientBroker(Broker):
 
     def _apply(self, event: dict) -> None:
         # Tech: dispatch one event by kind.
-        # Why:  the four kinds are the whole protocol this end understands. An
+        # Why:  the five kinds are the whole protocol this end understands. An
         #       unknown kind is ignored rather than fatal, so the owner can add a
         #       message type without every deployment needing to be redeployed
         #       first; a *malformed* known kind is an anomaly, because that is a
@@ -272,6 +315,12 @@ class ClientBroker(Broker):
             self._pending = None
         elif kind == "position":
             self._apply_position(event)
+        elif kind == "settled":
+            # Tech: the owner has booked the settlement; position reports from
+            #       here on include it.
+            # Why:  the stream is ordered, so every `position` after this line
+            #       was written after the owner's book moved.
+            self._settling = None
         elif kind == "rejected":
             self._pending = None
             self._anomaly(f"owner rejected the order: {event.get('reason')!r}")
