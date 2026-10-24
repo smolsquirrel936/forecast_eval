@@ -302,7 +302,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--slugs", nargs="+", default=list(DEFAULT_SLUGS),
                     help="Deployment slugs to serve (default: day night "
                          "day_night).")
-    ap.add_argument("--contract", default="TXFR1")
+    ap.add_argument("--contract", default="TXFR1",
+                    help="The owner's start-up month: an intent naming no month "
+                         "is placed on it, and a ledger row carrying no month "
+                         "is seeded on it. Rows a deployment has stamped are "
+                         "seeded on their own month.")
     ap.add_argument("--credential", default="night",
                     help="Which credential from config/secrets.toml to log in "
                          "with. The owner holds the ONE session that places "
@@ -363,11 +367,16 @@ def _futures_account(api: Any, accounts: Any) -> Any:
     return None
 
 
-def seed_positions(out_parent: Any, slugs: List[str]) -> Dict[str, Any]:
-    """What each deployment's own ledger says it holds, and at what entry."""
+def seed_positions(out_parent: Any, slugs: List[str]) -> Dict[str, Dict[str, Any]]:
+    """What each deployment's own ledger says it holds, by month, at what entry.
+
+    `{slug: {code: HeldPosition}}`; a flat slug maps to `{}`, and rows with no
+    month group under `''`.
+    """
     # Tech: replay every row of each served slug's `fills_<slug>.csv`, across
-    #       all soak epochs, and reduce it with `ledger.open_position`. A slug
-    #       with no ledger, or one that closes flat, seeds 0.
+    #       all soak epochs, month by month, and reduce each month with
+    #       `ledger.open_position`. A slug with no ledger, or one that closes
+    #       flat, seeds nothing.
     # Why:  a deployment that has never traded has no ledger, and treating that
     #       as "unknown" would block a start-up that is completely normal.
     #       Size AND entry, because the owner publishes both and
@@ -376,19 +385,25 @@ def seed_positions(out_parent: Any, slugs: List[str]) -> Dict[str, Any]:
     #       held lot at avg_price 0.0: fullday's `--resume` adopted its +1 "@
     #       0.00", and closing it would have booked ~+50 000 points. Same reducer
     #       `--resume` replays the ledger with, so the two cannot disagree.
-    seeds: Dict[str, Any] = {}
+    #       By month because the owner's `--contract` names one month, and
+    #       between two deployments' rolls the account holds two (2026-10-20,
+    #       simtrade_operations §11).
+    seeds: Dict[str, Dict[str, Any]] = {}
     for slug in slugs:
-        held = open_position(
-            FillLedger(Path(out_parent) / f"fills_{slug}.csv").replay())
-        seeds[slug] = held if held is not None else 0
+        by_month = FillLedger(
+            Path(out_parent) / f"fills_{slug}.csv").replay_by_month()
+        seeds[slug] = {code: held for code, held in
+                       ((c, open_position(f)) for c, f in by_month.items())
+                       if held is not None}
     return seeds
 
 
-def _describe_seed(seeds: Dict[str, Any]) -> Dict[str, str]:
-    """`{slug: "+1 @ 49884.00"}` for the console; flat slugs read "0"."""
-    return {slug: (f"{held.signed_qty:+d} @ {held.avg_price:.2f}"
-                   if getattr(held, "signed_qty", 0) else "0")
-            for slug, held in seeds.items()}
+def _describe_seed(seeds: Dict[str, Dict[str, Any]]) -> Dict[str, str]:
+    """`{slug: "+1 @ 49884.00 TXFK6"}` for the console; flat slugs read "0"."""
+    return {slug: ", ".join(f"{held.signed_qty:+d} @ {held.avg_price:.2f}"
+                            + (f" {code}" if code else "")
+                            for code, held in months.items()) or "0"
+            for slug, months in seeds.items()}
 
 
 def main(argv=None) -> int:

@@ -31,7 +31,7 @@ from __future__ import annotations
 import threading
 import time
 from collections import deque
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Callable, Deque, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
@@ -116,6 +116,7 @@ class OwnerProcess:
         recorder: Any = None,
         on_anomaly: Optional[Callable[[str], None]] = None,
         resolve: Optional[Callable[[str], Any]] = None,
+        wall_clock: Callable[[], datetime] = datetime.now,
     ) -> None:
         # Tech: hold the injected session objects, open both halves of the wire
         #       for every deployment, and resume each outbound sequence.
@@ -155,6 +156,11 @@ class OwnerProcess:
         #       reads; append/popleft are atomic, and a reader takes a snapshot.
         self.reconcile_grace = reconcile_grace
         self._clock = clock
+        # Tech: Taipei wall time, for telling which months have expired.
+        # Why:  expiry is a calendar instant (`roll.month_expired`), which the
+        #       monotonic `clock` cannot express. Injected so a test can stand
+        #       on either side of one.
+        self._wall_clock = wall_clock
         self._mismatch_since: Optional[float] = None
         self._recent: Deque[Tuple[float, int, str]] = deque()
         self.reconcile_note: Optional[str] = None
@@ -235,32 +241,47 @@ class OwnerProcess:
         #       re-login must not re-announce positions.
         self.api.set_order_callback(self._on_event)
 
-    def seed_from(self, nets: Dict[str, int]) -> None:
-        # Tech: seed each deployment's net and the account total from a mapping.
+    def seed_from(self, nets: Dict[str, Any]) -> None:
+        # Tech: seed each deployment's net, by month, and the account total from
+        #       a mapping `{slug: held}` or `{slug: {code: held}}`.
         # Why:  a restart adopts from §16's per-deployment ledgers
-        #       (`ledger.net_position` on each `fills_<slug>.csv`), and the
-        #       account is their sum by construction. Seeding rather than
-        #       replaying fills is what keeps a restart from booking phantom
-        #       trades into three Portfolios.
-        total = 0
+        #       (`owner_cli.seed_positions`), and the account is their sum by
+        #       construction. Seeding rather than replaying fills is what keeps a
+        #       restart from booking phantom trades into three Portfolios.
+        months: Dict[Tuple[str, str], int] = {}
         for slug, held in nets.items():
-            # Tech: accept a bare signed size or anything carrying
-            #       `signed_qty`/`avg_price`.
-            # Why:  `ledger.open_position` already returns the second shape, so
-            #       the restart path hands its answer straight in without the
-            #       caller unpacking it — and a bare int stays usable for a seed
-            #       where no entry is known.
-            net = int(getattr(held, "signed_qty", held))
-            entry = float(getattr(held, "avg_price", 0.0) or 0.0)
-            self.book.seed_slug_net(slug, net)
-            self.book.seed_slug_entry(slug, entry)
-            total += net
-        # Tech: the whole seed is booked to the start-up month.
-        # Why:  the ledgers carry no month, so this is the one assumption a
-        #       restart makes — and why `--contract` must name the month the
-        #       deployments hold (simtrade_operations §6.5). A wrong one is
-        #       refused by the start-up reconcile rather than traded on.
-        self.book.seed_net(total, code=self.code)
+            # Tech: a held value with no month, and a month of `''`, go to the
+            #       start-up month.
+            # Why:  ledger rows from before the `contract` column carry no
+            #       month, and for those `--contract` is still the assumption a
+            #       restart makes (simtrade_operations §6.5). A wrong one is
+            #       refused by the start-up reconcile rather than traded on.
+            by_code = held if isinstance(held, dict) else {"": held}
+            slug_net, entry = 0, 0.0
+            for code, lot in by_code.items():
+                code = code or self.code
+                # Tech: accept a bare signed size or anything carrying
+                #       `signed_qty`/`avg_price`.
+                # Why:  `ledger.open_position` already returns the second shape,
+                #       so the restart path hands its answer straight in — and a
+                #       bare int stays usable for a seed where no entry is known.
+                net = int(getattr(lot, "signed_qty", lot))
+                if net and self._expired(code):
+                    # Tech: a lot on an expired month is not seeded.
+                    # Why:  the exchange settled it at expiry and no deal said
+                    #       so, so a ledger whose deployment was not running to
+                    #       write the settlement still holds it.
+                    if self.recorder is not None:
+                        self.recorder.record("owner_seed_expired", slug=slug,
+                                             code=code, net=net)
+                    continue
+                if net:
+                    entry = float(getattr(lot, "avg_price", 0.0) or 0.0)
+                months[(slug, code)] = months.get((slug, code), 0) + net
+                slug_net += net
+            self.book.seed_slug_net(slug, slug_net)
+            self.book.seed_slug_entry(slug, entry if slug_net else 0.0)
+        self.book.seed_months(months)
 
     # ---- the intent side ---------------------------------------------------
 
@@ -292,6 +313,8 @@ class OwnerProcess:
             self._submit(slug, intent)
         elif kind == "cancel":
             self._cancel(slug)
+        elif kind == "settle":
+            self._settle(slug, intent)
 
     def _submit(self, slug: str, intent: Dict[str, Any]) -> None:
         # Tech: rebuild the deployment's order, split it against the account net,
@@ -431,6 +454,44 @@ class OwnerProcess:
                 self.api.cancel_order(working.trade)
             except Exception as exc:                    # noqa: BLE001
                 self._anomaly(f"{slug}: cancel_order raised: {exc!r}")
+
+    def _settle(self, slug: str, intent: Dict[str, Any]) -> None:
+        # Tech: take the deployment's lots in the named month off the book, and
+        #       answer `settled` with the size taken; a size that differs from
+        #       the deployment's is an anomaly.
+        # Why:  a missed scheduled roll leaves `RollWatch` to catch the expiry,
+        #       and the exchange then cash-settles the lot with no deal — so the
+        #       owner's book kept it on the expired month, and the next
+        #       reconcile flagged a desync for a person to sort out.
+        #       The deployment settles its own mirror at that moment
+        #       (`LiveRuntime.settle_rolled_leg`) and says so here, in the same
+        #       stream as its next submit, so the re-open that follows is sized
+        #       on a book that already agrees. Allowed while frozen: it places
+        #       nothing. Not refused for a month the calendar still calls live —
+        #       the calendar has no holidays (`roll.roll_at`), the alias does.
+        if self.recorder is not None:
+            self.recorder.record("owner_intent", slug=slug, intent=intent)
+        code = str(intent.get("contract") or self.code)
+        try:
+            claimed = int(intent.get("signed_qty", 0))
+        except (TypeError, ValueError):
+            claimed = None
+        held = self.book.settle(slug, code)
+        if held != claimed:
+            self._anomaly(f"{slug}: settled {held:+d} in {code}, but the "
+                          f"deployment settled {intent.get('signed_qty')!r}")
+        if not self._expired(code) and self.recorder is not None:
+            self.recorder.record("owner_settle_unexpired", slug=slug, code=code)
+        self._emit(slug, "settled", contract=code, signed_qty=held)
+
+    def _expired(self, code: str) -> bool:
+        # Tech: whether the month a dated code names has stopped trading.
+        # Why:  read off the code, not a contract object — an expired month may
+        #       already be gone from the contract table (`contracts.code_month`).
+        from .contracts import code_month
+        from .roll import month_expired
+        now = self._wall_clock()
+        return month_expired(code_month(code, now), now)
 
     # ---- the venue side ----------------------------------------------------
 
@@ -618,11 +679,28 @@ class OwnerProcess:
         #       fullday's October SELL read as an agreeing 0 while both were in
         #       the wrong month. Per month, a lot in the wrong one is a desync.
         split = {s: self.book.net_for(s) for s in self.slugs}
-        many = len(self._contracts) > 1
+        # Tech: every month the owner can place on or the book holds — a month
+        #       seeded from the ledgers may not have been resolved — matched on
+        #       its contract's codes when there is a contract, else on the code.
+        codes = list(dict.fromkeys(list(self._contracts) + self.book.codes()))
+        many = len(codes) > 1
         off: Dict[str, Tuple[int, int]] = {}
-        for code, contract in self._contracts.items():
-            venue = net_position(positions, contract_codes(contract))
+        for code in codes:
+            contract = self._contracts.get(code)
+            venue = net_position(positions, contract_codes(contract)
+                                 if contract is not None else {code})
             booked = self.book.net_in(code)
+            # Tech: an expired month is recorded, not compared.
+            # Why:  the exchange settles it with no deal, so the book holds its
+            #       lots until the deployment's `settle` intent arrives, and
+            #       when the venue stops reporting them is unmeasured. Either
+            #       side of that gap would freeze an owner for a settlement that
+            #       is going exactly as planned; no order can touch the month.
+            if self._expired(code):
+                if (venue or booked) and self.recorder is not None:
+                    self.recorder.record("owner_reconcile_expired", contract=code,
+                                         booked=booked, venue=venue)
+                continue
             if venue != booked:
                 off[code] = (booked, venue)
 

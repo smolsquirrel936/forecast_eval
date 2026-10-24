@@ -35,6 +35,7 @@ can be recovered.
 from __future__ import annotations
 
 import csv
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -43,12 +44,19 @@ import pandas as pd
 from ..events import FillEvent
 from .broker.base import HeldPosition
 
-# Tech: the ledger's columns — a FillEvent, plus the soak it belongs to.
+# Tech: the ledger's columns — a FillEvent, plus the soak it belongs to and the
+#       dated month it traded (`TXFK6`).
 # Why:  the fill fields are spelled exactly as `logging_io.write_fills` spells
 #       them, so a ledger row and an artifact row are the same shape and one can
-#       be read with the reader written for the other. `soak_id` is the only
-#       addition, and it is what scopes a replay.
-LEDGER_COLUMNS = ["timestamp", "side", "fill_price", "quantity", "fee", "soak_id"]
+#       be read with the reader written for the other. `soak_id` scopes a replay.
+#       `contract` is what lets a restarted owner seed each deployment on the
+#       month it holds (2026-10-20, simtrade_operations §11): between a roll and
+#       the old month's expiry the account holds two months, and the owner's own
+#       `--contract` can name only one. It is the one optional column — ledgers
+#       written before it have none (`stamp_months`).
+LEDGER_COLUMNS = ["timestamp", "side", "fill_price", "quantity", "fee", "soak_id",
+                  "contract"]
+_REQUIRED_COLUMNS = LEDGER_COLUMNS[:-1]
 
 
 def ledger_path(out_parent: Any, policy: Any) -> Path:
@@ -116,12 +124,26 @@ def open_position(fills: Sequence[FillEvent]) -> Optional[HeldPosition]:
     return HeldPosition(side * gross, avg)
 
 
+def _fill(r: Any) -> FillEvent:
+    # Tech: one ledger row, as read by `itertuples`, back into a `FillEvent`.
+    # Why:  shared by both replays so they cannot rebuild a row two ways.
+    return FillEvent(timestamp=pd.Timestamp(r.timestamp), side=str(r.side),
+                     fill_price=float(r.fill_price), quantity=int(r.quantity),
+                     fee=float(r.fee))
+
+
 class FillLedger:
     """Append this deployment's fills; replay the current soak's on resume."""
 
-    def __init__(self, path: Any, *, soak_id: Optional[str] = None):
+    def __init__(self, path: Any, *, soak_id: Optional[str] = None,
+                 contract: Optional[str] = None):
         self.path = Path(path)
         self.soak_id = soak_id
+        # Tech: the dated month stamped on every row `sync` appends.
+        # Why:  the deployment sets it at start-up and moves it at a roll
+        #       (`cli._apply_roll`), after flushing the old month's fills, so
+        #       each row carries the month it traded.
+        self.contract = contract
         self._written = 0
         self.replayed = 0
         self.appends = 0
@@ -132,17 +154,46 @@ class FillLedger:
         #       and rebuild them as `FillEvent`s in file order.
         # Why:  file order is fill order — the ledger is append-only and
         #       `build_trades` pairs chronologically, so re-sorting could only
-        #       introduce a difference. A missing, empty or unreadable ledger
-        #       returns nothing: this is the bar cache's rule ("an optimisation,
-        #       never a dependency"), and the first resume after this shipped has
-        #       no ledger at all, which must be ordinary rather than an error.
-        if not self.path.exists():
+        #       introduce a difference.
+        df = self._frame()
+        if df is None:
             return []
+        fills = [_fill(r) for r in df.itertuples()]
+        self.replayed = len(fills)
+        self._written = len(fills)
+        return fills
+
+    def replay_by_month(self) -> Dict[str, List[FillEvent]]:
+        """`replay`, split by the dated month each row traded; `''` for none."""
+        # Tech: the same rows as `replay`, grouped by `contract` in file order.
+        # Why:  a lot on one month is never closed by a fill on another, so what
+        #       a deployment holds has to be reduced month by month — the owner
+        #       seeds a restart this way (`OwnerProcess.seed_from`). Rows from
+        #       before the column existed group under `''`.
+        df = self._frame()
+        if df is None:
+            return {}
+        codes = (df["contract"].fillna("").astype(str) if "contract" in df
+                 else pd.Series("", index=df.index))
+        out: Dict[str, List[FillEvent]] = {}
+        for code, r in zip(codes, df.itertuples()):
+            out.setdefault(code, []).append(_fill(r))
+        return out
+
+    def _frame(self) -> Optional[pd.DataFrame]:
+        # Tech: the ledger's rows for this soak as a frame, or None when there
+        #       are none to replay.
+        # Why:  a missing, empty or unreadable ledger returns nothing: this is
+        #       the bar cache's rule ("an optimisation, never a dependency"),
+        #       and the first resume after this shipped has no ledger at all,
+        #       which must be ordinary rather than an error.
+        if not self.path.exists():
+            return None
         try:
-            df = pd.read_csv(self.path, dtype={"soak_id": str})
+            df = pd.read_csv(self.path, dtype={"soak_id": str, "contract": str})
         except Exception:                                  # noqa: BLE001 — see Why
             self.failures += 1
-            return []
+            return None
         # Tech: the schema is checked BEFORE emptiness, and only a schema
         #       mismatch counts as a failure.
         # Why:  the order matters, and it was measured. An empty ledger is
@@ -153,23 +204,53 @@ class FillLedger:
         #       empty and would slip past an emptiness check first. Asking the
         #       more specific question first separates "nothing recorded yet"
         #       from "this is not our file", and both still replay nothing.
-        if not set(LEDGER_COLUMNS) <= set(df.columns):
+        if not set(_REQUIRED_COLUMNS) <= set(df.columns):
             self.failures += 1
-            return []
+            return None
         if df.empty:
-            return []
+            return None
         if self.soak_id is not None:
             df = df[df["soak_id"].astype(str) == str(self.soak_id)]
+        return df
 
-        fills = [
-            FillEvent(timestamp=pd.Timestamp(r.timestamp), side=str(r.side),
-                      fill_price=float(r.fill_price), quantity=int(r.quantity),
-                      fee=float(r.fee))
-            for r in df.itertuples()
-        ]
-        self.replayed = len(fills)
-        self._written = len(fills)
-        return fills
+    def stamp_months(self, code: str) -> int:
+        """Give every row with no month `code`; return how many were stamped."""
+        # Tech: rewrite the file with a `contract` column, filling each empty
+        #       cell with `code`; a ledger already stamped throughout is left
+        #       alone. Written to a temporary file and swapped in.
+        # Why:  ledgers from before the column have none, and leaving those rows
+        #       unstamped breaks the per-month reduction the first time a lot
+        #       opened in them is closed by a stamped row. The deployment calls
+        #       this at start-up with the month it holds, which is the month of
+        #       any lot still open in those rows; closed pairs net to zero on any
+        #       one month. A failure is counted and left for the next start.
+        if not self.path.exists() or not code:
+            return 0
+        try:
+            with self.path.open(newline="", encoding="utf-8") as fh:
+                rows = list(csv.reader(fh))
+            if not rows:
+                return 0
+            header, body = rows[0], rows[1:]
+            if "contract" not in header:
+                header = header + ["contract"]
+            at = header.index("contract")
+            stamped = 0
+            for row in body:
+                row.extend([""] * (len(header) - len(row)))
+                if not row[at]:
+                    row[at] = code
+                    stamped += 1
+            if stamped == 0 and len(rows[0]) == len(header):
+                return 0
+            tmp = self.path.with_name(self.path.name + ".tmp")
+            with tmp.open("w", newline="", encoding="utf-8") as fh:
+                csv.writer(fh).writerows([header] + body)
+            os.replace(tmp, self.path)
+        except Exception:                                  # noqa: BLE001
+            self.failures += 1
+            return 0
+        return stamped
 
     def mark_written(self, count: int) -> None:
         # Tech: declare that the first `count` entries of the loop's fill list
@@ -198,13 +279,24 @@ class FillLedger:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             exists = self.path.exists() and self.path.stat().st_size > 0
+            # Tech: a ledger whose header has no `contract` column is stamped
+            #       first when this ledger knows its month, and otherwise kept
+            #       to the old six columns.
+            # Why:  a seven-field row under a six-field header is a file pandas
+            #       refuses to read, which would cost every reader of it.
+            months = True
+            if exists and "contract" not in self._header():
+                if self.contract:
+                    self.stamp_months(self.contract)
+                months = "contract" in self._header()
             with self.path.open("a", newline="", encoding="utf-8") as fh:
                 w = csv.writer(fh)
                 if not exists:
                     w.writerow(LEDGER_COLUMNS)
                 for f in new:
-                    w.writerow([f.timestamp, f.side, f.fill_price, f.quantity,
-                                f.fee, self.soak_id or ""])
+                    row = [f.timestamp, f.side, f.fill_price, f.quantity,
+                           f.fee, self.soak_id or ""]
+                    w.writerow(row + [self.contract or ""] if months else row)
         except Exception:                                  # noqa: BLE001 — see Why
             # Why:  the same rule as the artifacts — this records a live run and
             #       never feeds one, so a locked or full disk must not stop a
@@ -216,6 +308,10 @@ class FillLedger:
         self._written += len(new)
         self.appends += len(new)
         return len(new)
+
+    def _header(self) -> List[str]:
+        with self.path.open(newline="", encoding="utf-8") as fh:
+            return next(csv.reader(fh), [])
 
     def summary(self) -> dict:
         return {"fills_replayed": self.replayed,

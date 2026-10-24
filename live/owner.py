@@ -156,6 +156,11 @@ class OrderBook:
         #       than a peer holding a position, which is the category error §16
         #       exists to remove.
         self._slug_net: Dict[str, int] = {}
+        # Tech: each deployment's net split by month, keyed `(slug, code)`.
+        # Why:  `settle` must take exactly one deployment's lots off one expired
+        #       month, and neither `_slug_net` nor `_net_by_code` alone says how
+        #       many those are.
+        self._slug_code_net: Dict[Tuple[str, str], int] = {}
         # Tech: each deployment's size-weighted average entry price.
         # Why:  `adopt_position` needs "at what price" as well as "how much"
         #       (`broker/base.HeldPosition`) — it is what an ExitRule measures
@@ -192,6 +197,11 @@ class OrderBook:
         with self._lock:
             return self._slug_net.get(slug, 0)
 
+    def held_in(self, slug: str, code: str = "") -> int:
+        """What THIS deployment holds in ONE month."""
+        with self._lock:
+            return self._slug_code_net.get((slug, code or self.default_code), 0)
+
     def entry_for(self, slug: str) -> float:
         """This deployment's size-weighted entry, or 0.0 when it is flat."""
         with self._lock:
@@ -210,15 +220,54 @@ class OrderBook:
             self._slug_net[slug] = int(signed_qty)
 
     def seed_net(self, signed_qty: int, code: str = "") -> None:
-        # Tech: set the account net without booking a fill.
+        # Tech: set the account net, all in one month, without booking a fill.
         # Why:  the owner restarts into an account that is already holding, and
         #       §16's `account_net_position` (the sum of the deployments' fill
         #       ledgers) is what it restarts from. Seeding is not a fill: it must
         #       not reach any deployment's `poll_fills`, or a restart would book a
         #       phantom trade into a Portfolio.
+        self.seed_months({("", code or self.default_code): int(signed_qty)})
+
+    def seed_months(self, nets: Dict[Tuple[str, str], int]) -> None:
+        # Tech: set every month's net, and the account total, from
+        #       `{(slug, code): signed lots}`; a blank slug seeds the month only.
+        # Why:  the per-month form of `seed_net` — a restart between two
+        #       deployments' rolls holds two months, and each has to be seeded
+        #       on its own month for `plan_legs` and `reconcile` to read it there.
         with self._lock:
-            self._net = int(signed_qty)
-            self._net_by_code = {code or self.default_code: int(signed_qty)}
+            self._net_by_code = {}
+            self._slug_code_net = {}
+            for (slug, code), net in nets.items():
+                code = code or self.default_code
+                self._net_by_code[code] = self._net_by_code.get(code, 0) + int(net)
+                if slug:
+                    self._slug_code_net[(slug, code)] = int(net)
+            self._net = sum(self._net_by_code.values())
+
+    def settle(self, slug: str, code: str) -> int:
+        """Take this deployment's lots in `code` off the book; return how many."""
+        # Tech: zero the deployment's net in that month and move its total, the
+        #       month's net and the account net by the same amount; reset the
+        #       entry when the deployment is left flat.
+        # Why:  a lot carried past its month's expiry — the scheduled roll
+        #       missed, so `RollWatch` caught the expiry instead (§2.6) — is
+        #       cash-settled by the exchange with no deal, and nothing else would
+        #       ever take it off the book. Not a fill: the deployment has
+        #       already settled its own mirror (`LiveRuntime.settle_rolled_leg`)
+        #       and says so with the `settle` intent this answers.
+        with self._lock:
+            code = code or self.default_code
+            held = self._slug_code_net.pop((slug, code), 0)
+            if held:
+                self._slug_net[slug] = self._slug_net.get(slug, 0) - held
+                self._net_by_code[code] = self._net_by_code.get(code, 0) - held
+                self._net -= held
+                if self._slug_net[slug] == 0:
+                    self._slug_entry[slug] = 0.0
+            if self.recorder is not None:
+                self.recorder.record("owner_settled", slug=slug, code=code,
+                                     settled=held, account_net=self._net)
+            return held
 
     def working_for(self, slug: str) -> List[Working]:
         with self._lock:
@@ -349,6 +398,8 @@ class OrderBook:
             self._net += signed
             self._net_by_code[working.code] = (
                 self._net_by_code.get(working.code, 0) + signed)
+            key = (working.slug, working.code)
+            self._slug_code_net[key] = self._slug_code_net.get(key, 0) + signed
             self._update_entry(working.slug, signed, quantity, float(price))
             self._slug_net[working.slug] = (
                 self._slug_net.get(working.slug, 0) + signed)

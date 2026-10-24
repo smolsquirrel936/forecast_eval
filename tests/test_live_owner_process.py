@@ -81,7 +81,9 @@ class _Contract:
 
 
 def _owner(tmp_path, api=None, slugs=("day", "night"), **kw):
+    # The wall clock stands on TS, a day when TXFI6 and TXFJ6 both still trade.
     api = api or _FakeAPI()
+    kw.setdefault("wall_clock", TS.to_pydatetime)
     owner = OwnerProcess(api, _Contract(), directory=tmp_path, slugs=slugs,
                          account="ACC", sj=_FakeSJ, **kw)
     return owner, api
@@ -883,3 +885,150 @@ def test_a_fill_in_flight_in_its_own_month_still_waits(tmp_path):
     owner.poll()
     assert owner.reconcile() is True
     assert "in TXFJ6" in owner.reconcile_note
+
+
+# ---- a lot carried past its month's expiry ---------------------------------
+#
+# The scheduled roll missed, so `RollWatch` caught the expiry and the exchange
+# cash-settled the lot with no deal. The deployment settles its own mirror and
+# says so with a `settle` intent; before that the owner's book kept the lot on
+# the dead month, and its next reconcile flagged a desync for a person to sort
+# out. TXFI6 here is the month that expired (2026-09-16 13:30), TXFJ6 the next.
+
+from datetime import datetime as _dt
+
+AFTER_EXPIRY = _dt(2026, 9, 16, 14, 55)
+
+
+class _Wall:
+    """A wall clock that starts before the expiry; `expire()` moves it past."""
+
+    def __init__(self):
+        self.now = TS.to_pydatetime()
+
+    def __call__(self):
+        return self.now
+
+    def expire(self):
+        self.now = AFTER_EXPIRY
+
+
+def _settle(tmp_path, slug, signed_qty, contract="TXFI6"):
+    c = ClientBroker(tmp_path, slug, contract_code=contract)
+    c.settle(signed_qty, price=100.0, timestamp=AFTER_EXPIRY)
+    return c
+
+
+def test_a_settle_intent_takes_the_lot_off_the_expired_month(tmp_path):
+    owner, api = _owner(tmp_path, wall_clock=(wall := _Wall()))
+    owner.seed_from({"day": {"TXFI6": 1}, "night": {"TXFI6": -1}})
+    wall.expire()
+    _settle(tmp_path, "day", 1)
+    owner.poll()
+    assert owner.book.net_for("day") == 0
+    assert owner.book.held_in("day", "TXFI6") == 0
+    assert owner.book.net_in("TXFI6") == -1             # night's is still there
+    assert owner.book.account_net == -1
+    assert api.placed == []                              # settling places nothing
+    assert owner.anomalies == []
+
+
+def test_the_owner_confirms_a_settlement_and_then_reports_it(tmp_path):
+    owner, _ = _owner(tmp_path, wall_clock=(wall := _Wall()))
+    owner.seed_from({"day": {"TXFI6": 1}, "night": 0})
+    wall.expire()
+    owner.publish_positions()
+    client = _settle(tmp_path, "day", 1)
+    assert client.broker_position() is None              # waiting for the owner
+    owner.poll()
+    assert client.broker_position() == 0
+
+
+def test_a_settle_that_disagrees_with_the_book_is_an_anomaly(tmp_path):
+    owner, _ = _owner(tmp_path, wall_clock=(wall := _Wall()))
+    owner.seed_from({"day": 0, "night": 0})
+    wall.expire()
+    _settle(tmp_path, "day", 1)
+    owner.poll()
+    assert any("settled +0 in TXFI6" in a for a in owner.anomalies)
+    events = JsonlStream(event_path(tmp_path, "day")).read_new()
+    assert any(e["kind"] == "settled" and e["signed_qty"] == 0 for e in events)
+
+
+def test_a_frozen_owner_still_settles(tmp_path):
+    owner, _ = _owner(tmp_path, wall_clock=(wall := _Wall()))
+    owner.seed_from({"day": {"TXFI6": 1}, "night": 0})
+    wall.expire()
+    owner.freeze("test")
+    _settle(tmp_path, "day", 1)
+    owner.poll()
+    assert owner.book.net_for("day") == 0
+
+
+def test_the_re_open_after_a_settle_is_a_new_lot_on_the_new_month(tmp_path):
+    # Same stream, settle first: the re-open is sized on a book that already
+    # agrees, so it is a New on TXFJ6 and nothing is left on TXFI6.
+    owner, api, _ = _resolving_owner(tmp_path, wall_clock=(wall := _Wall()))
+    owner.seed_from({"night": {"TXFI6": 1}, "day_night": 0})
+    wall.expire()
+    _settle(tmp_path, "night", 1)
+    _submit(tmp_path, "night", "BUY", contract="TXFJ6")
+    owner.poll()
+    (placed, _oid), = api.placed
+    assert placed.octype == "New"
+    _deal(owner, "NO1", side="Buy")
+    assert owner.book.net_for("night") == 1
+    assert owner.book.net_in("TXFI6") == 0
+    assert owner.book.net_in("TXFJ6") == 1
+
+
+def test_reconcile_does_not_compare_an_expired_month(tmp_path):
+    # Between the expiry and the deployment's settle the book still holds the
+    # lot; whether the venue still shows it then is unmeasured. Neither is a
+    # desync.
+    rec = _ListRecorder()
+    for venue in ([], [_Row(1, "Buy", code="TXFI6")]):
+        owner, _ = _owner(tmp_path, api=_FakeAPI(positions=venue),
+                          wall_clock=(wall := _Wall()), recorder=rec)
+        owner.seed_from({"day": {"TXFI6": 1}, "night": 0})
+        wall.expire()
+        assert owner.reconcile() is True
+        assert owner.anomalies == []
+    assert len(rec.of("owner_reconcile_expired")) == 2
+
+
+def test_before_expiry_the_same_month_is_still_compared(tmp_path):
+    owner, _ = _owner(tmp_path, api=_FakeAPI(positions=[]))
+    owner.seed_from({"day": {"TXFI6": 1}, "night": 0})
+    assert owner.reconcile() is False
+
+
+def test_a_seed_on_an_expired_month_is_dropped(tmp_path):
+    # A ledger whose deployment was not running at expiry still holds the lot
+    # the exchange settled.
+    wall = _Wall()
+    wall.expire()
+    owner, _ = _owner(tmp_path, wall_clock=wall)
+    owner.seed_from({"day": {"TXFI6": 1, "TXFJ6": -1}, "night": 0})
+    assert owner.book.net_for("day") == -1
+    assert owner.book.net_in("TXFI6") == 0
+    assert owner.book.net_in("TXFJ6") == -1
+
+
+def test_a_seed_with_no_month_goes_to_the_start_up_month(tmp_path):
+    owner, _ = _owner(tmp_path)
+    owner.seed_from({"day": {"": 1}, "night": -1})
+    assert owner.book.net_in("TXFI6") == 0
+    assert owner.book.held_in("day", "TXFI6") == 1
+    assert owner.book.held_in("night", "TXFI6") == -1
+
+
+def test_a_seeded_month_is_reconciled_on_its_own_code(tmp_path):
+    # The restart rule: the owner's `--contract` names October, the ledger says
+    # November. Nothing needs resolving to compare November against the venue.
+    owner, _ = _owner(tmp_path, api=_FakeAPI(positions=[
+        _Row(1, "Buy", code="TXFJ6")]))
+    owner.seed_from({"day": {"TXFJ6": 1}, "night": 0})
+    assert owner.reconcile() is True
+    owner.book.seed_months({("day", "TXFI6"): 1})
+    assert owner.reconcile() is False

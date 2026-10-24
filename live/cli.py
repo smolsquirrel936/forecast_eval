@@ -850,6 +850,18 @@ def main(argv=None) -> int:
 
         contract, contract_note = resolve_txf(api, args.contract)
         print(f"contract {contract_note}")
+        # Tech: stamp the ledger with the month this run holds, and give that
+        #       month to any row written before the ledger carried one.
+        # Why:  a restarted owner seeds each deployment on the month its ledger
+        #       names (`owner_cli.seed_positions`). An unstamped row's open lot,
+        #       if any, is the one this run adopts — on this month.
+        ledger.contract = month_code(contract) or None
+        stamped = ledger.stamp_months(ledger.contract)
+        if stamped:
+            print(f"ledger: {stamped} row(s) without a month stamped "
+                  f"{ledger.contract}")
+            recorder.record("ledger_months_stamped", rows=stamped,
+                            contract=ledger.contract)
 
         # Tech: the order-placing broker is built here, after the contract is
         #       known; the offline ones need neither and could have been built
@@ -1301,9 +1313,10 @@ def main(argv=None) -> int:
         )
 
         def _apply_roll(rolled, stamp):
-            # Tech: adopt the new contract everywhere the old one was held — the
-            #       name the closures read, the broker's contract and code set,
-            #       and the subscription — then settle any open leg.
+            # Tech: settle any open leg, then adopt the new contract everywhere
+            #       the old one was held — the name the closures read, the
+            #       broker's contract and code set, the ledger's month, and the
+            #       subscription.
             # Why:  §2.6, MEASURED. One expired object was held by four different
             #       things at once, and re-subscribing it was inert: fifteen
             #       repairs, zero ticks, then a staleness halt. Every holder has
@@ -1311,6 +1324,33 @@ def main(argv=None) -> int:
             #       whichever one was forgotten.
             nonlocal contract
             old = contract
+            # Tech: settle any open leg first — in the mirrors at the last price
+            #       this process saw, at the owner, and in the ledger — and arm
+            #       the same exposure for the new month.
+            # Why:  the alias moves only after the old month is dead, so the
+            #       venue has already cash-settled anything held — there is no
+            #       order that could close it. `LiveRuntime` re-opens on the
+            #       first bar of the new contract, which is what "roll the
+            #       exposure" means once the old leg is beyond reach. First,
+            #       because the owner's intent and the ledger's rows have to name
+            #       the month that expired, before either is moved below.
+            if rt.trader.position != 0:
+                held = rt.trader.position
+                mark = rt.last_price
+                if mark is None:
+                    alerter.fatal("roll_unsettled",
+                                  "the contract rolled with a position open and "
+                                  "no price to settle it at — position mirror is "
+                                  "stale")
+                else:
+                    rt.settle_rolled_leg(price=mark, timestamp=stamp)
+                    if isinstance(broker, ClientBroker):
+                        broker.settle(held, price=mark, timestamp=stamp)
+            # Tech: append the old month's fills, then stamp the new month.
+            # Why:  each ledger row carries the month it traded, and the clock's
+            #       own sync may not have run since the last old-month fill.
+            ledger.sync(rt.loop.fills)
+            ledger.contract = month_code(rolled.contract) or None
             try:
                 api.unsubscribe(old, quote_type=sj.QuoteType.Tick)
             except Exception as exc:                  # noqa: BLE001
@@ -1342,22 +1382,6 @@ def main(argv=None) -> int:
             alerter.warn("contract_rolled",
                          f"front month {rolled.from_month} -> "
                          f"{rolled.to_month}; re-subscribed and re-pointed")
-            # Tech: settle the expiring leg in the mirrors, at the last price this
-            #       process saw, and arm the same exposure for the new month.
-            # Why:  the alias moves only after the old month is dead, so the venue
-            #       has already cash-settled anything held — there is no order
-            #       that could close it. `LiveRuntime` re-opens on the first bar
-            #       of the new contract, which is what "roll the exposure" means
-            #       once the old leg is beyond reach.
-            if rt.trader.position != 0:
-                mark = rt.last_price
-                if mark is None:
-                    alerter.fatal("roll_unsettled",
-                                  "the contract rolled with a position open and "
-                                  "no price to settle it at — position mirror is "
-                                  "stale")
-                else:
-                    rt.settle_rolled_leg(price=mark, timestamp=stamp)
 
         def _next_month_contract():
             # Tech: the listed month directly after the one being held.

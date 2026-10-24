@@ -180,12 +180,20 @@ half-built bar, drops queued prints of any other month, and clears the ladder's
 reference bar. The first leg after the switch is therefore priced from a bar
 built entirely from the new month, one minute later.
 
-Then the position: [runtime](runtime.md)`.settle_rolled_leg()` closes the
-expiring leg in both mirrors and arms the same exposure for re-entry on the first
-bar of the new month. The alias moves only *after* the old month is dead, so the
-venue has already cash-settled anything held — there is no order that could close
-it, and the settlement price is recorded as an estimate because the true one
-comes from an auction this process never sees.
+Before any of those, the position: [runtime](runtime.md)`.settle_rolled_leg()`
+closes the expiring leg in both mirrors, adds the settlement to the fill list
+(so the ledger and `trades.csv` see it), and arms the same exposure for re-entry
+on the first bar of the new month. The alias moves only *after* the old month is
+dead, so the venue has already cash-settled anything held — there is no order
+that could close it, and the settlement price is recorded as an estimate because
+the true one comes from an auction this process never sees. Under
+`--broker client` the deployment then sends the owner a `settle` intent, so the
+owner's book drops the lot too ([owner_process](owner_process.md)), and the
+ledger syncs before taking the new month. All of this runs first because each
+record has to name the month that expired.
+
+`month_expired(yyyymm, now)` is the owner's test for that month: true once
+`exchange_front_month(now)` is later.
 
 ## The ladder — how a leg actually gets filled
 A roll leg that does not fill is the only failure here that matters: missing the

@@ -1119,3 +1119,22 @@ def test_the_exchange_front_month_trails_our_roll_by_about_a_day():
     ts = datetime(2026, 10, 20, 14, 59)
     assert front_month_at(ts, day) == "202611"
     assert exchange_front_month(ts) == "202610"
+
+
+def test_a_settled_leg_joins_the_fill_list_the_ledger_appends():
+    # Left out, the ledger read the settled lot and its re-open as two open
+    # lots, and `roll_fills` named a timestamp no fill carried.
+    rt, _rec = _rolling_runtime()
+    ts = datetime(2026, 9, 16, 14, 55)
+    rt.settle_rolled_leg(price=17600.0, timestamp=ts)
+    (fill,) = [f for f in rt.loop.fills if f.timestamp == ts]
+    assert (fill.side, fill.fill_price, fill.quantity) == ("SELL", 17600.0, 1)
+
+
+def test_a_month_expires_at_its_last_trading_days_close():
+    from forecast_eval.live.roll import month_expired
+    # October 2026's third Wednesday is the 21st; it stops trading at 13:30.
+    assert not month_expired("202610", datetime(2026, 10, 21, 13, 29))
+    assert month_expired("202610", datetime(2026, 10, 21, 13, 30))
+    assert not month_expired("202611", datetime(2026, 10, 21, 13, 30))
+    assert not month_expired("", datetime(2026, 10, 21, 13, 30))

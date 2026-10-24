@@ -241,12 +241,32 @@ served. Otherwise a later warm-up has a hole where that month was.
 
 **The owner follows each deployment's month** (fixed 2026-10-24 on `main`,
 after the 10-20 roll). Every intent names its month, and the owner places it
-there, so the owner needs no restart at a roll. Its own `--contract` is used
-only to seed a restart from the ledgers, which carry no month. **Between a
-deployment's roll and the old month's expiry, restart the owner with the dated
-code the deployments hold** (e.g. `--contract TXFK6`; `TXF202611` does not
-resolve). `TXFR1` still names the expiring month in that window, and the
-start-up reconcile then refuses with `account mirror … != venue …`.
+there, so the owner needs no restart at a roll.
+
+**A restarted owner seeds each lot on the month its ledger row names** (also
+2026-10-24 on `main`). Each `fills_<slug>.csv` row carries a `contract` column,
+written by the deployment. The owner's own `--contract` now only covers rows
+with no month. A deployment gives its old rows the month it holds the first
+time it starts on this code ([ledger](live/ledger.md)). Until every deployment
+has done that, the old rule still applies: **between a deployment's roll and
+the old month's expiry, restart the owner with the dated code the deployments
+hold** (e.g. `--contract TXFK6`; `TXF202611` does not resolve). `TXFR1` still
+names the expiring month in that window, and an unstamped seed is then refused
+with `account mirror … != venue …`.
+
+**The deployments still need `--contract` in that window.** A deployment
+resolves its own month from `--contract` alone, so one restarted on `TXFR1`
+between its roll and the expiry would trade the old month (and stamp its old
+rows with it).
+
+**A missed roll no longer leaves the owner with a desync.** If the scheduled
+roll lapses and `RollWatch` catches the expiry, the deployment settles its
+mirror, writes the settlement to its ledger, and sends the owner a `settle`
+intent. The owner takes the lot off its book before the re-open is sized
+([owner_process](live/owner_process.md)), and its reconcile does not compare a
+month that has expired. One case is not covered: a deployment that is **not
+running** at the expiry sends no `settle`. Restart the owner before that
+deployment, and the restarted owner drops the expired lot when seeding.
 
 ### 6.6 A deployment refuses at start-up: `emitter priming incomplete`
 
@@ -608,9 +628,70 @@ the first pause.
 | Mon 2026-10-12, 08:45+ | flatten the three held lots, then the clean restart (log, 2026-10-12) |
 | about 2026-10-19 / 10-20 | restart all deployments before the October expiry (§6.5) |
 | 2026-10-20 / 10-21 | deployments roll; October contract settles |
-| Sat–Sun 2026-10-24 / 10-25 | **fix the three roll defects** (open questions, 2026-10-20) and correct night's and fullday's entry prices |
-| until 2026-11-18 | every restart (owner and deployments) needs `--contract TXFK6` |
-| 2026-11-17 / 11-18 | November roll; must not run on the unfixed roll code |
+| Sat–Sun 2026-10-24 / 10-25 | **done 10-24:** the three roll defects and both follow-ups fixed on `main`; night's and fullday's entry prices corrected. Resume with the steps below |
+| until the 11-17 roll | restart with `--contract TXFK6`. October expired 10-21 13:30, so `TXFR1` should name November too, but the dated code removes the doubt |
+| about 2026-11-16 / 11-17 morning | restart all deployments before the November expiry, for the bar cache (§6.5) |
+| 2026-11-17 12:45 / 15:30 | day and fullday, then night, roll `TXFK6` → `TXFL6` (December). First live run of the roll fixes |
+| 11-17 roll → 11-18 13:30 | a deployment that has rolled restarts with **`--contract TXFL6`**, not `TXFK6` (§6.5). The owner needs no `--contract` once its seed is all stamped (step 7 below) |
+
+**Resuming on the 2026-10-24 code** (written 2026-10-24; no `forecast_eval.live`
+process was running then). This is the first start on the ledger-month code,
+which rewrites the ledgers, and the first on any of the roll fixes.
+
+1. **Commit the 10-24 follow-ups on `main`,** then run the suite there.
+   *Done 2026-10-24:* `a45357d`, 1716 passed, 2 skipped.
+2. **Merge `main` into `simtrade_0929` and test the branch.** *Done
+   2026-10-24*; the only conflict was this section. Run the processes from a
+   `simtrade_0929` checkout, not `main`.
+3. **Before starting anything:**
+   - Confirm nothing is running (§3), or stop it (§4: deployments first, owner
+     last).
+   - Read each deployment's position (§3): the last `position` line in
+     `events_<slug>.jsonl`, and `fills_<slug>.csv`. Per the 10-24 log row, the
+     re-priced lots (night +1 @ 46581, fullday −1 @ 46588) had already closed;
+     the nets were **night −1 @ 45621, fullday flat**. Day's net is not in that
+     row; read it from its ledger.
+   - **Back up the three ledgers,** e.g. to
+     `outputs/_backup_ledger_months_20261024/`. The first deployment start
+     rewrites each file to add the `contract` column (§6.5).
+4. **Owner first, with the dated code.** Its seed is still unstamped this
+   once, so `--contract` decides the month:
+
+   ```powershell
+   uv run --no-sync python -m forecast_eval.live.owner_cli --out outputs --contract TXFK6 --i-understand-this-places-orders
+   ```
+
+   Expect `seeded from ledgers:` to show step 3's positions with no month
+   suffix (e.g. `night: -1 @ 45621.00`), an `account=` equal to their sum, and
+   **no refusal**. An
+   exit 6 means the ledgers and the venue disagree: stop and use §6.9. Don't
+   flatten.
+5. **Then the three deployments,** each with `--resume` and the dated code:
+
+   ```powershell
+   uv run --no-sync python -m forecast_eval.live.cli --strategy day     --broker client --resume --contract TXFK6 --i-understand-this-places-orders
+   uv run --no-sync python -m forecast_eval.live.cli --strategy night   --broker client --resume --contract TXFK6 --i-understand-this-places-orders
+   uv run --no-sync python -m forecast_eval.live.cli --strategy fullday --broker client --resume --contract TXFK6 --i-understand-this-places-orders
+   ```
+
+   Expect, per deployment:
+   - `contract … code=TXFK6`;
+   - `ledger: N row(s) without a month stamped TXFK6` (absent for a deployment
+     with no ledger);
+   - `roll: 202611 until 2026-11-17 12:45` (night: `15:30`);
+   - a held deployment adopts from the owner at step 3's entry, and its
+     `resume: … inherited fill(s) seeded` net agrees, with no
+     `fills_replay_refused`.
+6. **Check after the first bars:**
+   - every `fills_<slug>.csv` has a `contract` column, filled `TXFK6`;
+   - no new entry in `fatal.jsonl`, and no `owner_frozen` or `reconcile pending`
+     that lasts;
+   - the status page (§8.1) shows all four alive.
+7. **From then on, the owner restarts without `--contract`** (its seed is
+   stamped). The deployments still need it, per the dates above.
+
+If the deployments are restarted again before the November expiry (§6.5),
+repeat step 5 only; the ledgers are already stamped.
 
 **Log:**
 
@@ -672,9 +753,21 @@ the first pause.
   is restarted on `simtrade_0929`.
 
   The October entry prices (night +1 @46418, fullday −1 @46421) were re-priced
-  to November on 2026-10-24 (log row above). Until 11-18 **restart everything
-  with `--contract TXFK6`**: `TXFR1` names October until it settles, and
-  `TXF202611` does not resolve.
+  to November on 2026-10-24 (log row above). For which `--contract` to restart
+  with, and when, see **Next dates** and the resume steps above; `TXF202611`
+  does not resolve.
+
+  **Two follow-ups fixed on `main` 2026-10-24 (`a45357d`) and merged into
+  `simtrade_0929`; not yet demonstrated live:**
+  1. Restart rule: ledger rows carry their month (`contract`), and the owner
+     seeds per month from them. Rows written before the column get the
+     deployment's month the first time it starts on this code. The deployments
+     themselves still need `--contract` (§6.5).
+  2. A roll that lapsed into `RollWatch`'s backup path: the deployment sends a
+     `settle` intent, the owner drops the lot from the expired month and
+     answers `settled`, and its reconcile skips expired months. The settlement
+     now also reaches the ledger and `trades.csv`. Not covered: a deployment
+     not running at the expiry (§6.5).
 - **The 2026-10-06 `PermissionError`** on the day restart came from uncommitted
   code, and nothing recorded which file. If a restart on committed code hits it,
   the `crashed` record and the console traceback now name the file.

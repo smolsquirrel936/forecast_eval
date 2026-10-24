@@ -36,6 +36,13 @@ them. Until 2026-10-07 the seed was a bare count (`seed_nets`), so a held lot
 was published at `avg_price` 0.0. Fullday's `--resume` that morning adopted its
 +1 "@ 0.00"; closing it would have booked about +50 000 points.
 
+**It seeds by month** (2026-10-24): `{slug: {code: HeldPosition}}`, each month
+reduced on its own from the ledger's `contract` column. `--contract` now only
+supplies the month for rows that carry none. Before, the whole seed went to
+`--contract`, and between a roll and the old month's expiry `TXFR1` still names
+the old month, so a restart on the default was refused. The console line reads
+`night: +1 @ 46581.00 TXFK6`.
+
 **Then it reconciles the sum against the venue before serving anything, and
 refuses on a disagreement.** The owner's whole authority rests on `account_net`
 being right: it is what `plan_legs` sizes every `Cover` against

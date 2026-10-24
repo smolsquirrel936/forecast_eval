@@ -26,7 +26,8 @@ def _ledger(directory, slug, rows, soak="epoch-1"):
 # ---- seeding ---------------------------------------------------------------
 
 def _signed(seeds):
-    return {slug: getattr(held, "signed_qty", held) for slug, held in seeds.items()}
+    return {slug: sum(h.signed_qty for h in months.values())
+            for slug, months in seeds.items()}
 
 
 def test_seed_positions_reads_each_deployments_own_ledger(tmp_path):
@@ -63,7 +64,7 @@ def test_a_held_seed_carries_its_entry_price(tmp_path):
     +1 at avg_price 0.0 and `--resume` adopted it "@ 0.00" — closing it would
     have booked ~+50 000 points."""
     _ledger(tmp_path, "day_night", [("BUY", 1)])
-    held = seed_positions(tmp_path, ["day_night"])["day_night"]
+    held = seed_positions(tmp_path, ["day_night"])["day_night"][""]
     assert held.signed_qty == 1
     assert held.avg_price == 46000.0
 
@@ -691,3 +692,57 @@ def test_serve_feeds_every_reconcile_to_the_session_watch():
     with pytest.raises(KeyboardInterrupt):
         _serve(owner, _Args(once=False), None, None, None, watch)
     assert watch.seen == [None, None, True]
+
+
+# ---- seeding by month (2026-10-20, simtrade_operations §11) ----------------
+#
+# Between a deployment's roll and the old month's expiry, `TXFR1` still names
+# the old month, so an owner restarted on its defaults seeded every lot there,
+# and the start-up reconcile refused. Stamped rows now say their own month.
+
+def _stamped(directory, slug, rows):
+    from forecast_eval.events import FillEvent
+    from forecast_eval.live.ledger import FillLedger
+    import pandas as pd
+    led = FillLedger(directory / f"fills_{slug}.csv", soak_id="epoch-1")
+    fills = []
+    for ts, side, price, code in rows:
+        led.contract = code
+        fills.append(FillEvent(timestamp=pd.Timestamp(ts), side=side,
+                               fill_price=price, quantity=1, fee=0.0))
+        led.sync(fills)
+
+
+def test_seed_positions_reduces_each_month_on_its_own(tmp_path):
+    _stamped(tmp_path, "night", [
+        ("2026-10-13 22:04", "BUY", 48760.0, "TXFJ6"),
+        ("2026-10-20 15:39", "SELL", 46420.0, "TXFJ6"),
+        ("2026-10-20 15:40", "BUY", 46581.0, "TXFK6")])
+    (code, held), = seed_positions(tmp_path, ["night"])["night"].items()
+    assert (code, held.signed_qty, held.avg_price) == ("TXFK6", 1, 46581.0)
+
+
+def test_a_restart_between_roll_and_expiry_needs_no_dated_contract(tmp_path):
+    """The owner starts on October (what `TXFR1` resolves to on 10-21) while
+    night holds November. Seeded on October, as before, the start-up reconcile
+    read venue October 0 against book +1 and refused; seeded on November, it
+    agrees."""
+    from forecast_eval.live.owner_process import OwnerProcess
+    from .test_live_owner_process import _FakeAPI, _Row
+
+    class _October:
+        code, target_code = "TXFR1", "TXFJ6"
+
+    _stamped(tmp_path, "night", [
+        ("2026-10-13 22:04", "BUY", 48760.0, "TXFJ6"),
+        ("2026-10-20 15:39", "SELL", 46420.0, "TXFJ6"),
+        ("2026-10-20 15:40", "BUY", 46581.0, "TXFK6")])
+    api = _FakeAPI(positions=[_Row(1, "Buy", code="TXFK6")])
+    owner = OwnerProcess(api, _October(), directory=tmp_path,
+                         slugs=["day", "night", "day_night"], account="ACC",
+                         wall_clock=lambda: datetime(2026, 10, 21, 8, 30))
+    owner.seed_from(seed_positions(tmp_path, owner.slugs))
+    assert owner.book.held_in("night", "TXFK6") == 1
+    assert owner.book.net_in("TXFJ6") == 0
+    assert owner.reconcile() is True
+    assert owner.anomalies == []

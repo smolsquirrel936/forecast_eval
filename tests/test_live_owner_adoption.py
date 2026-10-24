@@ -40,7 +40,8 @@ pytestmark = pytest.mark.usefixtures("cheap_strategy")
 def _owner_and_clients(tmp_path, api=None):
     api = api or _FakeAPI()
     owner = OwnerProcess(api, _Contract(), directory=tmp_path,
-                         slugs=("day", "night"), account="ACC", sj=_FakeSJ)
+                         slugs=("day", "night"), account="ACC", sj=_FakeSJ,
+                         wall_clock=lambda: NOW)
     return owner, api
 
 

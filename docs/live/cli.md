@@ -146,9 +146,13 @@ for the life of the run. When the month behind it expired, the run kept
 re-subscribing a retired contract — 15 repairs, 0 ticks, then a staleness halt.
 
 `_apply_roll` is the one place that moves, and it moves **four** holders together
-plus the position:
+plus the position. The position goes first, while everything still names the
+old month:
 
 ```
+rt.settle_rolled_leg()         # only when RollWatch caught an expiry while holding
+broker.settle()                # --broker client: the owner takes the lot off its book
+ledger.sync(); ledger.contract = new month   # rows keep the month they traded
 api.unsubscribe(old)           # best effort; the month may already be gone
 contract = rolled.contract     # the name every closure reads
 live_broker.switch_contract()  # broker contract + accepted code set
@@ -159,6 +163,10 @@ ticks["at_relogin"] = ticks["n"]   # re-baseline the verify window's tick counte
 ```
 
 See [roll.md](roll.md) for why the last two were added after 2026-10-20.
+
+At start-up the ledger is stamped with the resolved month, and any row without
+one is given it (`FillLedger.stamp_months`, recorded as `ledger_months_stamped`).
+A restarted owner seeds each deployment on its rows' months ([ledger](ledger.md)).
 
 **`_verify`'s tick half skips a back month.** `_tick_check_applies` is False
 while the held month is later than the exchange's front month
