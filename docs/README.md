@@ -77,6 +77,7 @@ Three invariants make this honest (all enforced in code + tests):
 | [portfolio.py](portfolio.md) | Position + PnL accounting | how realized/unrealized PnL and session buckets are kept |
 | [trader.py](trader.md) | Signal→order state machine | the no-flip rule and order placement |
 | [run.py](run.md) | Backtest driver + demos | the per-tick loop and how everything is wired |
+| [forecast_cache.py](forecast_cache.md) | On-disk forecast cache | `real_data --forecast-cache`: reusing forecasts across runs and strides |
 | [metrics.py](metrics.md) | Metric pack | trading metrics, forecast quality (IC), attribution |
 | [logging_io.py](logging_io.md) | Artifact writers | the parquet/CSV bundle and `params.json` |
 | [reports.py](reports.md) | Charts (PNG + HTML) | equity/drawdown, price+fills, signal-vs-realized |
