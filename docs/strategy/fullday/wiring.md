@@ -41,6 +41,13 @@ factory. This is the file a search for this session edits first.
   `min_trend_ticks`, `path_momentum`, `trend_filter`. `real_data.py` never
   exposed them, so every recorded run used the emitter's class defaults; leaving
   them there is what reproduces those runs.
+- **`entry_min_prob` (added `fullday_rev_iter02`)** is a package-declared knob
+  beyond the twelve CLI knobs, like `stop_pct`: the Trader skips an OPEN from
+  flat whose signal strength falls below the floor it implies. `make_strategy`
+  raises `ValueError` unless
+  `min_prob <= entry_min_prob < full_confidence_prob` — below `min_prob` the
+  gate is vacuous, at/above `full_confidence_prob` unreachable (the strength
+  ramp saturates at 1.0). Its `PARAMS` value 0.50 is the inert control.
 
 > **This session is UNTUNED.** The values in `PARAMS` are DAY's, inherited so the
 > package is runnable and parity-checkable. They were not chosen for

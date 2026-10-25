@@ -12,15 +12,23 @@ aggression and sizing, and the fill bookkeeping that feeds `ExitRule` queries.
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
-| `Trader(execution, *, tick_size, aggression_ticks, max_position, max_aggression_ticks)` | class | the state machine |
-| `on_signal(direction, market, *, strength)` | method | cancel-then-act; open from flat, close on an opposing signal, never flip |
+| `Trader(execution, *, tick_size, aggression_ticks, max_position, max_aggression_ticks, entry_min_prob, full_confidence_prob)` | class | the state machine |
+| `on_signal(direction, market, *, strength)` | method | cancel-then-act; open from flat (entry-gated), close on an opposing signal, never flip |
 | `submit_exit(market)` | method | closing limit for an `ExitRule` firing or a session-boundary forced close |
 | `on_fill(...)` / `position_state()` | method | position mirror and the immutable snapshot `ExitRule`s read |
 
 ## Key points / gotchas
 - **This is a per-session copy** of [trader.py](../../trader.md), verbatim at the
   split with only the import depth changed (STRATEGY_SPLIT_PLAN S1). The shared
-  original is frozen and hash-guarded.
+  original is frozen and hash-guarded. **Diverged in `fullday_rev_iter02`:**
+  `on_signal` carries an **entry-only probability gate** — from flat, a signal
+  whose `strength` is below the floor implied by `entry_min_prob`
+  (`(entry_min_prob - 0.5) / (full_confidence_prob - 0.5)`, the inverse of the
+  emitter's conviction ramp) submits nothing, while the §4.4 resting-order
+  cancel still runs. Closes are never gated: an opposite signal is the only way
+  out short of the stop, and a third of historical exits carried a directional
+  probability below 0.65. At `entry_min_prob` 0.50 the floor is 0.0 and the
+  gate is inert — byte-identical to the pre-gate copy.
 - It is handed to `run_backtest` as a **factory**, not an instance —
   `make_trader(execution)` — because `Execution` is built inside the run
   (`fee_rate` is a run parameter). See [run.py](../../run.md) §2.1 of the split

@@ -9,6 +9,13 @@ PER-SESSION COPY (STRATEGY_SPLIT_PLAN S1). Verbatim copy of
 ``tests/test_strategy_isolation.py`` pins it), with only the relative-import depth
 changed. It is this package's to edit; the shared original is frozen and
 hash-guarded by ``tests/test_strategy_isolation.py``. Diverge freely here.
+
+DIVERGED (fullday_rev_iter02, autoresearch_trading_plan_fullday_reversal.md
+decision 2): ``on_signal`` gained an entry-only probability gate — from flat,
+a signal whose ``strength`` falls below the floor implied by ``entry_min_prob``
+submits nothing, while closes are never gated. At the default
+``entry_min_prob`` 0.50 the floor is 0.0 and the gate is inert, so runs are
+byte-identical to the pre-gate copy.
 """
 from datetime import datetime
 from typing import Literal, Optional
@@ -29,6 +36,8 @@ class Trader:
         aggression_ticks: int = 3,
         max_position: int = 1,
         max_aggression_ticks: Optional[int] = None,
+        entry_min_prob: float = 0.5,
+        full_confidence_prob: float = 0.9,
     ):
         # Tech: hold the execution handle and order-placement parameters, and
         #       initialize position/entry tracking to flat.
@@ -49,6 +58,21 @@ class Trader:
         self.aggression_ticks = aggression_ticks
         self.max_position = max_position
         self.max_aggression_ticks = max_aggression_ticks
+        # Tech: entry-only probability gate — convert entry_min_prob into the
+        #       strength floor it implies on the emitter's conviction ramp,
+        #       strength = (dir_prob - 0.5) / (full_confidence_prob - 0.5)
+        #       clamped to [0, 1] (emitter.py §5).
+        # Why:  autoresearch_trading_plan_fullday_reversal.md decision 2 — the
+        #       gate lives here, after the emitter, because the emitter's trend
+        #       filter stores a price only when a signal gets past its earlier
+        #       gates; gating entries here leaves that stored state exactly what
+        #       it is today. entry_min_prob=0.50 (floor 0.0, strength >= 0
+        #       always) is the inert control. The ramp saturates at 1.0, so the
+        #       gate cannot tell probabilities at or above full_confidence_prob
+        #       apart; wiring validates min_prob <= entry_min_prob <
+        #       full_confidence_prob so the gate is never vacuous or total.
+        self.entry_min_prob = entry_min_prob
+        self.entry_floor = (entry_min_prob - 0.5) / (full_confidence_prob - 0.5)
         self.position = 0  # signed contracts; +long / -short
         self.entry_price: float = 0.0
         self.entry_bar_idx: int = -1
@@ -115,6 +139,15 @@ class Trader:
         #       no-op and an opposing signal closes only.
         order: Optional[OrderEvent] = None
         if self.position == 0:
+            # Tech: entry-only conviction gate — a below-floor signal from flat
+            #       submits nothing (the unconditional cancel above still ran, so
+            #       any resting order is gone per §4.4).
+            # Why:  weak-conviction opens are the entries this loop wants to skip
+            #       (reversal plan decision 2); a gated signal is still a signal,
+            #       so a stale forecast's order must not outlive it. Closes are
+            #       never gated — see __init__.
+            if strength < self.entry_floor:
+                return None
             offset = self._entry_offset(strength)
             qty = self._entry_qty(strength)
             if direction == "BUY":

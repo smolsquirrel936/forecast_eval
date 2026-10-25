@@ -18,6 +18,13 @@ night session before 2017-05-15 (TAPE_REBUILD §2.5).
 Since LIVE_STRATEGY_ROUTING_PLAN D2 a live run builds from ``make_strategy``
 below, so an edit here is a live change. D1 removed ``live/cli.py``'s refusal of
 untuned configs; ``PINNED_FULLDAY`` still records itself unprovenanced.
+
+``fullday_rev_iter02`` (autoresearch_trading_plan_fullday_reversal.md, decision 2)
+added the package-declared ``entry_min_prob`` knob: the Trader skips an OPEN from
+flat whose signal strength falls below the floor it implies, while closes stay
+ungated. Its value here is 0.50 — the inert control, floor 0.0, byte-identical
+to the pre-knob package. The loop's search moves it through
+``0.55 / 0.60 / 0.65 / 0.70`` as edits to ``PARAMS``.
 """
 from typing import Any, Dict
 
@@ -52,6 +59,14 @@ PARAMS: Dict[str, Any] = {
     # percent-stop knob — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param stop_pct=...``.
     "stop_pct": 0.05,
+    # entry-probability gate — package-declared, beyond the twelve CLI knobs
+    # (D6/D7), reachable only through ``--param entry_min_prob=...``.
+    # Why:  reversal loop decision 2. 0.50 is the CONTROL value: the floor it
+    # implies is 0.0 and no emitted signal can fall below it, so every entry
+    # still opens and a run at 0.50 must be byte-identical to one without the
+    # knob. The gate applies to opens only; min_prob (above) stays the exit
+    # gate inside the emitter.
+    "entry_min_prob": 0.50,
 }
 
 # Tech: the knob's tuned value — 0.05, ADOPTED on simtrade_0929 (2026-10-18).
@@ -105,6 +120,20 @@ def make_strategy(
         )
     p = {**PARAMS, **overrides}
 
+    # Tech: validate the entry gate against the emitter's two probability knobs,
+    #       before anything is built.
+    # Why:  reversal plan decision 2 — an entry floor below min_prob gates
+    #       nothing the emitter has not already blocked (vacuous), while one at
+    #       or above full_confidence_prob is unreachable because the strength
+    #       ramp saturates at 1.0 (it would silently block every entry). Failing
+    #       loudly at construction beats trading the wrong shape.
+    if not p["min_prob"] <= p["entry_min_prob"] < p["full_confidence_prob"]:
+        raise ValueError(
+            f"entry_min_prob ({p['entry_min_prob']}) must satisfy "
+            f"min_prob ({p['min_prob']}) <= entry_min_prob < "
+            f"full_confidence_prob ({p['full_confidence_prob']})"
+        )
+
     # Tech: build the forecaster and emitter now, but return the Trader as a
     #       *factory* over Execution rather than as an instance.
     # Why:  `run_backtest` owns `Execution` (fee_rate is a run parameter), so a
@@ -133,6 +162,8 @@ def make_strategy(
             aggression_ticks=p["aggression_ticks"],
             max_position=p["max_position"],
             max_aggression_ticks=p["max_aggression_ticks"],
+            entry_min_prob=p["entry_min_prob"],
+            full_confidence_prob=p["full_confidence_prob"],
         )
 
     # Tech: build the percent stop only when its knob is set; None means no
