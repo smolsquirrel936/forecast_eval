@@ -65,6 +65,10 @@ one. See [TRAIN_TEST_SPLIT_PLAN](../TRAIN_TEST_SPLIT_PLAN.md).
   (the strategy never traded the warmup region).
 - Runs with a tqdm **progress bar** (the full file is millions of bars).
 - `--precompute` batches every forecast on the GPU up front, then replays execution.
+- `--forecast-cache <dir>` resolves the forecasts from the on-disk cache in
+  [forecast_cache.py](forecast_cache.md): it computes only the bars the cache
+  lacks, stores them, and records `forecast_cache_key` / `_hit` / `_computed` in
+  `params.json`.
 
 ## Key gotchas
 - Refuses to run if `warmup < context_length` (the model could never fire).

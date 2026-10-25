@@ -344,6 +344,10 @@ def main(argv=None) -> int:
     ap.add_argument("--batch-size", default="auto",
                     help="Forecast batch size for --precompute: 'auto' (probe VRAM) "
                          "or an integer")
+    ap.add_argument("--forecast-cache", type=Path, default=None,
+                    help="Directory of the on-disk forecast cache "
+                         "(forecast_cache.py): reuse stored forecasts, compute and "
+                         "store only the missing bars. Implies the precompute path")
     ap.add_argument("--output-dir", type=Path, default=None,
                     help="Defaults to <myPaper>/outputs/real_data_<timestamp>/")
     args = ap.parse_args(argv)
@@ -594,7 +598,28 @@ def main(argv=None) -> int:
     # Tech: run the backtest with a tqdm progress bar enabled, timing the whole pass.
     # Why:  the full dataset is millions of bars, so progress=True is worth the small
     #       overhead here (unlike the short demo) to show the run is advancing.
+    # Tech: with --forecast-cache, resolve every forecast from the cache (plus a
+    #       GPU pass for the bars it lacks) and hand the run the finished map.
+    # Why:  run_backtest already takes an explicit `forecasts_cache` and lets it
+    #       win over `precompute`, so the engine is untouched. The key prefix and
+    #       hit counts go into params.json: a row scored on the cache must name
+    #       the stream it was scored on.
     t0 = time.time()
+    forecasts_cache = None
+    if args.forecast_cache is not None:
+        from .forecast_cache import load_or_compute
+        forecasts_cache, cstats = load_or_compute(
+            fc, ticks, args.forecast_cache,
+            forecaster_sha=getattr(args, "forecaster_sha", None),
+            batch_size=(args.batch_size if args.batch_size == "auto"
+                        else int(args.batch_size)),
+            progress=True,
+        )
+        args.forecast_cache_key = cstats["key"][:16]
+        args.forecast_cache_hit = cstats["hit"]
+        args.forecast_cache_computed = cstats["computed"]
+        print(f"  forecast cache {cstats['folder']}: {cstats['hit']} hit, "
+              f"{cstats['computed']} computed of {cstats['requested']}")
     res = run_backtest(
         ticks,
         forecaster=fc,
@@ -620,6 +645,7 @@ def main(argv=None) -> int:
         precompute=args.precompute,
         batch_size=(args.batch_size if args.batch_size == "auto"
                     else int(args.batch_size)),
+        forecasts_cache=forecasts_cache,
     )
     elapsed = time.time() - t0
     print(f"  backtest done in {elapsed:.1f}s "
