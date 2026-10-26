@@ -12,7 +12,7 @@ to the half whose session it is (``environment.classify_session``):
 
 The forecaster's router is in ``forecaster.py``, beside the construction site
 that ``forecaster_sha`` hashes. This file is frozen once the loop starts
-(``autoresearch_trading_plan_hybrid.md``, "The freeze line"): an edit here moves
+(``autoresearch_trading_plan_hybrid_split07.md``, "The freeze line"): an edit here moves
 both halves at once.
 """
 from typing import Any, Dict, Literal, Optional

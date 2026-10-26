@@ -3,7 +3,7 @@
 Each half builds its own forecaster in ``day_half/forecaster.py`` and
 ``night_half/forecaster.py``. ``RoutedForecaster`` wraps the two and sends each
 forecast request to the half whose session the boundary bar is in. Both halves
-read the same continuous DAY+NIGHT history (``autoresearch_trading_plan_hybrid.md``
+read the same continuous DAY+NIGHT history (``autoresearch_trading_plan_hybrid_split07.md``
 decision 7); they may differ in checkpoint and context length.
 
 Stride and horizon are **shared**: the engine schedules forecasts from one

@@ -2,7 +2,7 @@
 
 GPU-free: the forecasters here are fakes; `make_strategy` builds real Toto2
 forecasters but they load nothing until asked to forecast. The requirements
-these cases pin are R1-R6 of `autoresearch_trading_plan_hybrid.md` Step 0.4.
+these cases pin are R1-R6 of `autoresearch_trading_plan_hybrid_split07.md` Step 0.4.
 """
 from datetime import datetime
 

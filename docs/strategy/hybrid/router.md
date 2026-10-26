@@ -31,7 +31,7 @@ half whose session it is.
   session's forecasts. That split the memory at every session change, and Step 0
   parity caught it: 251 of 78 648 signals differed from one emitter with the same
   settings.
-- **Frozen during the loop** (`autoresearch_trading_plan_hybrid.md`, "The freeze
+- **Frozen during the loop** (`autoresearch_trading_plan_hybrid_split07.md`, "The freeze
   line"): an edit here moves both halves at once.
 
 ## Related
