@@ -32,11 +32,22 @@ clears at ``|predicted_return| >= exit_threshold`` while entries keep the full
 band. Its value here is 0.001 — equal to the band, the inert control, so runs
 are byte-identical to the pre-knob package. The loop's search moves it through
 ``0.0005 / 0.00025 / 0.0`` as edits to ``PARAMS``.
+
+``fullday_rev_iter21`` (same plan, phase F) kept the declared pair
+``stride_bars`` 10 + ``entry_min_prob`` 0.60 (Calmar 3.9681, ride 0.3800) —
+the current incumbent of this loop.
+
+``fullday_rev_iter23`` (same plan, decisions 9/10, phase G control) added the
+package-declared ``lock_after_pct`` and ``giveback_frac`` knobs, composed with
+``stop_pct`` through the any-of seam in this package's ``exits.py``. Both None
+here — the inert control: wiring returns the bare ``EntryPercentStop``, so runs
+are byte-identical to the pre-knob package. The loop's search moves them
+through ``0.02 / 0.01 / 0.03`` and ``0.5 / 0.35`` as edits to ``PARAMS``.
 """
 from typing import Any, Dict
 
-from ...exits.pct_stop import EntryPercentStop
 from .emitter import ThresholdEmitter
+from .exits import AnyOf, BreakEvenLock, EntryPercentStop, GivebackTrail
 from .forecaster import make_forecaster
 from .trader import Trader
 
@@ -66,6 +77,19 @@ PARAMS: Dict[str, Any] = {
     # percent-stop knob — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param stop_pct=...``.
     "stop_pct": 0.05,
+    # profit-protection exits — package-declared, beyond the twelve CLI knobs
+    # (D6/D7), reachable only through ``--param lock_after_pct=...`` /
+    # ``--param giveback_frac=...``.
+    # Why:  reversal loop decisions 9/10 (phase G). lock_after_pct (G1): once
+    # the best price since entry is this fraction of the entry in the
+    # position's favour, exit on a return to the entry. giveback_frac (G2):
+    # once the best price is 2% in favour (GIVEBACK_ARM_PCT), exit when the
+    # open gain falls to (1-giveback_frac) of its maximum. Both None is the
+    # CONTROL: wiring returns the bare EntryPercentStop, byte-identical to the
+    # pre-knob package. The rules are stateful -> adoptable=False, so a live
+    # --resume into a held lot is refused for them.
+    "lock_after_pct": None,
+    "giveback_frac": None,
     # entry-probability gate — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param entry_min_prob=...``.
     # Why:  reversal loop decision 2. 0.50 is the CONTROL value: the floor it
@@ -193,17 +217,30 @@ def make_strategy(
         emitter.bind_position(lambda: trader.position)
         return trader
 
-    # Tech: build the percent stop only when its knob is set; None means no
-    #       exit rule, exactly what every recorded run before this knob used.
-    # Why:  run_backtest queries the rule every tick a position is open
-    #       (run.py Step 2) and submits a closing limit on fire — the
-    #       flatten-and-continue semantics the live deployment wants, so the
-    #       backtest measures precisely what live would do.
-    exit_rule = (
-        EntryPercentStop(stop_pct=p["stop_pct"])
-        if p["stop_pct"] is not None
-        else None
-    )
+    # Tech: build the exit stack from the knobs — the shared percent stop plus
+    #       this package's protection rules (decisions 9/10), composed through
+    #       the any-of seam. With stop_pct the only exit set, return the bare
+    #       EntryPercentStop, exactly what every recorded run used.
+    # Why:  the control (lock/giveback None) must be byte-identical to the
+    #       pre-knob package, so the composition wrapper appears only when a
+    #       protection rule is actually set. run_backtest queries the rule
+    #       every tick a position is open (run.py Step 2) and submits a closing
+    #       limit on fire — the flatten-and-continue semantics the live
+    #       deployment wants, so the backtest measures precisely what live
+    #       would do.
+    exit_rules = []
+    if p["stop_pct"] is not None:
+        exit_rules.append(EntryPercentStop(stop_pct=p["stop_pct"]))
+    if p["lock_after_pct"] is not None:
+        exit_rules.append(BreakEvenLock(lock_after_pct=p["lock_after_pct"]))
+    if p["giveback_frac"] is not None:
+        exit_rules.append(GivebackTrail(giveback_frac=p["giveback_frac"]))
+    if not exit_rules:
+        exit_rule = None
+    elif len(exit_rules) == 1:
+        exit_rule = exit_rules[0]
+    else:
+        exit_rule = AnyOf(exit_rules)
 
     return {
         "forecaster": forecaster,

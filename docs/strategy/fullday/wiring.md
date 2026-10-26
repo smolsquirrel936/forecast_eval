@@ -21,7 +21,7 @@ factory. This is the file a search for this session edits first.
 | `forecaster` | `Forecaster` | built by [forecaster.py](forecaster.md) |
 | `emitter` | `SignalEmitter` | a fresh [emitter.py](emitter.md) instance |
 | `make_trader` | `callable(Execution) -> Trader` | factory, not an instance — see [trader.py](trader.md) |
-| `exit_rule` | `Optional[ExitRule]` | `None` — this session declares no risk exit |
+| `exit_rule` | `Optional[ExitRule]` | the `stop_pct` percent stop, composed with any protection rules set in [exits.py](exits.md) — `None` when no knob is set |
 | `forced_close` | `bool` | force close at session boundaries |
 | `params` | dict | the resolved knobs, for the run banner and `params.json` |
 
@@ -58,6 +58,14 @@ factory. This is the file a search for this session edits first.
   constructor raises `ValueError` unless the band is symmetric
   (`buy == -sell`) and `0 <= exit_threshold <= buy_threshold`. Its `PARAMS`
   value 0.001 equals the band — the inert control, byte-identical runs.
+- **`lock_after_pct` / `giveback_frac` (added `fullday_rev_iter23`, reversal
+  decisions 9/10, phase G)** are package-declared knobs for the protection
+  exits in [exits.py](exits.md): a break-even lock and an armed give-back
+  trail, composed with `stop_pct` through the any-of seam. Both `None` — the
+  inert control: `make_strategy` returns the bare `EntryPercentStop`, so runs
+  are byte-identical to the pre-knob package. The rules are stateful
+  (`adoptable=False`), so a live `--resume` into a held lot is refused for
+  them; a roll restarts their state.
 
 > **This session is UNTUNED.** The values in `PARAMS` are DAY's, inherited so the
 > package is runnable and parity-checkable. They were not chosen for
