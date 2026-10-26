@@ -93,8 +93,14 @@ RECHECK_GRACE = timedelta(seconds=20)
 #       before the next starts, so the peak is 5. The offsets run *later* than
 #       the unstaggered anchor, never earlier, so the owner's window (open-8 to
 #       open-6 min, `owner_cli.OWNER_RELOGIN_LEAD`) stays clear of all three.
+# Tech: `hybrid` takes the fourth slot, 2 min later than the anchor (08:42:00 /
+#       14:57:00).
+# Why:  autoresearch_trading_plan_hybrid_split07.md "Going live" step 2. An
+#       unlisted name gets slot 0, so hybrid would refresh in the same second as
+#       day. With four deployments the steady state is already 5 and each spike
+#       makes 6, which the plan's step-3 probe must clear before hybrid starts.
 DEPLOYMENT_STAGGER = timedelta(seconds=40)
-STAGGER_ORDER = ("day", "night", "fullday")
+STAGGER_ORDER = ("day", "night", "fullday", "hybrid")
 
 
 def stagger_slot(deployment: Optional[str]) -> int:
@@ -111,7 +117,8 @@ def deployment_relogin_anchors(deployment: Optional[str]
     #       deployment's slot; the verify window does not move.
     # Why:  a later start shortens the retry window rather than the verify one,
     #       which is the last look before the open and must stay whole. At the
-    #       default backoff the last slot (2 min 40 s) still fits two attempts.
+    #       default backoff the last slot (hybrid's, 2 min) still fits two
+    #       attempts.
     return session_open_anchors(
         relogin_lead=RELOGIN_LEAD - stagger_slot(deployment) * DEPLOYMENT_STAGGER)
 
