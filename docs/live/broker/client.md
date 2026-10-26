@@ -20,7 +20,7 @@ and the swap happens at `cli.py`'s single construction site.
 
 It serialises intents and drains events. It does **not** decide `octype`, size a
 crossing order, or know the account's net. Those belong to the owner, the only
-thing that can see all three deployments — and §18.9 measured why it matters:
+thing that can see every deployment — and §18.9 measured why it matters:
 
 ```
 cover_qty = min(intent_qty, abs(account_net))   # the lots that close

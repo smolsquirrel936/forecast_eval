@@ -1,6 +1,6 @@
 # [live/intents.py](../../live/intents.py)
 
-**Role:** the wire between the three deployments and the owning process — line-delimited JSON, one file per direction per deployment.
+**Role:** the wire between the deployments and the owning process — line-delimited JSON, one file per direction per deployment.
 **Pipeline:** deployment → `intents_<slug>.jsonl` → owner → `events_<slug>.jsonl` → deployment.
 **Depends on:** nothing in this package   **Used by:** S9b's owner and `ClientBroker` (being built; [STRATEGY_SPLIT_PLAN §18](../../STRATEGY_SPLIT_PLAN.md))
 
@@ -12,7 +12,7 @@ happened. This module carries those messages. It is deliberately protocol-free �
 it moves dicts, and what the kinds mean lives with the two ends that speak them.
 
 Why one process at all: [§14](../../STRATEGY_SPLIT_PLAN.md) measured that deals
-are per-session but the position book is **shared**, so three deployments on one
+are per-session but the position book is **shared**, so deployments on one
 account see each other's positions and none of their fills. One owner, one book,
 one `_match`.
 

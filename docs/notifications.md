@@ -154,7 +154,7 @@ How the setting behaves:
 
 - **FATAL is always sent.** No button mutes a halt, a crash or an exposed
   position.
-- **Shared by all four processes.** A press is caught by whichever process is
+- **Shared by every process.** A press is caught by whichever process is
   reading the bot at that moment and written to `outputs/telegram_level.json`;
   the others read that file on their next alert. No restart.
 - **Kept across restarts.** The `level` in `secrets.toml` is consulted only
@@ -214,7 +214,7 @@ What each alert means and what to do. "Ops" links point into
 | Kind | Sender | Means |
 |---|---|---|
 | `feed_missed` | deployment | the venue traded without us; resubscribing. Sent when the feed's verdict *changes*, not every minute |
-| `feed_unreachable` | deployment | cannot reach the venue to check the feed. If it lasts 3-5 checks (~3-5 min; day, night, fullday in that order) the deployment re-logs in by itself |
+| `feed_unreachable` | deployment | cannot reach the venue to check the feed. If it lasts 3-5 checks (~3-5 min; day, night, fullday, hybrid in that order) the deployment re-logs in by itself |
 | `session_relogin_failed` | both | a re-login after a lost session failed. A deployment retries after 3 more failed checks, and its 900 s backstop halts if none heals it; the owner retries after 3 more unanswered reconciles, up to 4 times, then sends `owner_session_lost` |
 | `session_down` | deployment | the quote session dropped |
 | `relogin_failed` | both | a re-login attempt failed; it retries inside the window |
@@ -326,7 +326,7 @@ different directories and they get different settings.
 ## 10. Several processes, one bot
 
 Telegram lets only **one** process at a time read a bot's incoming messages. A
-second reader is answered `409 Conflict`. With four processes up:
+second reader is answered `409 Conflict`. With several processes up:
 
 - **Sending is unaffected.** Any number of processes can send at once.
 - **Reading button presses takes turns.** Each process that is refused backs

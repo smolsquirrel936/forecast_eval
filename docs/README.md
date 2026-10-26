@@ -130,13 +130,13 @@ Three invariants make this honest (all enforced in code + tests):
 | [live/multi_deploy_probe.py](live/multi_deploy_probe.md) | S7/S8/X1-X3 probes | every question about concurrent deployments that had to be measured, not read |
 
 **The owning process** (STRATEGY_SPLIT_PLAN §18) — one process places every
-order for all three deployments, because §14 measured that a shared account
+order for all four deployments (day, night, fullday, hybrid), because §14 measured that a shared account
 delivers deals per session but a position book to everyone.
 
 | file | what it is | open it when you want… |
 |---|---|---|
 | [live/owner_cli.py](live/owner_cli.md) — `python -m forecast_eval.live.owner_cli` | the owner entry point | how the owner starts, seeds and refuses |
-| [live/owner.py](live/owner.md) | `OrderBook` / `plan_legs` | N working orders across three deployments, and why a `Cover` is never over-sized |
+| [live/owner.py](live/owner.md) | `OrderBook` / `plan_legs` | N working orders across the deployments, and why a `Cover` is never over-sized |
 | [live/owner_process.py](live/owner_process.md) | `OwnerProcess` | the venue-facing half: one callback, the place path, two different reconciliations |
 | [live/intents.py](live/intents.md) | `JsonlStream` | the wire between the deployments and the owner, and the three rules that stop an order going missing |
 | [live/broker/client.py](live/broker/client.md) | `ClientBroker` | a deployment's end of that wire — and why a silent owner halts it |
@@ -235,7 +235,7 @@ For the **live** layer, after the above:
 9. **[live/cli.py](live/cli.md)** → **[live/runtime.py](live/runtime.md)** → **[live/loop.py](live/loop.md)** — how a session starts and what runs each bar.
 10. **[live/broker/base.py](live/broker/base.md)** — the seam, and its five implementations.
 11. **[live/state.py](live/state.md)** + **[live/ledger.py](live/ledger.md)** — what stops a run, and what it remembers across restarts.
-12. **[live/owner_cli.py](live/owner_cli.md)** → **[live/owner.py](live/owner.md)** → **[live/intents.py](live/intents.md)** — the owning process, if you need three deployments at once. Read [STRATEGY_SPLIT_PLAN](../STRATEGY_SPLIT_PLAN.md) §§14–18 first; almost every rule there was measured rather than reasoned.
+12. **[live/owner_cli.py](live/owner_cli.md)** → **[live/owner.py](live/owner.md)** → **[live/intents.py](live/intents.md)** — the owning process, which runs the deployments side by side. Read [STRATEGY_SPLIT_PLAN](../STRATEGY_SPLIT_PLAN.md) §§14–18 first; almost every rule there was measured rather than reasoned.
 
 ## Entry points (runnable)
 

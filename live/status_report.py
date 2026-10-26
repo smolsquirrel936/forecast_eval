@@ -41,7 +41,7 @@ TEMPLATE = Path(__file__).resolve().parent / "status_report_template.html"
 # Tech: display order of the known session packages; anything else sorts after.
 # Why:  colour follows the entity, never its rank — `day` must be the same blue
 #       whether or not `night` is running, so the slot is keyed by name.
-KNOWN_ORDER = ("day", "night", "fullday")
+KNOWN_ORDER = ("day", "night", "fullday", "hybrid")
 
 # Tech: thresholds at which a finding turns from ✓ to !.
 # Why:  a report generated unattended cannot say "this looks high" by judgement;

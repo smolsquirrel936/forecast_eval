@@ -1,6 +1,6 @@
 # [live/owner_process.py](../../live/owner_process.py)
 
-**Role:** the venue-facing half of the owner — one session, one callback, three deployments' orders.
+**Role:** the venue-facing half of the owner — one session, one callback, every deployment's orders.
 **Pipeline:** `intents_<slug>.jsonl` → `poll()` → `plan_legs` → `place_order`; venue deal → `_on_event` → [OrderBook](owner.md) → `events_<slug>.jsonl`.
 **Depends on:** [live/owner.py](owner.md), [live/intents.py](intents.md), [live/flatten.py](flatten.md), [live/contracts.py](contracts.md)   **Used by:** the owner entry point (S9b, in progress)
 
@@ -20,7 +20,7 @@ run with the package absent — the same arrangement
 ## One callback, no foreign deals
 
 MEASURED ([§14](../../STRATEGY_SPLIT_PLAN.md)): deals are delivered per session
-and the position book is shared, so three deployments placing their own orders
+and the position book is shared, so deployments placing their own orders
 see each other's positions and none of each other's fills. With one owner there
 is one session, and every deal it receives belongs to an order it placed — §7.2
 dissolves rather than needing a fix.
