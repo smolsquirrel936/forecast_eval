@@ -15,7 +15,8 @@ that ``forecaster_sha`` hashes. This file is frozen once the loop starts
 (``autoresearch_trading_plan_hybrid_split07.md``, "The freeze line"): an edit here moves
 both halves at once.
 """
-from typing import Any, Dict, Literal, Optional
+from contextlib import ExitStack, contextmanager
+from typing import Any, Dict, Iterator, Literal, Optional
 
 from ...environment import classify_session
 from ...events import Forecast, MarketEvent, OrderEvent, Signal
@@ -93,6 +94,47 @@ class RoutedTrader:
         if day != night:
             raise RuntimeError(f"hybrid halves disagree on position: day {day}, night {night}")
         return day
+
+    # Tech: assigning `position` or an `entry_*` field writes it to both halves;
+    #       reading an `entry_*` field reads the day half's.
+    # Why:  a live `--resume` seeds the trader by assignment
+    #       (`LiveRuntime.adopt_position`). The adopted lot belongs to both
+    #       halves, like any lot after a fill, because either may manage it next.
+    #       Nothing in the backtest assigns these, so it is unchanged.
+    @position.setter
+    def position(self, value: int) -> None:
+        for half in self.halves.values():
+            half.position = value
+
+    def _both(name: str) -> property:
+        def get(self: "RoutedTrader") -> Any:
+            return getattr(self.halves["DAY"], name)
+
+        def set_(self: "RoutedTrader", value: Any) -> None:
+            for half in self.halves.values():
+                setattr(half, name, value)
+        return property(get, set_)
+
+    entry_price = _both("entry_price")
+    entry_bar_idx = _both("entry_bar_idx")
+    entry_timestamp = _both("entry_timestamp")
+    del _both
+
+    @contextmanager
+    def rolling(self) -> Iterator[None]:
+        # Tech: enter every half's `rolling()` hook (those that define one) for
+        #       the duration of a live contract roll's calls.
+        # Why:  the runtime looks the hook up on the trader it holds, which is
+        #       this router (`live/runtime.py:_trader_roll_leg`). A half that
+        #       filters entries must see the roll's re-open marked as one, or a
+        #       filter (e.g. a time-of-day open block) refuses the re-open and
+        #       the roll leaves the account flat.
+        with ExitStack() as stack:
+            for half in self.halves.values():
+                hook = getattr(half, "rolling", None)
+                if hook is not None:
+                    stack.enter_context(hook())
+            yield
 
     def on_signal(
         self, direction: Direction, market: MarketEvent, *, strength: float = 1.0

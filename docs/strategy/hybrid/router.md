@@ -14,7 +14,7 @@ half whose session it is.
 |---|---|---|
 | `session_of(ts)` | function | `'DAY'` / `'NIGHT'`; raises for an off-hours timestamp |
 | `RoutedEmitter(day, night)` | class | `emit` / `emit_signal`: **both** halves see every forecast; the result is the half's of `forecast.timestamp`'s session |
-| `RoutedTrader(day, night)` | class | `on_signal` / `submit_exit` by `market.session`; `on_fill` to **both**; `position` / `position_state()` checked to agree |
+| `RoutedTrader(day, night)` | class | `on_signal` / `submit_exit` by `market.session`; `on_fill` to **both**; `position` / `position_state()` checked to agree; assigning `position` or `entry_price` / `entry_bar_idx` / `entry_timestamp` writes both halves (a live `--resume`); `rolling()` enters each half's own `rolling()` hook during a live contract roll |
 | `RoutedExitRule(day, night)` | class | `should_exit` by `market.session`; a half with no rule never fires; `adoptable` only if every present rule is |
 
 ## Key points / gotchas

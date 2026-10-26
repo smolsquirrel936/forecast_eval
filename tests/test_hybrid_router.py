@@ -152,6 +152,46 @@ def test_signals_go_to_the_half_of_the_market_session():
     assert calls == ["NIGHT", "DAY"]
 
 
+def test_a_live_resume_adopts_the_lot_into_both_halves():
+    """`LiveRuntime.adopt_position` seeds the trader by assignment. On the router
+    `position` was read-only, so a `--resume` into a held lot raised; the lot
+    must land in both halves, since either may manage it next."""
+    _, tr = make_trader()
+    tr.position = -1
+    tr.entry_price = 101.0
+    tr.entry_bar_idx = -1
+    tr.entry_timestamp = NIGHT_TS
+    for half in tr.halves.values():
+        assert (half.position, half.entry_price, half.entry_bar_idx,
+                half.entry_timestamp) == (-1, 101.0, -1, NIGHT_TS)
+    assert (tr.position, tr.entry_price, tr.entry_bar_idx,
+            tr.entry_timestamp) == (-1, 101.0, -1, NIGHT_TS)
+    # The adopted short is closed by a BUY like any other lot (no-flip).
+    close = tr.on_signal("BUY", mkt(DAY_TS, 99.0))
+    assert close.side == "BUY" and close.quantity == 1
+
+
+def test_a_roll_enters_every_halfs_rolling_hook():
+    """A trader with entry filters exempts a roll's re-open through `rolling()`;
+    the runtime finds the hook on the router, which must open each half's."""
+    from contextlib import contextmanager
+    _, tr = make_trader()
+    seen = []
+
+    def hook(name):
+        @contextmanager
+        def rolling():
+            seen.append(("in", name))
+            yield
+            seen.append(("out", name))
+        return rolling
+
+    tr.halves["DAY"].rolling = hook("DAY")
+    with tr.rolling():
+        seen.append("body")
+    assert seen == [("in", "DAY"), "body", ("out", "DAY")]
+
+
 def test_a_fill_that_reached_one_half_only_is_loud():
     _, tr = make_trader()
     tr.halves["DAY"].on_fill("BUY", 1, fill_price=1.0, bar_idx=0, timestamp=DAY_TS)
