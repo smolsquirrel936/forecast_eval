@@ -130,7 +130,7 @@ def make_strategy(
 
     # Tech: build each half's forecaster from its own construction site, then
     #       the router over the two.
-    # Why:  the halves' files are what each phase edits; the router decides
+    # Why:  the halves' files are what each iteration edits; the router decides
     #       whether the two can share one instance (forecaster.py).
     halves_fc = {
         half: build(

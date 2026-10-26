@@ -9,7 +9,7 @@ decision 7); they may differ in checkpoint and context length.
 Stride and horizon are **shared**: the engine schedules forecasts from one
 ``forecast_stride_bars``, and ``forecast_cache.py`` decodes every cached
 forecast with one ``forecast_horizon_bars``. A per-half value of either needs a
-change here, which the plan reserves for a later, human-approved phase.
+change here, which the plan leaves to a later, human-approved step (its open items).
 
 This file and the two halves' ``forecaster.py`` are what ``results_hybrid.tsv``'s
 ``forecaster_sha`` hashes (``strategy/wiring.py:forecaster_sha``).

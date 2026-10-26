@@ -18,7 +18,7 @@ the Trader sizes on. Its decision is used only for DAY-session forecasts.
 ## Key points / gotchas
 - **Copied from `main:strategy/day/emitter.py`** at the DAYNIGHT_TOTO2_RESET_PLAN
   reset (itself a verbatim copy of [strategy/threshold.py](../../threshold.md)), with
-  only the import depth changed. It is the DAY half's to edit during its phase of
+  only the import depth changed. It is the DAY half's to edit in its own iterations of
   `autoresearch_trading_plan_hybrid_split07.md`; the night half must never import it.
 - Built by [wiring.py](../wiring.md) at ±0.001 / `min_prob` 0.65 (the `day_*` knobs).
 - **It sees every forecast, DAY and NIGHT, but decides only for DAY.**

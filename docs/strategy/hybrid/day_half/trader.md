@@ -18,7 +18,7 @@ sizing, and the position mirror `ExitRule`s read.
 ## Key points / gotchas
 - **Copied from `main:strategy/day/trader.py`** (a verbatim copy of
   [trader.py](../../../trader.md)) with only the import depth changed. The DAY
-  half's to edit in its phase; the night half must never import it.
+  half's to edit in its own iterations; the night half must never import it.
 - **It decides only in the DAY session but folds every fill.** [RoutedTrader](../router.md)
   sends `on_signal` / `submit_exit` here only when `market.session` is DAY, and
   `on_fill` to both halves, so a lot the night half opened is this half's to
