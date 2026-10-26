@@ -15,8 +15,9 @@ DAYNIGHT_TOTO2_RESET_PLAN reset, ``20767bb``) with only the relative-import
 depth changed. It is the DAY half's to edit in its own iterations of
 ``autoresearch_trading_plan_hybrid_split07.md``; the other half must never import it.
 """
+from contextlib import contextmanager
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Iterator, Literal, Optional
 
 from ....events import MarketEvent, OrderEvent
 from ....execution import Execution
@@ -74,6 +75,7 @@ class Trader:
         #       None/None restores the copied behavior exactly.
         self.open_block_start = open_block_start
         self.open_block_end = open_block_end
+        self._rolling: bool = False  # inside rolling(): a live roll's leg
         self.position = 0  # signed contracts; +long / -short
         self.entry_price: float = 0.0
         self.entry_bar_idx: int = -1
@@ -104,6 +106,24 @@ class Trader:
         if self.max_position <= 1:
             return 1
         return max(1, min(self.max_position, int(round(strength * self.max_position))))
+
+    # ---- roll legs ---------------------------------------------------------
+
+    @contextmanager
+    def rolling(self) -> Iterator[None]:
+        # Tech: mark every call made inside this context as a roll leg; the
+        #       flag is cleared on exit, even if the call raises.
+        # Why:  a live roll for DAY+NIGHT runs at 12:45, inside the open block,
+        #       and re-opens the lot from flat after closing it. That re-open
+        #       carries the held lot into the new month; it is not a new entry,
+        #       so the block must let it through (`live/runtime.py`
+        #       `_trader_roll_leg`, through the router's `rolling()`). The
+        #       backtest never rolls, so its path is unchanged.
+        self._rolling = True
+        try:
+            yield
+        finally:
+            self._rolling = False
 
     # ---- signal-driven entries / closes ----------------------------------
 
@@ -145,7 +165,8 @@ class Trader:
         order: Optional[OrderEvent] = None
         if self.position == 0:
             if (
-                self.open_block_start is not None
+                not self._rolling
+                and self.open_block_start is not None
                 and self.open_block_end is not None
                 and self.open_block_start
                 <= market.timestamp.hour + market.timestamp.minute / 60

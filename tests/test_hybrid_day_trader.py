@@ -80,3 +80,29 @@ def test_half_hour_start_boundary():
     # integer values keep their hour-only meaning: 13:30 outside [9.5, 13).
     o2 = tr.on_signal("BUY", _market(hour=13, minute=30))
     assert o2 is not None and o2.intent == "OPEN"
+
+
+def test_a_live_roll_reopens_through_the_open_block():
+    """A live roll (12:45 for DAY+NIGHT) closes the lot and re-opens it from
+    flat. Inside 09:30-13:00 the block refused that re-open, so the roll left
+    the account flat. `rolling()` marks the roll's calls; the flag is cleared
+    afterwards, so a strategy open at the same time is still blocked."""
+    tr = _trader(start=9.5, end=13)
+    roll_ts = _market(hour=12, minute=45)
+    assert tr.on_signal("BUY", roll_ts) is None
+    with tr.rolling():
+        order = tr.on_signal("BUY", roll_ts)
+    assert order is not None and order.intent == "OPEN"
+    tr.execution.cancel()
+    assert tr.on_signal("BUY", roll_ts) is None
+
+
+def test_the_roll_reopen_reaches_the_day_half_through_the_router():
+    """The runtime enters `rolling()` on the trader it holds -- hybrid's router."""
+    from forecast_eval.strategy.hybrid import wiring
+    execution = Execution(fee_rate=0.0)
+    tr = wiring.make_strategy(warmup_bars=0)["make_trader"](execution)
+    roll_ts = _market(hour=12, minute=45)
+    with tr.rolling():
+        order = tr.on_signal("SELL", roll_ts)
+    assert order is not None and order.intent == "OPEN" and order.side == "SELL"

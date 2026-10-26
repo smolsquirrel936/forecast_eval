@@ -13,6 +13,7 @@ sizing, and the position mirror `ExitRule`s read.
 | Symbol | Kind | One-liner |
 |---|---|---|
 | `Trader(execution, *, tick_size, aggression_ticks, max_position, max_aggression_ticks, open_block_start, open_block_end)` | class | the state machine |
+| `rolling()` | context manager | marks a live roll's calls; the open block lets the roll's re-open through |
 | `on_signal` / `submit_exit` / `on_fill` / `position_state` | method | as in [trader.py](../../../trader.md) |
 
 ## Key points / gotchas
@@ -28,6 +29,11 @@ sizing, and the position mirror `ExitRule`s read.
   like the original hour-only gate. The §4.4 cancel still runs first, so a day
   signal still retires a resting order placed by either half — the mirror of
   the night half's `allow_open` gate.
+- **`rolling()` lets a live roll's re-open through the block** (2026-10-27,
+  simtrade_0929). DAY+NIGHT rolls at 12:45, inside the window; the roll closes
+  the lot and re-opens it from flat, and the block refused that re-open, leaving
+  the account flat. The live runtime enters the hook through the router's
+  `rolling()`; the backtest never rolls, so its path is unchanged.
 - **It decides only in the DAY session but folds every fill.** [RoutedTrader](../router.md)
   sends `on_signal` / `submit_exit` here only when `market.session` is DAY, and
   `on_fill` to both halves, so a lot the night half opened is this half's to
