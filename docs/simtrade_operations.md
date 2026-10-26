@@ -699,10 +699,19 @@ fullday trades it from the 2026-10-27 restart.
   Result), so this soak is its first clean test.
 - **The 10-27 start** follows "Resuming on the 2026-10-24 code" below, with
   two differences for fullday:
-  - **Its ledger is already stamped.** The 2026-10-26 11:50 wrong-folder start
-    (§6.10) added the `contract` column (6 rows, `TXFK6`, net 0) before
-    anyone backed it up. Back up `fills_day.csv` and `fills_night.csv` as
-    step 3 says.
+  - **The old strategy's records are archived.** On 2026-10-26 they were moved
+    out of `outputs/` to `night/archive_fullday_split_iter07_20261026/`:
+    - `fills_day_night.csv` (6 rows, net 0);
+    - `soak_epoch_day_night.json`;
+    - the wire: `intents_day_night.jsonl` and `events_day_night.jsonl`;
+    - `prices_day_night.csv`;
+    - the six `live_day_night_*` run folders;
+    - the `_backup_roll_entryfix_20261024` copies.
+
+    Kept in `outputs/`: `bars_cache_day_night.csv` (warm-up market data) and
+    the restart and account state files. The owner therefore seeds
+    `day_night` as flat (no ledger). Back up `fills_day.csv` and
+    `fills_night.csv` as step 3 says.
   - **Fullday starts with `--fresh-start`, not `--resume`.** It is flat, and a
     new soak epoch keeps the new config's record apart from the old one's:
 
