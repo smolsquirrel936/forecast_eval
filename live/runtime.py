@@ -29,6 +29,7 @@ before the first live decision, and only the first is obvious:
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from time import monotonic as _monotonic
 from typing import Any, List, Optional, Sequence
 
@@ -468,8 +469,9 @@ class LiveRuntime:
         if session is None:
             session = self._settlement_session(timestamp)
         self.portfolio.apply_fill(fill, session=session)
-        self.trader.on_fill(side, abs(held), fill_price=float(price),
-                            bar_idx=-1, timestamp=timestamp)
+        with self._trader_roll_leg():
+            self.trader.on_fill(side, abs(held), fill_price=float(price),
+                                bar_idx=-1, timestamp=timestamp)
         # Tech: the settlement joins the loop's fill list.
         # Why:  that list is what the ledger appends and `trades.csv` pairs.
         #       Left out, the ledger read the settled lot and its re-open as two
@@ -596,11 +598,31 @@ class LiveRuntime:
         #       paths — the ladder changes the *price* and the time-in-force, never
         #       the state machine, so the no-flip rules and the mirrors see the
         #       same orders they always do.
-        if self._roll_state == "closing":
-            return self.trader.submit_exit(market)
-        want = self._roll_size
-        direction = "BUY" if want > 0 else "SELL"
-        return self.trader.on_signal(direction, market, strength=1.0)
+        with self._trader_roll_leg():
+            if self._roll_state == "closing":
+                return self.trader.submit_exit(market)
+            want = self._roll_size
+            direction = "BUY" if want > 0 else "SELL"
+            return self.trader.on_signal(direction, market, strength=1.0)
+
+    def _trader_roll_leg(self):
+        # Tech: the trader's `rolling()` context manager when it defines one,
+        #       else a no-op context. Entered around every call this runtime
+        #       makes into the trader on a roll's behalf: the scheduled close
+        #       (`submit_exit`), the settlement's synthetic fill (`on_fill`) and
+        #       both re-opens (`on_signal`).
+        # Why:  a roll's re-open is an OPEN from flat on the side that was just
+        #       closed, which is exactly what a trader's re-entry filter (e.g. a
+        #       same-side cooldown) exists to block. A trader that filters entries
+        #       needs to tell the roll's orders from the strategy's, and this
+        #       runtime is the only place that knows. The hook is optional, read
+        #       with getattr like the broker's `rolling`, so the frozen shared
+        #       `Trader` and the packages that declare no filter are untouched.
+        #       The scheduled close's own venue fill arrives later through
+        #       `LiveLoop`, outside this context: a filter must exempt the
+        #       re-open, not rely on the close being marked.
+        rolling = getattr(self.trader, "rolling", None)
+        return rolling() if rolling is not None else nullcontext()
 
     def _reset_ladder(self) -> None:
         # Tech: clear the ladder between legs and at the end of a roll.
@@ -713,7 +735,8 @@ class LiveRuntime:
         if self._roll_state == "reopening":
             order, _ticks = self._submit_first_rung(market)
         else:
-            order = self.trader.on_signal(direction, market, strength=1.0)
+            with self._trader_roll_leg():
+                order = self.trader.on_signal(direction, market, strength=1.0)
         if self.recorder is not None:
             self.recorder.record(
                 "roll_exposure_resumed", timestamp=market.timestamp,

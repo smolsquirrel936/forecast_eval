@@ -21,7 +21,7 @@ factory. This is the file a search for this session edits first.
 | `forecaster` | `Forecaster` | built by [forecaster.py](forecaster.md) |
 | `emitter` | `SignalEmitter` | a fresh [emitter.py](emitter.md) instance |
 | `make_trader` | `callable(Execution) -> Trader` | factory, not an instance — see [trader.py](trader.md) |
-| `exit_rule` | `Optional[ExitRule]` | `None` — this session declares no risk exit |
+| `exit_rule` | `Optional[ExitRule]` | the `stop_pct` percent stop, composed with any protection rules set in [exits.py](exits.md) — `None` when no knob is set |
 | `forced_close` | `bool` | force close at session boundaries |
 | `params` | dict | the resolved knobs, for the run banner and `params.json` |
 
@@ -41,6 +41,44 @@ factory. This is the file a search for this session edits first.
   `min_trend_ticks`, `path_momentum`, `trend_filter`. `real_data.py` never
   exposed them, so every recorded run used the emitter's class defaults; leaving
   them there is what reproduces those runs.
+- **`entry_min_prob` (added `fullday_rev_iter02`)** is a package-declared knob
+  beyond the twelve CLI knobs, like `stop_pct`: the Trader skips an OPEN from
+  flat whose signal strength falls below the floor it implies. `make_strategy`
+  raises `ValueError` unless
+  `min_prob <= entry_min_prob < full_confidence_prob` — below `min_prob` the
+  gate is vacuous, at/above `full_confidence_prob` unreachable (the strength
+  ramp saturates at 1.0). Its `PARAMS` value 0.50 is the inert control.
+- **`exit_threshold` (added `fullday_rev_iter16`, reversal decision 8)** is a
+  package-declared knob like the two above: while positioned, an opposite
+  signal clears at `|predicted_return| >= exit_threshold`; entries keep the
+  full band. `make_strategy` builds the emitter with it and `make_trader`
+  binds the emitter to each trader it builds
+  (`emitter.bind_position(lambda: trader.position)`), which is how the emitter
+  knows the exit side without touching frozen `run.py`. The emitter's
+  constructor raises `ValueError` unless the band is symmetric
+  (`buy == -sell`) and `0 <= exit_threshold <= buy_threshold`. Its `PARAMS`
+  value 0.001 equals the band — the inert control, byte-identical runs.
+- **`lock_after_pct` / `giveback_frac` (added `fullday_rev_iter23`, reversal
+  decisions 9/10, phase G)** are package-declared knobs for the protection
+  exits in [exits.py](exits.md): a break-even lock and an armed give-back
+  trail, composed with `stop_pct` through the any-of seam. Both `None` — the
+  inert control: `make_strategy` returns the bare `EntryPercentStop`, so runs
+  are byte-identical to the pre-knob package. The rules are stateful
+  (`adoptable=False`), so a live `--resume` into a held lot is refused for
+  them; a roll restarts their state.
+- **`channel_exit_bars` (added `fullday_rev_iter29`, reversal decision 11,
+  phase H)** is a package-declared knob for the price-channel exit in
+  [exits.py](exits.md): once the position is at least N bars old, exit on a
+  break of the last N in-position bars' extreme — model-free, no forecast
+  lag. `None` — the inert control; the rule composes through the same any-of
+  seam. Stateful (`adoptable=False`).
+- **`reentry_cooldown_signals` (added `fullday_rev_iter33`, reversal decision
+  12, phase I)** is a package-declared knob for the Trader's re-entry
+  cooldown: after a fill that flattens a position, an OPEN on the closed
+  position's side is skipped for K signals (HOLDs count; the opposite side
+  opens freely). `0` — the inert control, the cooldown never arms, runs are
+  byte-identical to the pre-knob package. `make_strategy` raises `ValueError`
+  unless it is an int >= 0.
 
 > **This session is UNTUNED.** The values in `PARAMS` are DAY's, inherited so the
 > package is runnable and parity-checkable. They were not chosen for

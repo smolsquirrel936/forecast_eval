@@ -155,7 +155,7 @@ def test_fullday_band_is_its_own_values_and_names_its_split_source():
     assert p["buy_threshold"] == 0.001
     assert p["sell_threshold"] == -0.001
     assert p["min_prob"] == 0.50
-    assert p["stride_bars"] == 15
+    assert p["stride_bars"] == 10
     doc = __import__(
         "forecast_eval.strategy.fullday.wiring", fromlist=["wiring"]
     ).__doc__

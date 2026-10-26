@@ -20,9 +20,19 @@ PER-SESSION COPY (STRATEGY_SPLIT_PLAN S1). Verbatim copy of
 ``tests/test_strategy_isolation.py`` pins it), with only the relative-import depth
 changed. It is this package's to edit; the shared original is frozen and
 hash-guarded by ``tests/test_strategy_isolation.py``. Diverge freely here.
+
+DIVERGED (fullday_rev_iter16, autoresearch_trading_plan_fullday_reversal.md
+decision 8): the emitter gained a position-aware **exit band** —
+``bind_position`` lets wiring's ``make_trader`` hand it a live-position getter,
+and while positioned, an *opposite*-side signal clears at the narrower
+``|predicted_return| >= exit_threshold`` instead of the full band. From flat,
+and for same-direction signals, the full band applies unchanged. At the
+control ``exit_threshold == buy_threshold`` the cuts are exactly the
+pre-knob ones, so a run at the control is byte-identical to one without the
+knob; an emitter with no binding behaves as today regardless of the knob.
 """
 from collections import deque
-from typing import Literal, Optional, Tuple
+from typing import Callable, Literal, Optional, Tuple
 
 from ...events import Forecast, Signal
 from ..base import SignalEmitter
@@ -38,6 +48,7 @@ class ThresholdEmitter(SignalEmitter):
         sell_threshold: float = -0.001,
         min_prob: Optional[float] = None,
         full_confidence_prob: float = 0.9,
+        exit_threshold: Optional[float] = None,
         short_window: int = 3,
         min_trend_ticks: float = 3.0,
         path_momentum: bool = True,
@@ -67,10 +78,33 @@ class ThresholdEmitter(SignalEmitter):
             raise ValueError(
                 f"full_confidence_prob ({full_confidence_prob}) must be in (0.5, 1.0]"
             )
+        # Tech: exit-band validation — the narrowed exit band is defined as the
+        #       mirror of the entry band on the opposite side, so it needs a
+        #       symmetric band (buy == -sell), and it must sit in
+        #       [0, buy_threshold] so the exit cut is never wider than the band
+        #       itself and never fires on same-sign forecasts.
+        # Why:  reversal plan decision 8 — a crossed or negative exit cut would
+        #       exit on forecasts the entry band calls same-direction, which is
+        #       not a slower-or-faster question but a different strategy. Failing
+        #       at construction beats trading that silently. None disables the
+        #       narrowing entirely (the emitter stays position-blind).
+        if exit_threshold is not None:
+            if buy_threshold != -sell_threshold:
+                raise ValueError(
+                    f"exit_threshold needs a symmetric band: buy_threshold "
+                    f"({buy_threshold}) must equal -sell_threshold "
+                    f"({-sell_threshold})"
+                )
+            if not 0 <= exit_threshold <= buy_threshold:
+                raise ValueError(
+                    f"exit_threshold ({exit_threshold}) must be in "
+                    f"[0, buy_threshold ({buy_threshold})] or None"
+                )
         self.buy_threshold = buy_threshold
         self.sell_threshold = sell_threshold
         self.min_prob = min_prob
         self.full_confidence_prob = full_confidence_prob
+        self.exit_threshold = exit_threshold
         # Tech: short-window trend-filter state — a rolling deque of recent last_price
         #       samples (+1 slot so an early/late half split is defined at full window).
         # Why:  the trend filter (autoresearch exp227-style) only enters when recent tape
@@ -84,6 +118,23 @@ class ThresholdEmitter(SignalEmitter):
         self.trend_filter = trend_filter
         self.path_momentum = path_momentum
         self._short_prices: deque = deque(maxlen=short_window + 1)
+        # Tech: the live-position binding wiring.make_trader installs via
+        #       bind_position(); None leaves the emitter position-blind.
+        # Why:  decision 8's mechanism — the exit band needs to know which side
+        #       is the exit side, but run.py (frozen) must not be touched, so
+        #       the emitter pulls the position through a getter the trader's
+        #       own factory provides. A getter rather than a snapshot keeps the
+        #       read current at every forecast; fills land before emit in the
+        #       tick order (run.py steps 1 -> 3), so there is no look-ahead.
+        self._position_getter: Optional[Callable[[], int]] = None
+
+    def bind_position(self, getter: Callable[[], int]) -> None:
+        """Bind a live-position getter (wiring's make_trader wires it to the Trader)."""
+        # Tech: install the getter this emitter will call at each decision.
+        # Why:  the emitter must see closes/flips the moment they fill, so it
+        #       reads the trader's *current* signed position per forecast —
+        #       the exit band is only active while genuinely positioned.
+        self._position_getter = getter
 
     def _trend_confirms(self, direction: Direction, payload: dict) -> bool:
         # Tech: append this bar's last_price to the rolling window, then require the
@@ -141,13 +192,30 @@ class ThresholdEmitter(SignalEmitter):
         if r is None:
             return "HOLD", 0.0
 
-        # Tech: the original return-threshold direction — BUY above the upper band,
-        #       SELL below the lower band, else HOLD.
-        # Why:  the dead zone between thresholds filters weak/noisy point forecasts;
-        #       this is unchanged so default backtests reproduce exactly.
-        if r >= self.buy_threshold:
+        # Tech: position-aware band cuts — the full entry band by default; when a
+        #       live position is bound and non-zero, the *opposite* side (the
+        #       exit) clears at the narrower |r| >= exit_threshold instead.
+        # Why:  reversal plan decision 8 — the ~20 h model lag is mostly the wait
+        #       for the first forecast that clears the full band the other way,
+        #       so an exit that needs only a weak opposite view leaves the wrong
+        #       side of a reversal sooner. Same-direction signals and the flat
+        #       case keep the full band, so a re-entry still demands a strong
+        #       forecast; at the control (exit_threshold == buy_threshold) the
+        #       cuts are today's and the run is byte-identical. The gates below
+        #       (min_prob, trend filter, path check) apply to the exit signal
+        #       exactly as to an entry one.
+        buy_cut = self.buy_threshold
+        sell_cut = self.sell_threshold
+        if self.exit_threshold is not None and self._position_getter is not None:
+            position = self._position_getter()
+            if position > 0:
+                sell_cut = -self.exit_threshold
+            elif position < 0:
+                buy_cut = self.exit_threshold
+
+        if r >= buy_cut:
             direction: Direction = "BUY"
-        elif r <= self.sell_threshold:
+        elif r <= sell_cut:
             direction = "SELL"
         else:
             return "HOLD", 0.0

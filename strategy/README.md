@@ -102,7 +102,39 @@ places orders on.** `live/config.py` holds only the provenance record.
   package on disk. The stop adoptions changed `strategy_sha` again, for night
   and fullday on 2026-10-12 and 2026-10-18 and for day on 2026-10-12.
 
-## Fullday — `fullday_split_iter07`
+## Fullday — `fullday_rev_iter34` (since 2026-10-27)
+
+| Knob | Value |
+|---|---|
+| band | buy +0.001 / sell −0.001 |
+| `min_prob` | 0.50 (the emitter's gate; it gates exits too) |
+| `entry_min_prob` | **0.60**: an OPEN from flat needs this directional probability; closes are never gated |
+| `stride_bars` | **10** |
+| sides | long and short |
+| exits | `stop_pct` **0.05** + `lock_after_pct` **0.03**: once a trade is 3 % in profit, a return to its entry closes it (`strategy/fullday/exits.py`) |
+| `reentry_cooldown_signals` | **16**: after a close, an open on the same side is skipped for 16 signals (~2.7 h); the other side opens freely |
+
+- **Source:** `autoresearch_fullday_reversal_1026` →
+  `candidate_fullday_iter34` (merged 2026-10-26). It is the loop's `iter34`;
+  the loop's last kept run (`iter35`, cooldown 48) was not taken. Plan and
+  results: `../../autoresearch_trading_plan_fullday_reversal.md`, phase 2.
+- **Score:** train-70 % Calmar **4.4463**, 181 trades, net +10 789, max
+  drawdown −2 427 (the replaced config: 3.2466). Its reversal ride is 0.3614
+  against 0.4065, so it gets off the wrong side of a reversal sooner.
+- **Held-out 30 %: optimistic.** Approximate Calmar **4.06** (net +19 513,
+  drawdown −4 804) against the replaced config's 3.53, with a quicker ride
+  (Δ −0.048 [−0.090, −0.007]). But it was read *after* iter35 failed there and
+  six configs were compared on it, so the held-out window took part in the
+  choice. This simtrade is its first clean out-of-sample test.
+- **Live-only fixes it carries** (the backtest has no rolls):
+  - the runtime's `rolling()` hook (`main` `825f069`), so the cooldown lets a
+    roll's re-open through;
+  - the roll's re-open keeps the original entry, so the stop and the lock keep
+    measuring from it, as in the backtest.
+- **Replaced:** `fullday_split_iter07` + `stop_pct` 0.05, below. Its soak ran
+  from 2026-09-29 to 2026-10-23.
+
+## Fullday until 2026-10-26 — `fullday_split_iter07`
 
 | Knob | Value |
 |---|---|
@@ -221,6 +253,24 @@ places orders on.** `live/config.py` holds only the provenance record.
     - **Resume:** a position carried into a `--resume` start is judged against
       the current width at once. One already beyond it closes on the first
       tick.
+16. **Fullday cannot `--resume` into a held lot** (since 2026-10-27). Its
+    break-even lock tracks the best price since entry, which a dead process
+    takes with it, so the lock is not `adoptable` and `adopt_position` refuses
+    with exit 5.
+    - **Stop and restart fullday only while it is flat.**
+    - **To restart it while it holds:** flatten first (`live/flatten.py`, in
+      session hours), then start with `--fresh-start`.
+    - **Day and night are unaffected:** their percent stops still resume.
+17. **A weekday market holiday can halt a running deployment.**
+    `SessionPolicy.holidays` is empty, so a holiday's session reads as open.
+    Once a deployment has seen ticks, 900 s of holiday silence halts it with
+    `no market data`.
+    - **Flat:** stop it before the holiday and restart after.
+    - **Fullday holding:** see caution 16.
+18. **Fullday's warm-up at stride 10.** The default fetch is 10 calendar days
+    (500 boundaries); priming replays up to 900. `outputs/` already holds
+    fullday's bar cache back to 09-15, which covers it. If fullday ever stops
+    with `emitter priming incomplete`, re-run it with `--warmup-days 15`.
 
 ## How to run
 

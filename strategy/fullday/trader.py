@@ -9,7 +9,28 @@ PER-SESSION COPY (STRATEGY_SPLIT_PLAN S1). Verbatim copy of
 ``tests/test_strategy_isolation.py`` pins it), with only the relative-import depth
 changed. It is this package's to edit; the shared original is frozen and
 hash-guarded by ``tests/test_strategy_isolation.py``. Diverge freely here.
+
+DIVERGED (fullday_rev_iter02, autoresearch_trading_plan_fullday_reversal.md
+decision 2): ``on_signal`` gained an entry-only probability gate — from flat,
+a signal whose ``strength`` falls below the floor implied by ``entry_min_prob``
+submits nothing, while closes are never gated. At the default
+``entry_min_prob`` 0.50 the floor is 0.0 and the gate is inert, so runs are
+byte-identical to the pre-gate copy.
+
+DIVERGED (fullday_rev_iter33, same plan decision 12 / phase I): the Trader
+gained a re-entry cooldown — after a fill that flattens a position, an OPEN on
+the closed position's side is skipped for ``reentry_cooldown_signals`` signals
+(HOLDs count; the opposite side opens freely). At the default 0 the cooldown
+never arms, so runs are byte-identical to the pre-knob copy.
+
+DIVERGED (2026-10-26, after the loop; main ``825f069``): the Trader defines
+``rolling()``, the optional hook ``live/runtime.py`` enters around every call it
+makes on a roll's behalf. Inside it, an OPEN from flat bypasses the cooldown and
+clears it, so a roll's re-open is never mistaken for a same-side re-entry. The
+backtest never enters the hook (its spliced tape has no rolls), so every
+recorded run is unchanged.
 """
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Literal, Optional
 
@@ -29,6 +50,9 @@ class Trader:
         aggression_ticks: int = 3,
         max_position: int = 1,
         max_aggression_ticks: Optional[int] = None,
+        entry_min_prob: float = 0.5,
+        full_confidence_prob: float = 0.9,
+        reentry_cooldown_signals: int = 0,
     ):
         # Tech: hold the execution handle and order-placement parameters, and
         #       initialize position/entry tracking to flat.
@@ -49,6 +73,42 @@ class Trader:
         self.aggression_ticks = aggression_ticks
         self.max_position = max_position
         self.max_aggression_ticks = max_aggression_ticks
+        # Tech: entry-only probability gate — convert entry_min_prob into the
+        #       strength floor it implies on the emitter's conviction ramp,
+        #       strength = (dir_prob - 0.5) / (full_confidence_prob - 0.5)
+        #       clamped to [0, 1] (emitter.py §5).
+        # Why:  autoresearch_trading_plan_fullday_reversal.md decision 2 — the
+        #       gate lives here, after the emitter, because the emitter's trend
+        #       filter stores a price only when a signal gets past its earlier
+        #       gates; gating entries here leaves that stored state exactly what
+        #       it is today. entry_min_prob=0.50 (floor 0.0, strength >= 0
+        #       always) is the inert control. The ramp saturates at 1.0, so the
+        #       gate cannot tell probabilities at or above full_confidence_prob
+        #       apart; wiring validates min_prob <= entry_min_prob <
+        #       full_confidence_prob so the gate is never vacuous or total.
+        self.entry_min_prob = entry_min_prob
+        self.entry_floor = (entry_min_prob - 0.5) / (full_confidence_prob - 0.5)
+        # Tech: re-entry cooldown — after a fill that flattens a position, an
+        #       OPEN on the closed position's side is skipped for this many
+        #       signals (HOLDs count); the opposite side opens freely.
+        # Why:  reversal plan decision 12 (phase I). Every quick-exit mechanism
+        #       before this (phases E/H) died on re-entry churn against the same
+        #       leg; the cooldown attacks exactly that churn without touching
+        #       the exit side. 0 is the inert control — the cooldown never arms,
+        #       so runs are byte-identical to the pre-knob copy. A whole,
+        #       non-negative count is the only meaningful width (signals are
+        #       discrete; the run loop calls on_signal once per stride).
+        if not isinstance(reentry_cooldown_signals, int) or reentry_cooldown_signals < 0:
+            raise ValueError(
+                f"reentry_cooldown_signals must be an int >= 0, "
+                f"got {reentry_cooldown_signals}"
+            )
+        self.reentry_cooldown_signals = reentry_cooldown_signals
+        self._cooldown_side: int = 0        # +1 blocked BUYs, -1 blocked SELLs
+        self._cooldown_left: int = 0        # signals remaining in the cooldown
+        self._rolling: bool = False         # inside rolling(): a roll leg
+        self._roll_reopen: bool = False     # the resting OPEN is a roll's re-open
+        self._closed_entry = None           # (side, price, bar_idx, ts) of the last flatten
         self.position = 0  # signed contracts; +long / -short
         self.entry_price: float = 0.0
         self.entry_bar_idx: int = -1
@@ -80,6 +140,23 @@ class Trader:
             return 1
         return max(1, min(self.max_position, int(round(strength * self.max_position))))
 
+    # ---- roll legs ---------------------------------------------------------
+
+    @contextmanager
+    def rolling(self):
+        # Tech: mark every call made inside this context as a roll leg; the
+        #       flag is cleared on exit, even if the call raises.
+        # Why:  `live/runtime.py` (`_trader_roll_leg`) enters this around the
+        #       roll's close, its settlement fill and both re-opens. A roll's
+        #       re-open is an OPEN from flat on the side just closed, which the
+        #       re-entry cooldown would otherwise skip: the settled leg's single
+        #       shot was dropped, and each ladder rung burned one count.
+        self._rolling = True
+        try:
+            yield
+        finally:
+            self._rolling = False
+
     # ---- signal-driven entries / closes ----------------------------------
 
     def on_signal(
@@ -90,11 +167,16 @@ class Trader:
         #       first (even for HOLD) guarantees a stale forecast's order can never
         #       outlive the forecast that produced it.
         self.execution.cancel()
+        self._roll_reopen = False           # the cancel took any roll re-open with it
 
         # Tech: HOLD means "do nothing further" after the cancel above.
         # Why:  HOLD is a real decision (stand aside), not a no-op — its cancel is
         #       the whole point, so we return without submitting anything.
+        #       A HOLD still counts toward the re-entry cooldown (decision 12):
+        #       the budget is signals seen, not orders placed.
         if direction == "HOLD":
+            if self._cooldown_left > 0:
+                self._cooldown_left -= 1
             return None
 
         # Tech: capture the reference price; entries use a confidence-scaled offset
@@ -115,6 +197,39 @@ class Trader:
         #       no-op and an opposing signal closes only.
         order: Optional[OrderEvent] = None
         if self.position == 0:
+            # Tech: re-entry cooldown — while a cooldown is armed, an OPEN on
+            #       the closed position's side is skipped; every signal seen
+            #       while flat and cooling (this one included) consumes one of
+            #       the K, and the opposite side passes untouched.
+            # Why:  decision 12 — the churn that killed phases E/H was the
+            #       immediate re-entry against the same leg; this blocks only
+            #       that re-entry, leaving exits and opposite-side entries
+            #       exactly as they are. The unconditional cancel above still
+            #       ran, so a gated signal leaves nothing resting (§4.4).
+            # Tech: inside rolling(), the open bypasses the cooldown and clears
+            #       it, consuming no count.
+            # Why:  the flatten that armed it was the roll's close (or its
+            #       settlement), not a strategy exit, so there is no re-entry
+            #       to guard against: this open restores the same exposure.
+            #       Clearing it here covers both close paths, including the
+            #       scheduled close's venue fill, which arrives outside the hook.
+            if self._rolling:
+                self._cooldown_left = 0
+            elif self._cooldown_left > 0:
+                self._cooldown_left -= 1
+                if (direction == "BUY" and self._cooldown_side > 0) or (
+                    direction == "SELL" and self._cooldown_side < 0
+                ):
+                    return None
+            # Tech: entry-only conviction gate — a below-floor signal from flat
+            #       submits nothing (the unconditional cancel above still ran, so
+            #       any resting order is gone per §4.4).
+            # Why:  weak-conviction opens are the entries this loop wants to skip
+            #       (reversal plan decision 2); a gated signal is still a signal,
+            #       so a stale forecast's order must not outlive it. Closes are
+            #       never gated — see __init__.
+            if strength < self.entry_floor:
+                return None
             offset = self._entry_offset(strength)
             qty = self._entry_qty(strength)
             if direction == "BUY":
@@ -143,6 +258,11 @@ class Trader:
         #       (§4.5); returning the order lets the run loop log it.
         if order is not None:
             self.execution.submit(order, current_price=cur)
+            # Tech: remember that this resting OPEN is a roll's re-open.
+            # Why:  its fill arrives later, through LiveLoop and outside
+            #       rolling(); on_fill needs the mark to carry the original
+            #       entry across the roll (see on_fill).
+            self._roll_reopen = self._rolling and order.intent == "OPEN"
         return order
 
     # ---- exit-driven / forced closes -------------------------------------
@@ -164,6 +284,7 @@ class Trader:
         #       a forced close; the close is offset by aggression so it's marketable
         #       and actually gets us flat by the boundary.
         self.execution.cancel()
+        self._roll_reopen = False
         cur = market.price
         offset = self.aggression_ticks * self.tick_size
         qty = abs(self.position)
@@ -203,16 +324,47 @@ class Trader:
             # Why:  ExitRules need the entry reference (stop distance from entry,
             #       bars-in-trade); bar_idx/timestamp are recorded so time-stops can
             #       measure holding period.
-            self.entry_price = fill_price
-            self.entry_bar_idx = bar_idx
-            self.entry_timestamp = timestamp
+            # Tech: a roll's re-open on the closed position's side instead
+            #       restores the closed position's entry (price, bar, time).
+            # Why:  the backtest's spliced tape never closes a position at a
+            #       roll, so its stop and break-even lock keep measuring from the
+            #       original entry. Carrying it here makes live do the same: the
+            #       percent stop keeps its width, and the lock, which keys its
+            #       state on (entry_bar_idx, entry_price, side), keeps its best
+            #       price and arming instead of restarting at the new month.
+            carried = self._closed_entry
+            if (self._roll_reopen and carried is not None
+                    and carried[0] == (1 if new > 0 else -1)):
+                _side, self.entry_price, self.entry_bar_idx, self.entry_timestamp = carried
+            else:
+                self.entry_price = fill_price
+                self.entry_bar_idx = bar_idx
+                self.entry_timestamp = timestamp
+            self._roll_reopen = False
+            self._closed_entry = None
         elif new == 0:
+            # Tech: keep the closing position's entry before clearing it.
+            # Why:  if this flatten is a roll's close, the re-open restores it
+            #       (above). A strategy exit leaves it unused: only a roll's
+            #       re-open reads it, and the next open clears it.
+            self._closed_entry = (1 if prev > 0 else -1, self.entry_price,
+                                  self.entry_bar_idx, self.entry_timestamp)
             # Tech: returned to flat — clear all entry tracking to sentinels.
             # Why:  leaving stale entry data would make position_state() lie on the
             #       next trade and could trip an ExitRule against a closed position.
             self.entry_price = 0.0
             self.entry_bar_idx = -1
             self.entry_timestamp = None
+            # Tech: arm the re-entry cooldown on the closed position's side
+            #       (prev's sign) for K signals.
+            # Why:  decision 12 — the cooldown is measured from the flattening
+            #       fill, not from the signal that requested the close (a
+            #       resting close can fill bars later, and the fill is the
+            #       moment the re-entry risk actually begins). Gated off
+            #       entirely at the control 0.
+            if self.reentry_cooldown_signals > 0:
+                self._cooldown_side = 1 if prev > 0 else -1
+                self._cooldown_left = self.reentry_cooldown_signals
         # (Partial fills / pyramiding would update average entry here; v1
         # uses max_position=1 so this branch is unreachable.)
 

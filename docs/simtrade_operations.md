@@ -388,6 +388,90 @@ its deployment's `fills_<slug>.csv`. The start-up then refuses with
 Or flatten instead (§6.2) and leave the ledgers alone. Expect §6.2's known
 gap: the ledgers still claim lots the venue no longer holds.
 
+### 6.10 A paper candidate beside the live deployments
+
+**Use case:** forward-testing a candidate config on new data before adoption. It
+runs on the same market feed as live, but **places nothing and never touches
+the owner or the account.**
+
+**Shape:** `--broker dryrun`, run from the candidate's own worktree (for
+example `night/fullday_cand34/`). That worktree also gets its own `outputs/`,
+and four things follow from that:
+
+- **Ledgers and state are separate.** Every file in §2 is keyed by the run
+  folder's parent, so the candidate gets its own `fills_<slug>.csv`, restart
+  guard, soak epoch and bar cache, even with the same slug as a live deployment
+  (fullday is `day_night`).
+- **Fills are modelled the backtest's way.** The dry-run broker fills from the
+  live prints with the backtest's fill model (SPEC §4.5), so its record is the
+  forward-test number to compare with the backtest.
+- **No owner involvement.** The owner neither seeds nor reconciles the
+  candidate, and the candidate's fills never reach the account.
+- **It costs one more login.** That is a fifth session on the deployment's
+  credential: about 12 MB/day of the 500 MiB traffic allowance
+  ([cli.md](live/cli.md), "The traffic meter"). A model resident in VRAM
+  takes ~4.1 GiB, and `check_vram` wants 5 GiB free at start.
+
+**One-time setup**, in the candidate worktree:
+
+1. Copy `forecast_eval/config/secrets.toml` from the main checkout into the
+   worktree's `forecast_eval/config/`. It is git-ignored, so a worktree starts
+   without it, and the CLI reads it from the package's own `config/`.
+2. Copy `forecast_eval/CLAUDE.md` too (also ignored).
+   `test_docs_coverage.py::test_internal_doc_links_resolve` fails without it.
+
+**Start** (PowerShell). **The `cd` is not optional:** `python -m` imports
+`forecast_eval` from the current folder, and the default `--out` is relative to
+it.
+
+```powershell
+cd D:\Users\squirrel\Documents\paper\myPaper\forecast_eval_folder\night\fullday_cand34
+uv run --no-sync python -m forecast_eval.live.cli --strategy fullday --broker dryrun --resume --warmup-days 15 --no-telegram
+```
+
+**Check the banner before leaving it running.**
+- **Right folder:** the `LiveConfig[...]` line shows the candidate's settings
+  (for the iter34 candidate, `stride=10 ... min_prob=0.5`). On a first start
+  there is no `ledger:` line and no `resume: N inherited fill(s)` line.
+- **Wrong folder (`night\`):** the same command runs the **main checkout's**
+  config and writes into **live's `outputs\`**: live's ledger, restart guard,
+  bar cache and run folders. Its paper fills would land in the ledger the
+  owner seeds live from.
+  - **Happened 2026-10-26 11:50,** caught before any fill. Signs: banner
+    `stride=30 ... min_prob=0.65`, `ledger: 6 row(s) without a month stamped
+    TXFK6`, `resume: 6 inherited fill(s)`.
+  - **Recovery:**
+    1. Ctrl-C.
+    2. Confirm `fills_appended 0` in the summary, or remove any paper rows
+       from the live ledger.
+    3. Confirm `run_in_flight: false`.
+    4. Move the stray `live_<slug>_<ts>/` folder out of live's `outputs\`.
+
+- **`--no-telegram`:** its alerts would carry the same deployment name as live
+  fullday. Read its state from its own `outputs/` (§3) instead.
+- **`--warmup-days`:** must cover the emitter's prime at the candidate's
+  stride. The default is sized for 500 boundaries, while the prime replays up
+  to 900. For a stride-10 fullday that is 10 calendar days by default and 15
+  for the full 900. Measured on the stride-10 backtest's forecasts: 900
+  boundaries never fell below 15 band-clearing samples in 2026 (floor 3); 500
+  did in 0.4 % of windows.
+- **`--resume`:** replays its own ledger and adopts the paper position.
+
+**Restart limit: a held paper position cannot be resumed under a stateful
+exit rule.** `adopt_position` refuses (exit 5) an exit rule that is not
+`adoptable`, and fullday's break-even lock is not: its best price belongs to
+the dead process. So:
+
+- **Restart the candidate only while it is flat.** Leave it running through
+  weekends and pauses (§6.3); it idles outside its sessions.
+- **If it must stop while holding,** restart it without `--resume`. It then
+  starts flat, and the forward record has a gap at that point, which must be
+  noted where the result is read.
+
+**Rolls:** it rolls on its own, like any deployment (§6.5), through the same
+runtime path. A trader with entry filters needs the runtime's `rolling()` hook
+([runtime.md](live/runtime.md), "Roll legs and trader filters").
+
 ## 7. The daily timeline
 
 | Time | What happens | Watch for |
@@ -598,6 +682,39 @@ that branch only.
 | day | `day_split_iter02` | band ±0.001, `min_prob` 0.65, stride 30 |
 | night | `night_iter10` | +0.00065 / −0.00045, `min_prob` 0.55, **long-only**, stride 30 |
 | fullday | `fullday_split_iter07` | band ±0.001, `min_prob` 0.50, stride 15 |
+
+**2026-10-26: live fullday adopts `fullday_rev_iter34`.**
+`candidate_fullday_iter34` was merged into `simtrade_0929` (user decision), and
+fullday trades it from the 2026-10-27 restart.
+
+- **Config:** stride 10, `entry_min_prob` 0.60, stop 0.05, `lock_after_pct`
+  0.03, `reentry_cooldown_signals` 16. Details: `strategy/README.md`.
+- **Live roll fixes it carries:** the `rolling()` hook (main `825f069`); the
+  cooldown lets a roll's re-open through; the re-open keeps the original entry.
+- **Restart rule:** fullday **cannot `--resume` into a held lot**, because the
+  lock is not adoptable (exit 5). Stop it only while flat, or flatten first
+  and use `--fresh-start`.
+- **The held-out numbers are optimistic.** The config was chosen with the
+  held-out window (`autoresearch_trading_plan_fullday_reversal.md`, phase 2
+  Result), so this soak is its first clean test.
+- **The 10-27 start** follows "Resuming on the 2026-10-24 code" below, with
+  two differences for fullday:
+  - **Its ledger is already stamped.** The 2026-10-26 11:50 wrong-folder start
+    (§6.10) added the `contract` column (6 rows, `TXFK6`, net 0) before
+    anyone backed it up. Back up `fills_day.csv` and `fills_night.csv` as
+    step 3 says.
+  - **Fullday starts with `--fresh-start`, not `--resume`.** It is flat, and a
+    new soak epoch keeps the new config's record apart from the old one's:
+
+    ```powershell
+    uv run --no-sync python -m forecast_eval.live.cli --strategy fullday --broker client --fresh-start --contract TXFK6 --i-understand-this-places-orders
+    ```
+
+    Expect the banner to read `stride=10 ... min_prob=0.5`, with no
+    `resume:` line.
+- **Superseded:** the paper candidate (§6.10, worktree `night/fullday_cand34/`,
+  started 2026-10-26 11:56) runs the same config, so it duplicates live
+  fullday from here on.
 
 **2026-10-12 ~05:50: not running.** All four processes have been dead since
 2026-10-08 ~21:35 — an abrupt kill, no teardown — with three lots held

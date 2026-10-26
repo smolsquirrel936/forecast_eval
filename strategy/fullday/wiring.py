@@ -18,11 +18,69 @@ night session before 2017-05-15 (TAPE_REBUILD §2.5).
 Since LIVE_STRATEGY_ROUTING_PLAN D2 a live run builds from ``make_strategy``
 below, so an edit here is a live change. D1 removed ``live/cli.py``'s refusal of
 untuned configs; ``PINNED_FULLDAY`` still records itself unprovenanced.
+
+``fullday_rev_iter02`` (autoresearch_trading_plan_fullday_reversal.md, decision 2)
+added the package-declared ``entry_min_prob`` knob: the Trader skips an OPEN from
+flat whose signal strength falls below the floor it implies, while closes stay
+ungated. Its value here is 0.50 — the inert control, floor 0.0, byte-identical
+to the pre-knob package. The loop's search moves it through
+``0.55 / 0.60 / 0.65 / 0.70`` as edits to ``PARAMS``.
+
+``fullday_rev_iter16`` (same plan, decision 8 / phase E) added the
+package-declared ``exit_threshold`` knob: while positioned, an opposite signal
+clears at ``|predicted_return| >= exit_threshold`` while entries keep the full
+band. Its value here is 0.001 — equal to the band, the inert control, so runs
+are byte-identical to the pre-knob package. The loop's search moves it through
+``0.0005 / 0.00025 / 0.0`` as edits to ``PARAMS``.
+
+``fullday_rev_iter21`` (same plan, phase F) kept the declared pair
+``stride_bars`` 10 + ``entry_min_prob`` 0.60 (Calmar 3.9681, ride 0.3800) —
+the current incumbent of this loop.
+
+``fullday_rev_iter23`` (same plan, decisions 9/10, phase G control) added the
+package-declared ``lock_after_pct`` and ``giveback_frac`` knobs, composed with
+``stop_pct`` through the any-of seam in this package's ``exits.py``. Both None
+here — the inert control: wiring returns the bare ``EntryPercentStop``, so runs
+are byte-identical to the pre-knob package. The loop's search moves them
+through ``0.02 / 0.01 / 0.03`` and ``0.5 / 0.35`` as edits to ``PARAMS``.
+
+``fullday_rev_iter24`` / ``fullday_rev_iter26`` (phase G1) kept the break-even
+lock at 0.02, then 0.03 — the current incumbent of this loop (Calmar 4.4402,
+ride 0.3704).
+
+``fullday_rev_iter29`` (same plan, decision 11, phase H control) added the
+package-declared ``channel_exit_bars`` knob: once the position is at least N
+bars old, a long exits when price prints below the lowest of its last N
+in-position bars, a short above the highest. None here — the inert control.
+
+``fullday_rev_iter33`` (same plan, decision 12, phase I control) added the
+package-declared ``reentry_cooldown_signals`` knob: after a fill that flattens
+a position, an OPEN on the closed position's side is skipped for K signals
+(HOLDs count; the opposite side opens freely). Its value here is 0 — the inert
+control, never armed, byte-identical to the pre-knob package. The loop's
+search moves it through ``16 / 48`` as edits to ``PARAMS``.
+
+``candidate_fullday_iter34`` (2026-10-26, after the loop) sets
+``reentry_cooldown_signals`` to 16: the ``fullday_rev_iter34`` config (train
+Calmar 4.4463, ride 0.3614). The loop's final incumbent was ``iter35`` at 48, but
+the post-loop diagnostic held-out read (reversal plan, phase 2 Result) traced
+``iter35``'s held-out drawdown to the 48-signal cooldown. That read used the
+holdout for selection, so its held-out numbers are optimistic.
+
+ADOPTED into ``simtrade_0929`` on 2026-10-26 (user decision), trading from
+2026-10-27: this package is what live fullday trades. It replaced
+``fullday_split_iter07`` + ``stop_pct`` 0.05.
 """
 from typing import Any, Dict
 
-from ...exits.pct_stop import EntryPercentStop
 from .emitter import ThresholdEmitter
+from .exits import (
+    AnyOf,
+    BreakEvenLock,
+    ChannelExit,
+    EntryPercentStop,
+    GivebackTrail,
+)
 from .forecaster import make_forecaster
 from .trader import Trader
 
@@ -38,7 +96,7 @@ PARAMS: Dict[str, Any] = {
     "checkpoint": "Datadog/Toto-2.0-1B",
     "context_length": 3008,
     "horizon_bars": 30,
-    "stride_bars": 15,
+    "stride_bars": 10,
     # emitter
     "buy_threshold": 0.001,
     "sell_threshold": -0.001,
@@ -52,6 +110,52 @@ PARAMS: Dict[str, Any] = {
     # percent-stop knob — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param stop_pct=...``.
     "stop_pct": 0.05,
+    # profit-protection exits — package-declared, beyond the twelve CLI knobs
+    # (D6/D7), reachable only through ``--param lock_after_pct=...`` /
+    # ``--param giveback_frac=...``.
+    # Why:  reversal loop decisions 9/10 (phase G). lock_after_pct (G1): once
+    # the best price since entry is this fraction of the entry in the
+    # position's favour, exit on a return to the entry. giveback_frac (G2):
+    # once the best price is 2% in favour (GIVEBACK_ARM_PCT), exit when the
+    # open gain falls to (1-giveback_frac) of its maximum. Both None is the
+    # CONTROL: wiring returns the bare EntryPercentStop, byte-identical to the
+    # pre-knob package. The rules are stateful -> adoptable=False, so a live
+    # --resume into a held lot is refused for them.
+    "lock_after_pct": 0.03,
+    "giveback_frac": None,
+    # price-channel exit — package-declared, beyond the twelve CLI knobs
+    # (D6/D7), reachable only through ``--param channel_exit_bars=...``.
+    # Why:  reversal loop decision 11 (phase H). Once the position is at least
+    # N bars old, a long exits when price prints below the lowest of its last
+    # N in-position bars, a short above the highest — model-free, no forecast
+    # lag. None is the CONTROL: the rule is not composed in, byte-identical
+    # to the pre-knob package. Stateful -> adoptable=False.
+    "channel_exit_bars": None,
+    # re-entry cooldown — package-declared, beyond the twelve CLI knobs
+    # (D6/D7), reachable only through ``--param reentry_cooldown_signals=...``.
+    # Why:  reversal loop decision 12 (phase I). After a fill that flattens a
+    # position, an OPEN on the closed position's side is skipped for K
+    # signals (HOLDs count); the opposite side opens freely. 0 is the
+    # CONTROL: the cooldown never arms, so runs are byte-identical to the
+    # pre-knob package.
+    "reentry_cooldown_signals": 16,
+    # entry-probability gate — package-declared, beyond the twelve CLI knobs
+    # (D6/D7), reachable only through ``--param entry_min_prob=...``.
+    # Why:  reversal loop decision 2. 0.50 is the CONTROL value: the floor it
+    # implies is 0.0 and no emitted signal can fall below it, so every entry
+    # still opens and a run at 0.50 must be byte-identical to one without the
+    # knob. The gate applies to opens only; min_prob (above) stays the exit
+    # gate inside the emitter.
+    "entry_min_prob": 0.60,
+    # exit-side band — package-declared, beyond the twelve CLI knobs
+    # (D6/D7), reachable only through ``--param exit_threshold=...``.
+    # Why:  reversal loop decision 8 (phase E). While positioned, an opposite
+    # signal needs only |predicted_return| >= exit_threshold; from flat, and
+    # on the same side, the full band above still applies. 0.001 equals the
+    # band — the CONTROL value, at which the exit cut *is* the sell band, so
+    # a run at 0.001 must be byte-identical to one without the knob. min_prob,
+    # the trend filter and the path check still gate the exit signal.
+    "exit_threshold": 0.001,
 }
 
 # Tech: the knob's tuned value — 0.05, ADOPTED on simtrade_0929 (2026-10-18).
@@ -105,6 +209,33 @@ def make_strategy(
         )
     p = {**PARAMS, **overrides}
 
+    # Tech: validate the entry gate against the emitter's two probability knobs,
+    #       before anything is built.
+    # Why:  reversal plan decision 2 — an entry floor below min_prob gates
+    #       nothing the emitter has not already blocked (vacuous), while one at
+    #       or above full_confidence_prob is unreachable because the strength
+    #       ramp saturates at 1.0 (it would silently block every entry). Failing
+    #       loudly at construction beats trading the wrong shape.
+    if not p["min_prob"] <= p["entry_min_prob"] < p["full_confidence_prob"]:
+        raise ValueError(
+            f"entry_min_prob ({p['entry_min_prob']}) must satisfy "
+            f"min_prob ({p['min_prob']}) <= entry_min_prob < "
+            f"full_confidence_prob ({p['full_confidence_prob']})"
+        )
+
+    # Tech: validate the re-entry cooldown's width before anything is built.
+    # Why:  reversal plan decision 12 — the Trader validates it in its own
+    #       constructor too, but the Trader is a factory product (fee sweeps
+    #       rebuild it), so a bad width would otherwise surface only inside
+    #       the run; failing here matches entry_min_prob's treatment above.
+    if not isinstance(p["reentry_cooldown_signals"], int) or p[
+        "reentry_cooldown_signals"
+    ] < 0:
+        raise ValueError(
+            f"reentry_cooldown_signals ({p['reentry_cooldown_signals']}) "
+            f"must be an int >= 0"
+        )
+
     # Tech: build the forecaster and emitter now, but return the Trader as a
     #       *factory* over Execution rather than as an instance.
     # Why:  `run_backtest` owns `Execution` (fee_rate is a run parameter), so a
@@ -124,28 +255,57 @@ def make_strategy(
         sell_threshold=p["sell_threshold"],
         min_prob=p["min_prob"],
         full_confidence_prob=p["full_confidence_prob"],
+        exit_threshold=p["exit_threshold"],
     )
 
     def make_trader(execution: Any) -> Trader:
-        return Trader(
+        trader = Trader(
             execution=execution,
             tick_size=tick_size,
             aggression_ticks=p["aggression_ticks"],
             max_position=p["max_position"],
             max_aggression_ticks=p["max_aggression_ticks"],
+            entry_min_prob=p["entry_min_prob"],
+            full_confidence_prob=p["full_confidence_prob"],
+            reentry_cooldown_signals=p["reentry_cooldown_signals"],
         )
+        # Tech: bind the emitter to the trader this factory just built, so the
+        #       exit band knows which side is the exit side.
+        # Why:  reversal decision 8's mechanism — the emitter reads the live
+        #       signed position through the getter at each forecast (fills land
+        #       before emit in run.py's tick order, so no look-ahead, and the
+        #       frozen engine needs no new seam). Re-binding on every call
+        #       keeps a re-made trader (fee sweeps re-run make_trader) the
+        #       emitter's sole counterpart.
+        emitter.bind_position(lambda: trader.position)
+        return trader
 
-    # Tech: build the percent stop only when its knob is set; None means no
-    #       exit rule, exactly what every recorded run before this knob used.
-    # Why:  run_backtest queries the rule every tick a position is open
-    #       (run.py Step 2) and submits a closing limit on fire — the
-    #       flatten-and-continue semantics the live deployment wants, so the
-    #       backtest measures precisely what live would do.
-    exit_rule = (
-        EntryPercentStop(stop_pct=p["stop_pct"])
-        if p["stop_pct"] is not None
-        else None
-    )
+    # Tech: build the exit stack from the knobs — the shared percent stop plus
+    #       this package's protection rules (decisions 9/10), composed through
+    #       the any-of seam. With stop_pct the only exit set, return the bare
+    #       EntryPercentStop, exactly what every recorded run used.
+    # Why:  the control (lock/giveback None) must be byte-identical to the
+    #       pre-knob package, so the composition wrapper appears only when a
+    #       protection rule is actually set. run_backtest queries the rule
+    #       every tick a position is open (run.py Step 2) and submits a closing
+    #       limit on fire — the flatten-and-continue semantics the live
+    #       deployment wants, so the backtest measures precisely what live
+    #       would do.
+    exit_rules = []
+    if p["stop_pct"] is not None:
+        exit_rules.append(EntryPercentStop(stop_pct=p["stop_pct"]))
+    if p["lock_after_pct"] is not None:
+        exit_rules.append(BreakEvenLock(lock_after_pct=p["lock_after_pct"]))
+    if p["giveback_frac"] is not None:
+        exit_rules.append(GivebackTrail(giveback_frac=p["giveback_frac"]))
+    if p["channel_exit_bars"] is not None:
+        exit_rules.append(ChannelExit(channel_exit_bars=p["channel_exit_bars"]))
+    if not exit_rules:
+        exit_rule = None
+    elif len(exit_rules) == 1:
+        exit_rule = exit_rules[0]
+    else:
+        exit_rule = AnyOf(exit_rules)
 
     return {
         "forecaster": forecaster,

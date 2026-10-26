@@ -77,6 +77,7 @@ Three invariants make this honest (all enforced in code + tests):
 | [portfolio.py](portfolio.md) | Position + PnL accounting | how realized/unrealized PnL and session buckets are kept |
 | [trader.py](trader.md) | Signal→order state machine | the no-flip rule and order placement |
 | [run.py](run.md) | Backtest driver + demos | the per-tick loop and how everything is wired |
+| [forecast_cache.py](forecast_cache.md) | On-disk forecast cache | `real_data --forecast-cache`: reusing forecasts across runs and strides |
 | [metrics.py](metrics.md) | Metric pack | trading metrics, forecast quality (IC), attribution |
 | [logging_io.py](logging_io.md) | Artifact writers | the parquet/CSV bundle and `params.json` |
 | [reports.py](reports.md) | Charts (PNG + HTML) | equity/drawdown, price+fills, signal-vs-realized |
@@ -154,6 +155,7 @@ are the evaluated-tape rebuild (`TAPE_REBUILD_PLAN.md`), in the order they run.
 | [tools/build_session_tapes.py](tools/build_session_tapes.md) | that intermediate → the four evaluated tapes | to re-cut day / night / combined / full-day on their own splice instants (33 s) |
 | [tools/diff_tapes.py](tools/diff_tapes.md) | old tape vs new, attributed by cause | to know *why* a bar moved — splice, unstable sort, duplicate file, or session filter |
 | [tools/band_sweep.py](tools/band_sweep.md) | band × min-prob search, scored out-of-sample | to re-run W5b's grid off one GPU precompute (~160 s for 33 cells) |
+| [tools/reversal_reaction.py](tools/reversal_reaction.md) | a run folder's reaction speed to 3 % swings, optionally paired vs a baseline | to score how much of each reversal a backtest rides the wrong way (~3 s, no GPU) |
 | [tools/session_artifacts.py](tools/session_artifacts.md) | a finished live run's artifacts and report, rebuilt from its `session.jsonl` | for runs that ended before `live/artifacts.py` existed |
 | [tools/roll_parity.py](tools/roll_parity.md) | the shipped tape vs the series the live warm-up would build, at every roll | to ask whether the tape and the deployment are one series — NIGHT 112/112, DAY 183 rolls adrift |
 | [tools/roll_at_measure.py](tools/roll_at_measure.md) | per-session liquidity around the roll | the raw evidence behind `ROLL_AT` (C4) |
