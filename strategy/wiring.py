@@ -1,4 +1,4 @@
-"""The strategy seam — dispatch to one of the three per-session packages.
+"""The strategy seam — dispatch to one of the four strategy packages.
 
 Before STRATEGY_SPLIT_PLAN this module held a single `make_strategy()` that
 nothing called: `live/config.py` records that its entrypoint no longer existed,
@@ -23,7 +23,17 @@ from typing import Any, Dict
 #       `__pycache__`, a half-finished experiment) must not become a selectable
 #       deployment. Mirrors how `live/config.py:CONFIGS` names its deployments
 #       explicitly for the same reason.
-SESSIONS = ("day", "night", "fullday")
+SESSIONS = ("day", "night", "fullday", "hybrid")
+
+# Tech: the forecaster files each package's `forecaster_sha` hashes, relative to
+#       the package; a package not listed hashes its `forecaster.py` alone.
+# Why:  `hybrid` routes between two halves, each with its own construction site,
+#       so a change to either half's forecaster -- or to the router -- is a
+#       stream change and must move the sha. Hashing one file would miss two of
+#       the three. The single-file packages keep their exact previous digest.
+FORECASTER_FILES = {
+    "hybrid": ("forecaster.py", "day_half/forecaster.py", "night_half/forecaster.py"),
+}
 
 
 def _package(session: str) -> Any:
@@ -66,10 +76,14 @@ def forecaster_sha(session: str) -> str:
     #       Hashed from the file rather than from the imported module so it does
     #       not require torch, and so an edit counts even if the process has the
     #       old bytes already imported.
-    path = pathlib.Path(__file__).resolve().parent / session / "forecaster.py"
-    if session not in SESSIONS or not path.exists():
+    pkg = pathlib.Path(__file__).resolve().parent / session
+    paths = [pkg / f for f in FORECASTER_FILES.get(session, ("forecaster.py",))]
+    if session not in SESSIONS or not all(p.exists() for p in paths):
         raise ValueError(f"no forecaster for strategy {session!r}")
-    return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    digest = hashlib.sha256()
+    for path in paths:
+        digest.update(path.read_bytes())
+    return digest.hexdigest()[:12]
 
 
 def make_strategy(session: str, **kwargs: Any) -> Dict[str, Any]:

@@ -14,7 +14,8 @@ Three things are asserted here:
 
   1. the shared files still hash to what they hashed at the split (§3.1);
   2. no session package imports from a sibling package;
-  3. the three packages' classes are genuinely distinct objects, so a change to
+  3. the packages' classes (both of hybrid's halves counted separately) are
+     genuinely distinct objects, so a change to
      one cannot reach another — checked behaviourally, not just by identity.
 """
 import ast
@@ -24,7 +25,14 @@ import pathlib
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SESSIONS = ("day", "night", "fullday")
+SESSIONS = ("day", "night", "fullday", "hybrid")
+
+# Where each package keeps its emitter and Trader classes, as attribute names on
+# its `wiring` module. `hybrid` has two halves, so two of each.
+CLASS_NAMES = {
+    "hybrid": (("DayThresholdEmitter", "NightThresholdEmitter"),
+               ("DayTrader", "NightTrader")),
+}
 
 # Tech: sha256 of every file the three packages start from and must not edit,
 #       pinned at the split (2026-09-02). Each digest is taken over the file's
@@ -90,7 +98,9 @@ def test_no_cross_package_imports(session):
     #       looking isolated, and the hash guard above would never see it.
     siblings = [s for s in SESSIONS if s != session]
     pkg = ROOT / "strategy" / session
-    for path in sorted(pkg.glob("*.py")):
+    # rglob: `hybrid` keeps its halves in sub-folders, and an import hidden one
+    # level down re-couples packages just the same.
+    for path in sorted(pkg.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -119,18 +129,19 @@ def test_each_package_has_its_own_classes():
     from forecast_eval.strategy import threshold as shared_emitter
     from forecast_eval import trader as shared_trader
 
-    emitters, traders = {}, {}
+    emitters, traders = [], []
     for session in SESSIONS:
         mod = __import__(
             f"forecast_eval.strategy.{session}.wiring", fromlist=["wiring"]
         )
-        emitters[session] = mod.ThresholdEmitter
-        traders[session] = mod.Trader
+        em_names, tr_names = CLASS_NAMES.get(session, (("ThresholdEmitter",), ("Trader",)))
+        emitters += [getattr(mod, n) for n in em_names]
+        traders += [getattr(mod, n) for n in tr_names]
 
-    distinct = set(map(id, emitters.values())) | {id(shared_emitter.ThresholdEmitter)}
-    assert len(distinct) == len(SESSIONS) + 1, "emitter classes are shared"
-    distinct = set(map(id, traders.values())) | {id(shared_trader.Trader)}
-    assert len(distinct) == len(SESSIONS) + 1, "Trader classes are shared"
+    distinct = set(map(id, emitters)) | {id(shared_emitter.ThresholdEmitter)}
+    assert len(distinct) == len(emitters) + 1, "emitter classes are shared"
+    distinct = set(map(id, traders)) | {id(shared_trader.Trader)}
+    assert len(distinct) == len(traders) + 1, "Trader classes are shared"
 
 
 def test_editing_one_package_does_not_reach_another(monkeypatch):

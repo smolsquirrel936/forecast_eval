@@ -1,0 +1,30 @@
+# [strategy/hybrid/night_half/forecaster.py](../../../../strategy/hybrid/night_half/forecaster.py)
+
+**Role:** HYBRID's NIGHT-half Forecaster construction site.
+**Pipeline:** builds the `Toto2Forecaster` that [RoutedForecaster](../forecaster.md) uses for NIGHT-session boundaries.
+**Depends on:** [forecaster/toto2.py](../../../forecaster/toto2.md)   **Used by:** [strategy/hybrid/wiring.py](../wiring.md)
+
+## Responsibility
+`make_forecaster(...)` builds the NIGHT half's Toto2 forecaster from the
+`night_checkpoint` / `night_context_length` knobs and the shared stride and horizon.
+
+## Public surface
+| Symbol | Kind | One-liner |
+|---|---|---|
+| `make_forecaster(*, warmup_bars, stride_bars, horizon_bars, context_length, checkpoint, device="auto", bar_freq=None, signal_step="last")` | function | the half's `Forecaster` |
+
+## Key points / gotchas
+- **Copied from `main:strategy/night/forecaster.py`**, import depth changed. Thin by
+  design: to change model internals, copy the class body from
+  [forecaster/toto2.py](../../../forecaster/toto2.md) in here first.
+- **One of the three files `forecaster_sha("hybrid")` hashes**
+  ([strategy/wiring.py](../../wiring.md) `FORECASTER_FILES`), so an edit here is a
+  forecast-stream change in `results_hybrid.tsv`.
+- It reads the **continuous DAY+NIGHT history**, not NIGHT bars only. Filtering to
+  its own session is a forecaster change made here.
+- When both halves' forecasters are configured identically, the router uses the
+  **day** half's instance for both sessions — an edit that changes this file's
+  configuration (or class) is what ends that sharing.
+
+## Related
+[strategy/hybrid/wiring.py](../wiring.md) · [strategy/hybrid/router.py](../router.md) · [strategy/night/ (the session package)](../../night/wiring.md) · [strategy/hybrid/forecaster.py](../forecaster.md)

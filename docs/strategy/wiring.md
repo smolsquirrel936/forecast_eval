@@ -1,8 +1,8 @@
 # [strategy/wiring.py](../../strategy/wiring.py)
 
-**Role:** The strategy seam — dispatches to one of the three per-session packages.
+**Role:** The strategy seam — dispatches to one of the four strategy packages.
 **Pipeline:** the single import [real_data.py](../real_data.md) uses to build a strategy stack.
-**Depends on:** [strategy/day](day/wiring.md), [strategy/night](night/wiring.md), [strategy/fullday](fullday/wiring.md)   **Used by:** [real_data.py](../real_data.md) (`--strategy`)
+**Depends on:** [strategy/day](day/wiring.md), [strategy/night](night/wiring.md), [strategy/fullday](fullday/wiring.md), [strategy/hybrid](hybrid/wiring.md)   **Used by:** [real_data.py](../real_data.md) (`--strategy`)
 
 ## Responsibility
 Picks a session's strategy package and forwards to it. It holds **no strategy
@@ -12,10 +12,11 @@ file cannot drift from the tuned configuration the way its predecessor did.
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
-| `SESSIONS` | tuple | `("day", "night", "fullday")` — what `--strategy` renders its `choices=` from |
+| `SESSIONS` | tuple | `("day", "night", "fullday", "hybrid")` — what `--strategy` renders its `choices=` from |
+| `FORECASTER_FILES` | dict | per package, the forecaster files `forecaster_sha` hashes; unlisted packages hash `forecaster.py` alone. `hybrid` lists its router and both halves' construction sites |
 | `params(session)` | function | that session's declared default knobs, as a fresh copy |
 | `make_strategy(session, **kwargs)` | function | that session's `{forecaster, emitter, make_trader, exit_rule, forced_close, params}` |
-| `forecaster_sha(session)` | function | 12-hex sha256 of that package's `forecaster.py` — the `results_<session>.tsv` column |
+| `forecaster_sha(session)` | function | 12-hex sha256 of that package's forecaster file(s), concatenated in `FORECASTER_FILES` order — the `results_<session>.tsv` column. A one-file package's digest is unchanged by the multi-file form |
 
 ## What changed, and why
 Before STRATEGY_SPLIT_PLAN this module held a single `make_strategy()` that
