@@ -544,14 +544,14 @@ def test_the_deployments_relogin_forty_seconds_apart_and_verify_together():
     apart, each spike clears before the next starts. Verify does not move — it
     is the last look before the open and must stay a whole minute."""
     from forecast_eval.live.relogin import deployment_relogin_anchors
-    day, night, fullday = (deployment_relogin_anchors(d)
-                           for d in ("day", "night", "fullday"))
-    assert [a[0][0] for a in (day, night, fullday)] == [
-        time(8, 40), time(8, 40, 40), time(8, 41, 20)]
-    assert [a[1][0] for a in (day, night, fullday)] == [
-        time(14, 55), time(14, 55, 40), time(14, 56, 20)]
+    day, night, fullday, hybrid = (deployment_relogin_anchors(d)
+                                   for d in ("day", "night", "fullday", "hybrid"))
+    assert [a[0][0] for a in (day, night, fullday, hybrid)] == [
+        time(8, 40), time(8, 40, 40), time(8, 41, 20), time(8, 42)]
+    assert [a[1][0] for a in (day, night, fullday, hybrid)] == [
+        time(14, 55), time(14, 55, 40), time(14, 56, 20), time(14, 57)]
     assert day == session_open_anchors(), "slot 0 is the unstaggered schedule"
-    for anchors in (night, fullday):
+    for anchors in (night, fullday, hybrid):
         assert [(v, o) for _, v, o in anchors] == [
             (v, o) for _, v, o in session_open_anchors()]
 
@@ -564,7 +564,7 @@ def test_an_unknown_deployment_gets_the_unstaggered_schedule():
 
 def test_the_last_slot_still_fits_two_attempts_before_verify():
     """The stagger shortens the retry window, so the latest slot is the one at
-    risk: 08:41:20 -> 08:44:00 must still hold the default 60 s retry."""
+    risk: hybrid's 08:42:00 -> 08:44:00 must still hold the default 60 s retry."""
     from forecast_eval.live.relogin import deployment_relogin_anchors
     calls = []
 
@@ -573,7 +573,7 @@ def test_the_last_slot_still_fits_two_attempts_before_verify():
         raise RuntimeError("timeout")
 
     s = ReloginScheduler(relogin=_fails,
-                         anchors=deployment_relogin_anchors("fullday"))
+                         anchors=deployment_relogin_anchors("hybrid"))
     s.note_login(datetime(2026, 10, 19, 0, 0))
     t = datetime(2026, 10, 19, 8, 41, 0)
     while t < datetime(2026, 10, 19, 8, 44, 0):

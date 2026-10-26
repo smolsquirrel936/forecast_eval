@@ -40,7 +40,7 @@ open − 5 min ............ open − 1 min ...... open
 | `session_open_anchors(relogin_lead=5min, verify_lead=1min)` | function | `((08:40, 08:44, 08:45), (14:55, 14:59, 15:00))`, derived from `DAY_OPEN`/`NIGHT_OPEN` |
 | `in_window(now)` | method | whether a re-login or verify window is live; the owner's lost-session watch stands aside then |
 | `deployment_relogin_anchors(deployment)` | function | the anchors with the re-login start moved `stagger_slot × 40 s` later; verify unchanged |
-| `stagger_slot(deployment)` / `DEPLOYMENT_STAGGER` / `STAGGER_ORDER` | function / constants | day 0, night 1, fullday 2 (anything else 0); 40 s; the order |
+| `stagger_slot(deployment)` / `DEPLOYMENT_STAGGER` / `STAGGER_ORDER` | function / constants | day 0, night 1, fullday 2, hybrid 3 (anything else 0); 40 s; the order |
 
 ## The deployments are staggered (since 2026-10-18)
 `force_refresh=True` opens its new connection ~30 s before the old one drops
@@ -53,6 +53,11 @@ so the owner's 08:37–08:39 window stays clear. Verify stays at open − 1 min 
 all three. The cost is retry room: fullday's window is 2 min 40 s, which still
 fits two attempts at the default 60 s backoff (tested). The same slot staggers
 FeedWatch's lost-session re-login ([feedwatch.md](feedwatch.md)).
+
+**Hybrid has the fourth slot (since 2026-10-26)**, at 08:42:00 / 14:57:00. Its
+window is 2 min, still two attempts (tested). Owner plus four deployments is 5
+connections at steady state, so each refresh briefly makes 6; the hybrid plan's
+"Going live" step 3 measures what Shioaji does then, before hybrid's first start.
 
 ## The verify window
 One minute before the open, an injected health check runs — **an authenticated
