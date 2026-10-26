@@ -440,3 +440,37 @@ def test_unmatched_fills_raise_a_finding_and_none_raise_nothing(tmp_path, monkey
     data["runs"][0]["transactions"].update(fills=3, unmatched_fills=1)
     hits = [f for f in sr.findings(data) if "no order explains" in f["html"]]
     assert len(hits) == 1 and hits[0]["level"] == "warn" and "Night 1 of 3" in hits[0]["html"]
+
+
+def test_a_routed_deployment_is_banded_by_each_forecasts_session(tmp_path, monkeypatch):
+    """Hybrid's unprefixed band knobs are None, so every forecast read as
+    "inside the band". Each forecast is judged by its own session's half."""
+    _fake_packages(tmp_path, monkeypatch)
+    pkg = sr.PACKAGE_ROOT / "strategy" / "hybrid"
+    pkg.mkdir(parents=True)
+    (pkg / "wiring.py").write_text(
+        "PARAMS = {'buy_threshold': None, 'sell_threshold': None, 'min_prob': None,\n"
+        "          'day_buy_threshold': 0.001, 'day_sell_threshold': -0.001,\n"
+        "          'day_min_prob': 0.65,\n"
+        "          'night_buy_threshold': 0.003, 'night_sell_threshold': -0.003,\n"
+        "          'night_min_prob': 0.6}\n", encoding="utf-8")
+    out, log = _outputs(tmp_path)
+    run = out / "live_night_20260930_080000"
+    params = json.loads((run / "params.json").read_text())
+    params.update(strategy_package="hybrid", sessions=["DAY", "NIGHT"],
+                  buy_threshold=None, sell_threshold=None, min_prob=None)
+    (run / "params.json").write_text(json.dumps(params))
+    # The fixture's two NIGHT forecasts (+0.5 %, -0.2 %) plus one DAY forecast of
+    # +0.2 %: night's 0.3 % band passes only the first, day's 0.1 % the third.
+    with (run / "session.jsonl").open("a", encoding="utf-8") as f:
+        f.write("\n" + json.dumps({"event": "forecast", "bar_idx": 9,
+                                   "timestamp": "2026-10-01T09:00:00", "payload": {
+                                       "predicted_return": 0.002, "prob_up": 0.8,
+                                       "last_price": 98.0}}) + "\n")
+    (r,) = sr.collect(out, log, NOW, processes=_procs(), hardware=HW, tz=UTC)["runs"]
+    d = r["decisions"]
+    assert (d["forecasts"], d["band_pass"], d["prob_pass"]) == (3, 2, 2)
+    assert r["params"]["halves"] == {
+        "day": {"buy": 0.001, "sell": -0.001, "min_prob": 0.65},
+        "night": {"buy": 0.003, "sell": -0.003, "min_prob": 0.6}}
+    assert r["params"]["buy"] is None

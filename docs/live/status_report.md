@@ -34,7 +34,7 @@ snapshot by nature.
 | Owner's position view | `events_<slug>.jsonl` |
 | Successful logins, SDK errors | `shioaji.log` (“Stored new token” per PID, UTC converted to local time) |
 | VRAM / RAM per process | Windows `GPU Process Memory` counters + `Get-Process` (nvidia-smi shows N/A per process on WDDM) |
-| Knobs missing from `params.json` (`long_only`) | the package's `PARAMS` literal, parsed with `ast` |
+| Knobs missing from `params.json` (`long_only`, a routed package's `day_`/`night_` band and gate) | the package's `PARAMS` literal, parsed with `ast` |
 
 ## A soak is every run folder, not the newest
 
@@ -101,6 +101,10 @@ appears in no file as such.
 - **Decision funnel:** the band and `min_prob` stages are rebuilt from each
   forecast's `predicted_return` / `prob_up`. "Vetoed by trend/path" is what is
   left once emitted signals are counted.
+- **A routed deployment (hybrid) is banded per session** (since 2026-10-27): each
+  forecast is judged by its own session's half (`day_`/`night_` knobs from the
+  package's `PARAMS`), and the page shows both bands and gates. Like
+  `long_only`, a `--param` on a half knob is not reflected.
 
 ## Public surface
 | Symbol | Kind | One-liner |

@@ -269,8 +269,15 @@ function legend(id, items) {
 }
 const fmtBand = p => {
   const f = v => (v * 100).toFixed(3).replace(/\.?0+$/, "");
-  return p.buy === -p.sell ? `±${f(p.buy)}%` : `+${f(p.buy)}% / ${f(p.sell)}%`;
+  const one = q => q.buy === -q.sell ? `±${f(q.buy)}%` : `+${f(q.buy)}% / ${f(q.sell)}%`;
+  // A routed deployment (hybrid) has one band per session half.
+  return p.halves ? Object.entries(p.halves).map(([h, q]) => `${h} ${one(q)}`).join(" · ") : one(p);
 };
+const fmtProb = p => p.halves
+  ? Object.entries(p.halves).map(([h, q]) => `${h} ${q.min_prob ?? "—"}`).join(" · ")
+  : (p.min_prob ?? "—");
+// The HOLD band(s) a forecast chart shades: one per half for a routed deployment.
+const bandsOf = p => p.halves ? Object.values(p.halves) : [p];
 // A HOLD that passed band and min_prob names the emitter veto that held it.
 const VETO = { "trend": "trend filter", "trend or path": "trend filter or path check" };
 const sigLabel = f => f.veto ? `${f.sig} (vetoed by ${VETO[f.veto] || f.veto})` : f.sig;
@@ -337,7 +344,7 @@ function renderOverview() {
     const logins = ((D.logins[String(r.pid)] || {}).logins || []).length;
     return `<div class="card run-card">
       <h3>${runKey(r)}<span class="pill"><i class="dot" style="background:${r.running ? "var(--good)" : "var(--critical)"}"></i>${r.running ? "Running" : "Stopped"}</span></h3>
-      <div class="small">${esc(r.params.sessions.join(" + "))} · band ${fmtBand(r.params)} · min_prob ${r.params.min_prob}${r.params.long_only ? " · long-only" : ""}</div>
+      <div class="small">${esc(r.params.sessions.join(" + "))} · band ${fmtBand(r.params)} · min_prob ${fmtProb(r.params)}${r.params.long_only ? " · long-only" : ""}</div>
       <dl class="kv">
         <dt>Started</dt><dd>${fdt(r.started)}</dd>
         <dt>Uptime</dt><dd>${dur(r.uptime_h)}</dd>
@@ -392,7 +399,7 @@ function renderBasic() {
     ["Session in progress", ...RUNS.map(r => r.sessions.filter(s => !s.complete).map(s => s.label).join(", ") || "none")],
     ["Last heartbeat", ...RUNS.map(r => `${fdt(r.heartbeat)} (${ago(r.heartbeat_age_s)})`)],
     ["Band (buy / sell)", ...RUNS.map(r => fmtBand(r.params))],
-    ["min_prob", ...RUNS.map(r => r.params.min_prob ?? "—")],
+    ["min_prob", ...RUNS.map(r => fmtProb(r.params))],
     ["Long-only", ...RUNS.map(r => r.params.long_only ? "yes" : "no (two-sided)")],
     ["Forecaster", ...RUNS.map(r => `${esc((r.params.ckpt || "").split("/").pop())} · ctx ${r.params.ctx} · horizon ${r.params.horizon} · stride ${r.params.stride}`)],
     ["Max position", ...RUNS.map(r => r.params.max_position)],
@@ -492,7 +499,7 @@ function renderDecisions() {
     { html: `<svg width="12" height="12"><circle cx="6" cy="6" r="4.5" fill="var(--muted)" stroke="var(--ink)" stroke-width="1.5"/></svg>`, label: "Emitted as a signal (labelled)" },
     { html: `<i class="sw" style="background:var(--wash-2)"></i>`, label: "HOLD band" },
   ]);
-  const all = RUNS.flatMap(r => r.decisions.rows.map(x => x.ret).concat([r.params.buy, r.params.sell])).filter(v => v != null);
+  const all = RUNS.flatMap(r => r.decisions.rows.map(x => x.ret).concat(bandsOf(r.params).flatMap(b => [b.buy, b.sell]))).filter(v => v != null);
   const lim = Math.ceil(Math.max(1e-4, ...all.map(Math.abs)) * 1e4 + 1) / 1e4;
   const panelH = 132, gap = 44, top = 40;
   const H = top + RUNS.length * (panelH + gap) - gap + 30;
@@ -501,7 +508,8 @@ function renderDecisions() {
   RUNS.forEach((r, i) => {
     const p0 = top + i * (panelH + gap), p1 = p0 + panelH, y = v => p0 + ((lim - v) / (2 * lim)) * panelH, pr = r.params;
     drawTimeAxis(svg, x, p0, p1, { bands: false, labels: i === RUNS.length - 1, now: i === 0 });
-    el("rect", { x: L, y: y(pr.buy), width: W - L - 14, height: y(pr.sell) - y(pr.buy), fill: "var(--wash-2)", opacity: 0.8 }, svg);
+    for (const b of bandsOf(pr).filter(b => b.buy != null && b.sell != null))
+      el("rect", { x: L, y: y(b.buy), width: W - L - 14, height: y(b.sell) - y(b.buy), fill: "var(--wash-2)", opacity: pr.halves ? 0.5 : 0.8 }, svg);
     for (const v of [lim, lim / 2, 0, -lim / 2, -lim]) {
       el("line", { x1: L, x2: W - 14, y1: y(v), y2: y(v), stroke: v === 0 ? "var(--axis)" : "var(--grid)", "stroke-width": 1 }, svg);
       el("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }, svg, (v > 0 ? "+" : "") + (v * 100).toFixed(2) + "%");
