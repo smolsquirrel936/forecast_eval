@@ -60,23 +60,38 @@ PARAMS: Dict[str, Any] = {
     # DAY half (main:strategy/day at the reset)
     "day_checkpoint": "Datadog/Toto-2.0-1B",
     "day_context_length": 3008,
-    "day_buy_threshold": 0.001,
-    "day_sell_threshold": -0.001,
-    "day_min_prob": 0.65,
+    "day_buy_threshold": 0.0005,
+    "day_sell_threshold": -0.0005,
+    "day_min_prob": 0.6,
     "day_full_confidence_prob": 0.9,
     "day_aggression_ticks": 0,
     "day_max_aggression_ticks": None,
     "day_stop_pct": None,
+    # hybrid_split_iter18: the day half stops opening positions in the midday
+    # lull (start inclusive / end exclusive) — those train entries lost -1267
+    # points over 30 while morning (08-10) entries made +8467. hybrid_split_iter20
+    # moved the start to 10: hour-10 entries average +23.6/entry vs ~92 for the
+    # remaining hours (weakest entry hour left). hybrid_split_iter22 moved the
+    # start to 9.5 (half-hour resolution, float hours): 9:00-9:29 entries made
+    # +5127 over 39 while 9:30-9:59 entries lost -989 over 29. Closes are never
+    # blocked; --param day_open_block_start=none day_open_block_end=none
+    # restores the copied behavior.
+    "day_open_block_start": 9.5,
+    "day_open_block_end": 13,
     # NIGHT half (main:strategy/night at the reset)
     "night_checkpoint": "Datadog/Toto-2.0-1B",
     "night_context_length": 3008,
-    "night_buy_threshold": 0.00045,
-    "night_sell_threshold": -0.00045,
+    "night_buy_threshold": 0.0007,
+    "night_sell_threshold": -0.0007,
     "night_min_prob": 0.5,
     "night_full_confidence_prob": 0.9,
     "night_aggression_ticks": 0,
     "night_max_aggression_ticks": None,
     "night_stop_pct": None,
+    # hybrid_split_iter09: the night half closes but never opens (its own
+    # entries measured -997.1 train points at iter08); --param night_allow_open=true
+    # restores the copied behavior
+    "night_allow_open": False,
 }
 
 # Tech: the unprefixed knobs that must be None.
@@ -173,6 +188,8 @@ def make_strategy(
                 aggression_ticks=p["day_aggression_ticks"],
                 max_position=p["max_position"],
                 max_aggression_ticks=p["day_max_aggression_ticks"],
+                open_block_start=p["day_open_block_start"],
+                open_block_end=p["day_open_block_end"],
             ),
             night=NightTrader(
                 execution=execution,
@@ -180,6 +197,7 @@ def make_strategy(
                 aggression_ticks=p["night_aggression_ticks"],
                 max_position=p["max_position"],
                 max_aggression_ticks=p["night_max_aggression_ticks"],
+                allow_open=p["night_allow_open"],
             ),
         )
 

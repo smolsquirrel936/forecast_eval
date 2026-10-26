@@ -34,6 +34,7 @@ class Trader:
         aggression_ticks: int = 3,
         max_position: int = 1,
         max_aggression_ticks: Optional[int] = None,
+        allow_open: bool = True,
     ):
         # Tech: hold the execution handle and order-placement parameters, and
         #       initialize position/entry tracking to flat.
@@ -54,6 +55,15 @@ class Trader:
         self.aggression_ticks = aggression_ticks
         self.max_position = max_position
         self.max_aggression_ticks = max_aggression_ticks
+        # Tech: allow_open=False suppresses only the flat-position open branch
+        #       below; closes, exits and forced closes are untouched.
+        # Why:  hybrid_split_iter09 (autoresearch_trading_plan_hybrid_split07.md) —
+        #       the night half's own entries measured −997.1 train points over 63
+        #       entries at the incumbent (iter08), while its closing of inherited
+        #       lots is the half's surviving role. The knob is the off-switch the
+        #       freeze line requires for a new decision path: allow_open=True
+        #       restores the copied behavior exactly.
+        self.allow_open = allow_open
         self.position = 0  # signed contracts; +long / -short
         self.entry_price: float = 0.0
         self.entry_bar_idx: int = -1
@@ -111,15 +121,21 @@ class Trader:
         cur = market.price
         base_offset = self.aggression_ticks * self.tick_size
 
-        # Tech: the §4.2 state machine — from flat, open in the signal's direction;
+        # Tech: the §4.2 state machine — from flat, open in the signal's direction
+        #       (unless allow_open=False suppresses the half's own entries);
         #       while long, only a SELL acts (closes, never flips); while short,
         #       only a BUY acts (closes, never flips).
         # Why:  no pyramiding / no flipping in v1 — a flip would be two economic
         #       actions (close + open) collapsed into one tick, which muddies PnL
         #       attribution, so same-direction-while-in-position is deliberately a
-        #       no-op and an opposing signal closes only.
+        #       no-op and an opposing signal closes only. The allow_open gate
+        #       fires *after* the §4.4 cancel above, so a signal from this half
+        #       still retires whatever order is resting, whichever half placed it
+        #       — entry suppression must not extend order lifetime (SPEC §4.4).
         order: Optional[OrderEvent] = None
         if self.position == 0:
+            if not self.allow_open:
+                return None
             offset = self._entry_offset(strength)
             qty = self._entry_qty(strength)
             if direction == "BUY":

@@ -34,6 +34,8 @@ class Trader:
         aggression_ticks: int = 3,
         max_position: int = 1,
         max_aggression_ticks: Optional[int] = None,
+        open_block_start: Optional[int] = None,
+        open_block_end: Optional[float] = None,
     ):
         # Tech: hold the execution handle and order-placement parameters, and
         #       initialize position/entry tracking to flat.
@@ -54,6 +56,24 @@ class Trader:
         self.aggression_ticks = aggression_ticks
         self.max_position = max_position
         self.max_aggression_ticks = max_aggression_ticks
+        # Tech: open_block_start/open_block_end (hours as floats, start
+        #       inclusive, end exclusive; None disables) suppress only the
+        #       flat-position open branch below when the bar's fractional hour
+        #       (hour + minute/60) falls in the window. Integer values behave
+        #       exactly like the hour-only gate of iter18/iter20.
+        # Why:  hybrid_split_iter18 (autoresearch_trading_plan_hybrid_split07.md)
+        #       — the incumbent's train trades entered 11:00–12:59 lost −1267
+        #       points over 30 entries while morning (08–10) entries made +8467
+        #       over 89: the midday lull's thin tape is where Toto2's forecasts
+        #       are noise. hybrid_split_iter22 moved the start to 9.5 — half-hour
+        #       evidence: 9:00–9:29 entries made +5127 over 39 while 9:30–9:59
+        #       entries lost −989 over 29, so the gate needs sub-hour resolution.
+        #       Closes are deliberately NOT blocked (a close is risk-
+        #       reducing; SPEC §4.2), and the window only gates this half's own
+        #       opens, mirroring the night half's allow_open gate from iter09.
+        #       None/None restores the copied behavior exactly.
+        self.open_block_start = open_block_start
+        self.open_block_end = open_block_end
         self.position = 0  # signed contracts; +long / -short
         self.entry_price: float = 0.0
         self.entry_bar_idx: int = -1
@@ -111,15 +131,27 @@ class Trader:
         cur = market.price
         base_offset = self.aggression_ticks * self.tick_size
 
-        # Tech: the §4.2 state machine — from flat, open in the signal's direction;
+        # Tech: the §4.2 state machine — from flat, open in the signal's direction
+        #       (unless the midday open block suppresses this half's entries);
         #       while long, only a SELL acts (closes, never flips); while short,
         #       only a BUY acts (closes, never flips).
         # Why:  no pyramiding / no flipping in v1 — a flip would be two economic
         #       actions (close + open) collapsed into one tick, which muddies PnL
         #       attribution, so same-direction-while-in-position is deliberately a
-        #       no-op and an opposing signal closes only.
+        #       no-op and an opposing signal closes only. The open block fires
+        #       *after* the §4.4 cancel above, so a signal from this half still
+        #       retires whatever order is resting, whichever half placed it —
+        #       entry suppression must not extend order lifetime (SPEC §4.4).
         order: Optional[OrderEvent] = None
         if self.position == 0:
+            if (
+                self.open_block_start is not None
+                and self.open_block_end is not None
+                and self.open_block_start
+                <= market.timestamp.hour + market.timestamp.minute / 60
+                < self.open_block_end
+            ):
+                return None
             offset = self._entry_offset(strength)
             qty = self._entry_qty(strength)
             if direction == "BUY":

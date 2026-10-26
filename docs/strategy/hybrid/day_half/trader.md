@@ -12,13 +12,22 @@ sizing, and the position mirror `ExitRule`s read.
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
-| `Trader(execution, *, tick_size, aggression_ticks, max_position, max_aggression_ticks)` | class | the state machine |
+| `Trader(execution, *, tick_size, aggression_ticks, max_position, max_aggression_ticks, open_block_start, open_block_end)` | class | the state machine |
 | `on_signal` / `submit_exit` / `on_fill` / `position_state` | method | as in [trader.py](../../../trader.md) |
 
 ## Key points / gotchas
 - **Copied from `main:strategy/day/trader.py`** (a verbatim copy of
   [trader.py](../../../trader.md)) with only the import depth changed. The DAY
   half's to edit in its own iterations; the night half must never import it.
+- **`open_block_start`/`open_block_end` (hybrid_split_iter18, tightened in
+  iter20/iter22; the committed default 9.5/13): no opens 09:30–12:59.** A signal
+  while flat in that window submits nothing, so the day half never *enters* in
+  the late-morning/midday lull (closes still act anytime; `None`/`None`
+  restores the copied behavior). The boundaries are **float hours** (hour +
+  minute/60, start inclusive / end exclusive) — integer values behave exactly
+  like the original hour-only gate. The §4.4 cancel still runs first, so a day
+  signal still retires a resting order placed by either half — the mirror of
+  the night half's `allow_open` gate.
 - **It decides only in the DAY session but folds every fill.** [RoutedTrader](../router.md)
   sends `on_signal` / `submit_exit` here only when `market.session` is DAY, and
   `on_fill` to both halves, so a lot the night half opened is this half's to

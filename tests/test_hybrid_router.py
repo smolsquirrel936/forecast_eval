@@ -70,8 +70,16 @@ def test_session_of_handles_the_midnight_wrap_and_refuses_the_gap():
 # ---- R1: emitter -----------------------------------------------------------
 
 def test_each_half_emits_with_its_own_band():
-    # +0.0007 at prob 0.6 is inside day's +-0.001 band and outside night's +-0.00045.
-    em = wiring.make_strategy(warmup_bars=0)["emitter"]
+    # +0.0007 at prob 0.6 is inside day's reset band and outside night's reset band.
+    # The loop edits PARAMS (autoresearch_trading_plan_hybrid_split07.md), so the
+    # reset knobs are pinned here as overrides instead of read from the committed
+    # PARAMS: this test is about routing, not any iteration's band values.
+    em = wiring.make_strategy(
+        warmup_bars=0,
+        day_buy_threshold=0.001, day_sell_threshold=-0.001, day_min_prob=0.65,
+        night_buy_threshold=0.00045, night_sell_threshold=-0.00045,
+        night_min_prob=0.5, night_allow_open=True,
+    )["emitter"]
     assert em.emit(fc(DAY_TS)) == "HOLD"
     assert em.emit(fc(NIGHT_TS)) == "BUY"
     assert em.emit_signal(fc(AFTER_MIDNIGHT_TS)).direction == "BUY"
@@ -124,7 +132,15 @@ def test_identical_halves_decide_exactly_as_one_emitter():
 
 def make_trader():
     execution = Execution()
-    return execution, wiring.make_strategy(warmup_bars=0)["make_trader"](execution)
+    # The loop edits PARAMS (autoresearch_trading_plan_hybrid_split07.md), so the
+    # trader-level decision-path knobs are pinned here as overrides instead of
+    # read from the committed PARAMS: these tests are about routing, not any
+    # iteration's open-block window (the day half must be able to open at
+    # DAY_TS=10:00 whatever the committed block start is).
+    return execution, wiring.make_strategy(
+        warmup_bars=0,
+        day_open_block_start=None, day_open_block_end=None,
+    )["make_trader"](execution)
 
 
 def test_a_lot_opened_by_day_is_closed_by_night_and_both_mirrors_agree():
@@ -263,6 +279,10 @@ def test_a_lot_carries_across_the_session_change_in_a_real_run():
     # Day, night, then the next day, with a fake forecaster that is bullish at
     # 0.0007: only the night half buys, and the lot is still held through the
     # next DAY session (day's band HOLDs it; nothing closes at the change).
+    # The reset knobs and night_allow_open=True are pinned as overrides because
+    # the loop edits PARAMS: this test is about the router's handover semantics
+    # (a lot opened by the night half carries into DAY), which the night half's
+    # entry-suppression knob must not disable.
     ts = list(pd.date_range("2024-03-04 13:30", periods=10, freq="1min")) + \
         list(pd.date_range("2024-03-04 15:00", periods=10, freq="1min")) + \
         list(pd.date_range("2024-03-05 08:45", periods=10, freq="1min"))
@@ -272,7 +292,12 @@ def test_a_lot_carries_across_the_session_change_in_a_real_run():
         def forecast(self, history_df):
             return fc(history_df["timestamp"].iloc[-1])
 
-    s = wiring.make_strategy(warmup_bars=2)
+    s = wiring.make_strategy(
+        warmup_bars=2,
+        day_buy_threshold=0.001, day_sell_threshold=-0.001, day_min_prob=0.65,
+        night_buy_threshold=0.00045, night_sell_threshold=-0.00045,
+        night_min_prob=0.5, night_allow_open=True,
+    )
     f = RoutedForecaster(Bull("d"), Bull("n"), warmup_bars=2, stride_bars=2, horizon_bars=30)
     res = run_backtest(ticks, forecaster=f, emitter=s["emitter"], make_trader=s["make_trader"],
                        exit_rule=s["exit_rule"], forced_close_on_session_end=s["forced_close"])
