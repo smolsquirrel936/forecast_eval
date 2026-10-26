@@ -1,6 +1,6 @@
 # [live/owner.py](../../live/owner.py)
 
-**Role:** the owning process's order book — N working orders across three deployments on one account, and the rule that sizes each one.
+**Role:** the owning process's order book — N working orders across the deployments (day, night, fullday, hybrid) on one account, and the rule that sizes each one.
 **Pipeline:** intent → `plan_legs` → owner places → `OrderBook.register` → venue deal → `on_deal` → `(slug, FillEvent)` → that deployment's `events_<slug>.jsonl`.
 **Depends on:** [events.py](../events.md)   **Used by:** the owner process (S9b, in progress)
 

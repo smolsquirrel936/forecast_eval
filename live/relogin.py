@@ -89,10 +89,10 @@ RECHECK_GRACE = timedelta(seconds=20)
 #       connection ~30 s before the old one drops. With the owner and three
 #       deployments connected, three refreshes in the same second briefly hold 7
 #       connections against the cap of 5 per person_id (§2.8b), and what Shioaji
-#       does above 5 has never been measured. 40 s apart, each spike has cleared
-#       before the next starts, so the peak is 5. The offsets run *later* than
+#       did above 5 was then unmeasured. 40 s apart, each spike has cleared
+#       before the next starts, so the peak is one above the steady state. The offsets run *later* than
 #       the unstaggered anchor, never earlier, so the owner's window (open-8 to
-#       open-6 min, `owner_cli.OWNER_RELOGIN_LEAD`) stays clear of all three.
+#       open-6 min, `owner_cli.OWNER_RELOGIN_LEAD`) stays clear of all of them.
 # Tech: `hybrid` takes the fourth slot, 2 min later than the anchor (08:42:00 /
 #       14:57:00).
 # Why:  autoresearch_trading_plan_hybrid_split07.md "Going live" step 2. An

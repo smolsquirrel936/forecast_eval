@@ -76,6 +76,6 @@ a zero would make a working session look exhausted.
 **The guard is start-up only, and that is now explicit.** `check_usage` refuses
 to *start* below the floor; it cannot see a quota consumed *during* a run. That
 gap is why [owner_cli.py](owner_cli.md) samples the headroom on its reconcile
-cadence — it is the process that outlives all three deployments. MEASURED
+cadence — it is the process that outlives every deployment. MEASURED
 2026-09-07: the daily allowance is **500 MiB**, and option (b)'s four sessions
 each subscribe to the same tick stream separately.

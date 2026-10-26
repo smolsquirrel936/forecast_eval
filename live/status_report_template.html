@@ -238,7 +238,7 @@ const hm = s => { const [h, m] = s.split(":").map(Number); return [h, m]; };
 const SH = D.session_hours;
 
 // Colour follows the entity: known packages keep fixed slots, others take the next free one.
-const KNOWN = ["day", "night", "fullday"];
+const KNOWN = ["day", "night", "fullday", "hybrid"];
 const SLOT = {};
 let next = KNOWN.length;
 for (const r of RUNS) SLOT[r.package] = KNOWN.includes(r.package) ? KNOWN.indexOf(r.package) + 1 : Math.min(8, ++next);

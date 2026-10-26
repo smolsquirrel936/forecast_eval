@@ -1,9 +1,9 @@
-# Simtrade operations — the owner and three deployments
+# Simtrade operations — the owner and four deployments
 
 **Role:** The operator's guide to a running simulation trade: how to check it,
 stop it, pause it, restart it, and what to watch while it runs.
-**Shape covered:** one [owner](live/owner_cli.md) plus the day, night and fullday
-deployments under `--broker client`, sharing one `outputs/` parent.
+**Shape covered:** one [owner](live/owner_cli.md) plus the day, night, fullday and
+hybrid deployments under `--broker client`, sharing one `outputs/` parent.
 **Not covered:** what the strategies trade and why. That is in the run's
 branch: `strategy/README.md`, with the launch decisions in
 `SIMTRADE_0929_PLAN.md` (both on `simtrade_0929` only, so they are named here,
@@ -30,12 +30,14 @@ Run every command from the repo root (`night/`), prefixed with
 | day | `live.cli --strategy day --broker client` | DAY session 08:45–13:45; sends intents to the owner |
 | night | `live.cli --strategy night --broker client` | NIGHT session 15:00–05:00 |
 | fullday | `live.cli --strategy fullday --broker client` | both sessions, slug `day_night` |
+| hybrid | `live.cli --strategy hybrid --broker client` | both sessions, a day half and a night half; slug `hybrid` (since 2026-10-27) |
 
 Every deployment still logs in itself, because it needs the market feed to build
-bars; only *orders* are delegated. That makes **four sessions on one
-credential** ([cli.md](live/cli.md) "`--broker client`").
+bars; only *orders* are delegated. That makes **five sessions on one person**
+with hybrid running, six for ~30 s during each re-login, MEASURED to coexist on
+2026-10-26 (§7, [cli.md](live/cli.md) "`--broker client`").
 
-Each process idles outside its own sessions, so all four can run around the
+Each process idles outside its own sessions, so all of them can run around the
 clock. `simulation=True` is hardcoded in both entry points: no flag reaches a
 production account.
 
@@ -51,7 +53,7 @@ production account.
 | `intents_<slug>.jsonl` / `events_<slug>.jsonl` | the [wire](live/intents.md): client → owner intents; owner → client fills and `position` events (one a second) | the running pair |
 | `live_<slug>_<timestamp>/` | one run's artifacts: `orders`, `fills`, `trades`, `signals`, `forecasts`, `ticks`, `params.json`, `session.jsonl` | review |
 | `fatal.jsonl` | every fatal alert, all deployments in one file, **with no deployment field**; the owner's alerts go to `owner_session.jsonl` instead | review |
-| `telegram_level.json` | the Telegram alert level chosen with `/settings`, shared by all four processes (§9); absent = the `[telegram]` default | every alert |
+| `telegram_level.json` | the Telegram alert level chosen with `/settings`, shared by every process (§9); absent = the `[telegram]` default | every alert |
 | `owner_session.jsonl` | the owner's trail, appended across runs: placements with their `ordno` and slug, deals, order events, pending/failed reconciles, freezes, anomalies (since 2026-10-07) | review |
 
 **Never move, clean or rename `outputs/` while a soak continues.** `--resume`
@@ -78,7 +80,7 @@ the interpreter); that is normal.
 
 ## 4. Stopping cleanly
 
-1. **Ctrl-C each deployment first**: day, night, fullday. Wait for each to print
+1. **Ctrl-C each deployment first**: day, night, fullday, hybrid. Wait for each to print
    its summary block (feed, roll, relogin, ledger, alert and Telegram
    counters) and exit.
    The same block is recorded at the end of its `session.jsonl`:
@@ -111,7 +113,11 @@ uv run --no-sync python -m forecast_eval.live.owner_cli --out outputs --i-unders
 uv run --no-sync python -m forecast_eval.live.cli --strategy day     --broker client --resume --i-understand-this-places-orders
 uv run --no-sync python -m forecast_eval.live.cli --strategy night   --broker client --resume --i-understand-this-places-orders
 uv run --no-sync python -m forecast_eval.live.cli --strategy fullday --broker client --resume --i-understand-this-places-orders
+uv run --no-sync python -m forecast_eval.live.cli --strategy hybrid  --broker client --resume --i-understand-this-places-orders
 ```
+
+The owner serves `day night day_night hybrid` by default (`--slugs`); a slug whose
+deployment is not running seeds flat and is never reported stale.
 
 **Required flags.** Order-placing runs need two separate things, and each
 answers a different question:
@@ -478,19 +484,20 @@ runtime path. A trader with entry filters needs the runtime's `rolling()` hook
 |---|---|---|
 | 08:00 | trading day and quota roll; the backfill cap resets | — |
 | 08:37–08:39 | owner re-login | `relogin_failed` (it retries 60 s later, inside the window) |
-| 08:40–08:44 | deployments re-login 40 s apart: day 08:40:00, night 08:40:40, fullday 08:41:20; all verify at 08:44 | `relogin_failed`, `VERIFY_FAILED` |
+| 08:40–08:44 | deployments re-login 40 s apart: day 08:40:00, night 08:40:40, fullday 08:41:20, hybrid 08:42:00; all verify at 08:44 | `relogin_failed`, `VERIFY_FAILED` |
 | 08:45 | DAY opens | first bars arrive; no `feed_*` alerts |
 | 13:45 | DAY closes | — |
 | 14:52–14:54 | owner re-login | as at 08:37 |
-| 14:55–14:59 | deployments re-login (14:55:00 / 14:55:40 / 14:56:20) | as at 08:40 |
+| 14:55–14:59 | deployments re-login (14:55:00 / 14:55:40 / 14:56:20 / 14:57:00) | as at 08:40 |
 | 15:00 | NIGHT opens | as at 08:45 |
 | 05:00 | NIGHT closes; silence until 08:45 is expected | — |
 
 A `force_refresh=True` login opens its new connection about 30 s before the old
-one drops, against Shioaji's **5 per `person_id`** cap with four processes
-connected. Until 2026-10-18 the three deployments re-logged in the same second,
-briefly up to 7. They are now 40 s apart (`relogin.DEPLOYMENT_STAGGER`), so each
-spike clears before the next and the peak is 5; the owner still goes first.
+one drops, against Shioaji's **5 per `person_id`** cap. Until 2026-10-18 the
+three deployments then running re-logged in the same second, briefly up to 7.
+They are now 40 s apart (`relogin.DEPLOYMENT_STAGGER`), so each spike clears
+before the next; the owner still goes first. With hybrid, five processes are
+connected and each spike makes 6.
 **Above 5 was measured on 2026-10-26** (a holiday, every live process stopped):
 `multi_deploy_probe --mode sessions --sessions 6` opened 6 simulation logins,
 `usage()` reported `connections=6`, and the first session was still usable.
@@ -500,7 +507,7 @@ still unmeasured.
 
 ## 8. Reports while the simtrade runs
 
-Two reports can be generated at any time while all four processes run. Neither
+Two reports can be generated at any time while every process runs. Neither
 loads the model or touches the GPU, and neither sends anything to the venue.
 
 | | Status page | Per-run report |
@@ -590,7 +597,7 @@ current run does. Its `--seed-ledger` appends to the live fill ledger, which
 
 ## 9. Alerts on your phone
 
-All four processes send their alerts to one Telegram chat. The full manual —
+Every process sends its alerts to one Telegram chat. The full manual —
 every alert and what to do about it, delivery, troubleshooting — is
 [notifications.md](notifications.md). Each message starts with who sent it:
 `[owner]`, `[day]`, `[night]` or `[fullday]` (the `--strategy` name, not the
@@ -629,7 +636,7 @@ The owner's console repeats its traffic and silent-deployment warnings every
 
 **Choosing the level.** Send `/settings` to the bot and press *All (INFO)*,
 *Trades + WARN + FATAL*, *WARN + FATAL* or *FATAL only*. The choice is saved in
-`outputs/telegram_level.json` and applies to **all four processes**, without a
+`outputs/telegram_level.json` and applies to **every process**, without a
 restart, and it is kept across restarts. FATAL is always sent. The default is
 INFO, which means a message per fill plus a `relogin` notice from each process
 before every open (08:40 and 14:55, weekends included): eight a day across the
@@ -638,7 +645,7 @@ four. *Trades + WARN + FATAL* keeps the fills and drops those.
 **After a stop**, each process prints its `telegram_*` counters with the rest
 of its summary (§4). `telegram_failed` above 0 means messages were not
 delivered, and is how a dead transport differs from a quiet night.
-`telegram_poll_conflicts` grows normally: four processes share one bot and take
+`telegram_poll_conflicts` grows normally: the processes share one bot and take
 turns reading button presses, so a press can take up to about a minute to be
 answered.
 

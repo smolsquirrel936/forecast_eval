@@ -335,8 +335,10 @@ then halted on the first bar of that morning's session with `position mirror 1 !
 venue 0`: the 1 was fullday's lot.
 
 **This process still logs in.** It needs the market feed to build bars; only
-*orders* are delegated. That means the owner plus three deployments is **four
-sessions on one credential**, and §14b Q2 measured two coexisting, not four.
+*orders* are delegated. The owner plus three deployments was **four sessions on
+one person**, when §14b Q2 had measured two coexisting; §18.13 then measured
+four. With hybrid it is five, six during a re-login, MEASURED 2026-10-26 to
+coexist with the first still usable ([multi_deploy_probe.md](multi_deploy_probe.md)).
 
 **Every `== "shioaji"` gate now reads `ORDER_PLACING_BROKERS`.** A mode that
 sends orders through one more hop is still a mode that sends orders, and a gate

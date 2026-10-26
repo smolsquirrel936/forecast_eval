@@ -87,7 +87,7 @@ It now runs the same `ReloginScheduler`, driven once per serve pass:
 
 | | Owner | Deployments ([cli.py](cli.md)) |
 |---|---|---|
-| re-login window | open − 8 min → open − 6 min (08:37, 14:52) | from open − 5 min, 40 s apart (day 08:40:00, night 08:40:40, fullday 08:41:20; 14:55 likewise) → open − 1 min |
+| re-login window | open − 8 min → open − 6 min (08:37, 14:52) | from open − 5 min, 40 s apart (day 08:40:00, night 08:40:40, fullday 08:41:20, hybrid 08:42:00; 14:55 likewise) → open − 1 min |
 | verify | `api.usage()` — raises on a dead token | `api.usage()` + a tick since the re-login |
 
 **Earlier on purpose.** A `force_refresh=True` login opens a new connection
