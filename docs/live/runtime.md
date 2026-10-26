@@ -37,6 +37,7 @@ first live decision, and only the first is obvious.
 | `ladder_ticks(attempt)` | function | 5 / 10 / 15 / 20 / 25, then capped |
 | `ROLL_LADDER_*` | constants | start 5, step 5, max 25, interval 10 s |
 | `roll_fills` | attribute | timestamps of fills that were roll legs — `build_trades(roll_fills=…)` reads this |
+| trader `rolling()` | optional hook | a context manager the trader *may* define; the runtime enters it around every call it makes on a roll's behalf (see "Roll legs and trader filters") |
 | `warm_up(bars)` | method | validate → prime emitter → pre-warm model → seed context |
 | `on_tick(ts, price, volume, *, simtrade, code)` | method | capture → filter → aggregate → `loop.on_bar` per completed bar |
 | `on_clock(now)` | method | flush a quiet bar, then run the staleness watchdog |
@@ -137,6 +138,37 @@ bar. Held once, at start-up — the per-bar path stays on `broker_position()`.
   into a non-zero exit rather than letting it read as a clean run.
 
 `LiveRuntime(..., ledger_dir=None)` is where the directory comes from: `cli.py` passes `out.parent`, the same directory `ledger_path` writes into. `None` disables the sum and keeps the previous operand, which is what every offline test and the V0 parity harness rely on.
+
+## Roll legs and trader filters
+A roll re-opens through `trader.on_signal(direction, market, strength=1.0)`: an
+OPEN from flat on the side that was just closed. That is exactly the re-entry a
+same-side cooldown blocks. Found 2026-10-26 on the fullday reversal loop's
+`reentry_cooldown_signals`:
+- **Scheduled roll:** each ladder retry, 10 s apart, used up one cooldown count.
+  The re-open went out K retries late, at the 25-tick cap.
+- **Settled leg:** `_resume_rolled_exposure` sends the re-entry once, so the
+  position was **dropped**.
+
+The backtest cannot see this, because its spliced tape has no rolls.
+
+So the runtime enters the trader's **`rolling()`** context manager, when the
+trader defines one, around every call it makes on a roll's behalf:
+
+| call | leg |
+|---|---|
+| `submit_exit` | the scheduled close, every rung |
+| `on_fill` | the settlement's synthetic fill |
+| `on_signal` | both re-opens: the ladder's rungs and the settled leg's single shot |
+
+- **The hook is optional.** It is read with `getattr`, like the broker's
+  `rolling`, so the frozen shared `Trader` and every package without an entry
+  filter are unchanged.
+- **A trader with an entry or re-entry filter must define `rolling()`** and let
+  the re-open through while inside it.
+- **The scheduled close's venue fill is not inside the context.** It arrives
+  later through `LiveLoop`. A filter must exempt the re-open, not rely on the
+  close being marked.
+
 
 ## Reconciliation now compares the ACCOUNT, not one deployment (§16)
 **MEASURED 2026-09-02** (STRATEGY_SPLIT_PLAN §14): a deployment's order callback
