@@ -32,8 +32,8 @@ half's Forecaster, SignalEmitter, Trader and optional percent stop from its
 - **UNTUNED.** Both halves start at `main`'s reset session packages
   (DAYNIGHT_TOTO2_RESET_PLAN, `20767bb`): day ±0.001 / `min_prob` 0.65, night
   ±0.00045 / 0.5, two-sided, Toto2-1B, context 3008, no exit rule. The search is
-  `autoresearch_trading_plan_hybrid_split07.md` (repo root), in two phases: day half,
-  then night half.
+  `autoresearch_trading_plan_hybrid_split07.md` (repo root): one joint search over
+  both halves, one half per iteration.
 - **Backtest-only.** `live/config.py` has no `hybrid` deployment, and
   `LiveConfig.strategy_package` maps `{DAY, NIGHT}` to `fullday`; registering it
   is the plan's "Going live" work, not this package's.

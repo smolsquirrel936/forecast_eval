@@ -2,7 +2,7 @@
 
 Copied from ``main:strategy/day/forecaster.py`` (the DAYNIGHT_TOTO2_RESET_PLAN
 reset, ``20767bb``) with only the relative-import depth changed. It is this
-half's to edit during its phase of ``autoresearch_trading_plan_hybrid_split07.md``; the
+half's to edit in its own iterations of ``autoresearch_trading_plan_hybrid_split07.md``; the
 other half and the router never import it except through ``hybrid/wiring.py``.
 
 Like the session packages', it is a thin construction over the shared, frozen
