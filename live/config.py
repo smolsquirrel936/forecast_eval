@@ -459,9 +459,12 @@ PINNED_HYBRID = LiveConfig(
     source_calmar=None,
     source_dataset=r"\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_fullday.csv",
     source_note=(
-        "UNTUNED on main: strategy/hybrid is Step 0 (eaaad1d) -- day half "
-        "band 0.001 / min_prob 0.65, night half band 0.00045 / min_prob 0.5, "
-        "both Toto2-1B at stride 30. Results live in results_hybrid.tsv."
+        "SIMTRADE_0929 since 2026-10-27: hybrid_split_iter22 "
+        "(autoresearch_split_0.7_hybrid, 9c0741f; code placed by 58eb8b5); "
+        "train-70% Calmar 12.8738, 86 trades; held-out approx Calmar 6.9773 "
+        "vs baseline 5.7634 (day solo 0.371). day half band 0.0005, min_prob "
+        "0.60, no opens 09:30-13:00; night half band 0.0007, closes only "
+        "(night_allow_open False); stride 30, Toto2-1B. results_hybrid.tsv"
     ),
     policy=SessionPolicy.both(slug="hybrid"),
     package="hybrid",
