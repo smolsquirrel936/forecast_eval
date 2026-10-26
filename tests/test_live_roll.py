@@ -9,6 +9,7 @@ Three things are covered here, in the order a roll exercises them: noticing it
 (`RollWatch`), warming up across it (the spliced backfill), and carrying the
 position through it (`LiveRuntime`).
 """
+from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from functools import partial
 
@@ -570,6 +571,113 @@ def test_a_re_entry_beaten_by_a_real_signal_is_recorded_not_silent():
     rt._resume_rolled_exposure(
         type("M", (), {"timestamp": NOW, "price": 1.0})())
     assert "roll_resume_skipped" in [e for e, _ in rec.events]
+
+
+# --- roll legs and a trader's entry filters (2026-10-26) ---------------------
+#
+# A roll re-opens as an OPEN from flat on the side it just closed -- exactly what
+# a same-side re-entry cooldown blocks. Found on the fullday reversal loop: the
+# settled leg's single-shot re-entry was dropped, and the ladder's rungs each
+# burned one cooldown count. The runtime now enters the trader's optional
+# `rolling()` context around every call it makes on a roll's behalf.
+
+class _Market:
+    def __init__(self, ts, price):
+        self.timestamp = ts
+        self.price = price
+
+
+def _same_side_filter(rt, *, hook=True):
+    """Make rt.trader refuse a BUY from flat unless it is inside `rolling()`.
+
+    Records, per trader call, whether the call was made inside the hook."""
+    tr = rt.trader
+    state = {"rolling": False, "calls": []}
+    if hook:
+        @contextmanager
+        def rolling():
+            state["rolling"] = True
+            try:
+                yield
+            finally:
+                state["rolling"] = False
+        tr.rolling = rolling
+    for name in ("on_fill", "submit_exit"):
+        def wrapped(*a, _orig=getattr(tr, name), _name=name, **kw):
+            state["calls"].append((_name, state["rolling"]))
+            return _orig(*a, **kw)
+        setattr(tr, name, wrapped)
+    orig_signal = tr.on_signal
+
+    def on_signal(direction, market, **kw):
+        state["calls"].append(("on_signal", state["rolling"]))
+        if tr.position == 0 and direction == "BUY" and not state["rolling"]:
+            return None
+        return orig_signal(direction, market, **kw)
+    tr.on_signal = on_signal
+    return state
+
+
+def _resumed(rec):
+    return [f for e, f in rec.events if e == "roll_exposure_resumed"]
+
+
+def test_a_settled_leg_is_re_entered_through_a_same_side_filter():
+    rt, rec = _rolling_runtime()
+    state = _same_side_filter(rt)
+    rt.settle_rolled_leg(price=17600.0, timestamp=datetime(2026, 8, 19, 14, 55))
+    rt._resume_rolled_exposure(_Market(datetime(2026, 8, 19, 16, 0), 17610.0))
+    assert _resumed(rec)[0]["quantity"] == 1
+    assert ("on_fill", True) in state["calls"]       # the settlement fill
+    assert ("on_signal", True) in state["calls"]     # the re-entry
+    assert state["rolling"] is False                 # the context was left
+
+
+def test_without_the_hook_the_filter_drops_the_settled_leg():
+    # The defect the hook exists for: the single-shot re-entry is lost.
+    rt, rec = _rolling_runtime()
+    _same_side_filter(rt, hook=False)
+    rt.settle_rolled_leg(price=17600.0, timestamp=datetime(2026, 8, 19, 14, 55))
+    rt._resume_rolled_exposure(_Market(datetime(2026, 8, 19, 16, 0), 17610.0))
+    assert _resumed(rec)[0]["quantity"] is None
+    assert rt._roll_entry == 0
+
+
+def test_a_scheduled_re_open_goes_out_on_the_first_rung_through_the_filter():
+    rt, rec = _rolling_runtime()
+    state = _same_side_filter(rt)
+    rt.request_roll()
+    rt.trader.position = 0                     # the close has filled
+    rt.portfolio.position = 0
+    rt._roll_state = "switch"                  # the caller has moved the contract
+    rt.resume_roll()
+    rt._resume_rolled_exposure(_Market(datetime(2026, 9, 16, 15, 31), 17500.0))
+    assert _resumed(rec)[0]["quantity"] == 1
+    assert rt._ladder_attempt == 1
+    assert ("on_signal", True) in state["calls"]
+
+
+def test_the_scheduled_close_is_submitted_inside_the_hook():
+    rt, _rec = _rolling_runtime()
+    state = _same_side_filter(rt)
+    rt.request_roll()
+    for ts in pd.date_range("2026-09-15 15:30", periods=120, freq="1s"):
+        rt.on_tick(ts, 17500.0, 1)
+    assert rt.roll_state == "closing"
+    assert ("submit_exit", True) in state["calls"]
+
+
+def test_strategy_signals_are_never_inside_the_hook():
+    # Only the roll's own calls are marked; the strategy's signals during the
+    # same ticks must still meet the trader's filters.
+    rt, _rec = _rolling_runtime()
+    state = _same_side_filter(rt)
+    rt.trader.position = 0
+    rt.portfolio.position = 0
+    for ts in pd.date_range("2026-08-19 16:00", periods=600, freq="1s"):
+        rt.on_tick(ts, 17610.0, 1)
+    signals = [inside for name, inside in state["calls"] if name == "on_signal"]
+    assert signals and not any(signals)
 
 
 # --- the escalating-aggression ladder (§2.6) --------------------------------
