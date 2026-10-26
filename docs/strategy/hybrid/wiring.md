@@ -34,9 +34,9 @@ half's Forecaster, SignalEmitter, Trader and optional percent stop from its
   ±0.00045 / 0.5, two-sided, Toto2-1B, context 3008, no exit rule. The search is
   `autoresearch_trading_plan_hybrid_split07.md` (repo root): one joint search over
   both halves, one half per iteration.
-- **Backtest-only.** `live/config.py` has no `hybrid` deployment, and
-  `LiveConfig.strategy_package` maps `{DAY, NIGHT}` to `fullday`; registering it
-  is the plan's "Going live" work, not this package's.
+- **Registered for live** (2026-10-27) as `PINNED_HYBRID` in `live/config.py`:
+  named package `hybrid`, file slug `hybrid` (never fullday's `day_night`). Live
+  builds from this same `make_strategy`.
 - `exit_rule` is None unless a half sets `stop_pct`, so the unedited package
   runs exactly the reset packages' path (no exit step).
 - Stateful objects (emitters' deques, traders' mirrors, forecasters' model

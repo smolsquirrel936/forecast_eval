@@ -146,6 +146,10 @@ def live_params(config: Any, *, strategy_params: Mapping[str, Any],
         "max_position": strategy_params["max_position"],
         "forced_close": strategy_params["forced_close"],
         "sessions": sorted(config.policy.sessions),
+        # Tech: the deployment's file slug (`fills_<slug>.csv`, `prices_<slug>.csv`).
+        # Why:  `sessions` no longer names the files -- hybrid and fullday share
+        #       DAY+NIGHT -- so a re-render reading this file needs the slug.
+        "slug": config.policy.cache_slug(),
         "roll_at": str(config.policy.roll_at_time()),
         "broker": broker,
         # Tech: what produced this strategy -- the package, its content hash, the

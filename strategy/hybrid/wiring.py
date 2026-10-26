@@ -20,8 +20,8 @@ equal the larger half's context. The other seven have no single meaning in a
 two-half package and must stay None; ``make_strategy`` refuses a value, so a
 typed ``--buy-threshold`` fails instead of being ignored.
 
-Not registered for live: ``live/config.py`` has no ``hybrid`` deployment, so this
-package is backtest-only until the plan's "Going live" steps are done.
+Registered for live as ``PINNED_HYBRID`` (``live/config.py``, 2026-10-27), with
+its own file slug ``hybrid``; live builds from this same ``make_strategy``.
 """
 from typing import Any, Dict, Optional
 

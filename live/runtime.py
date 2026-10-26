@@ -50,6 +50,15 @@ from .sessions import SessionPolicy
 from .state import RailsConfig, SafetyRails
 
 
+def _parts(component: Any) -> List[Any]:
+    # Tech: the halves behind a router (`.halves`, a dict), else the component.
+    # Why:  hybrid puts one emitter and one forecaster per session behind a
+    #       router (`strategy/hybrid/router.py`); start-up checks that read a
+    #       component's internals must read each half's, not the router's.
+    halves = getattr(component, "halves", None)
+    return list(halves.values()) if isinstance(halves, dict) else [component]
+
+
 # Tech: the roll ladder — how far through the touch the first attempt is
 #       priced, how much each retry adds, where it stops, and how often it fires.
 # Why:  §2.6. A roll leg that does not fill is the only failure that matters:
@@ -851,7 +860,9 @@ class LiveRuntime:
         #       the card. The torch handle is read off the forecaster (Toto2
         #       keeps it on `_torch` after its lazy import) so this module still
         #       never imports torch, and a CPU or test forecaster is a no-op.
-        torch = getattr(self.forecaster, "_torch", None)
+        torch = next((t for t in (getattr(fc, "_torch", None)
+                                  for fc in _parts(self.forecaster))
+                      if t is not None), None)
         if torch is not None and torch.cuda.is_available():
             torch.cuda.empty_cache()
 
@@ -862,10 +873,18 @@ class LiveRuntime:
         #       trivially; a `ThresholdEmitter` with `trend_filter=False` has no
         #       filter to leave open. Checking the condition rather than the class
         #       keeps this from becoming an emitter registry.
-        return (
-            getattr(self.emitter, "_short_prices", None) is not None
-            and bool(getattr(self.emitter, "trend_filter", False))
-        )
+        return bool(self._filtered_emitters())
+
+    def _filtered_emitters(self) -> List[Any]:
+        # Tech: the emitters whose trend filter needs priming -- the emitter
+        #       itself, or each half behind a router (`_parts`).
+        # Why:  hybrid's `RoutedEmitter` holds no deque of its own, so reading
+        #       the router skipped the check and a half that primed nothing
+        #       traded with its filter open. Each half filters its own signals,
+        #       so each must clear the floor.
+        return [em for em in _parts(self.emitter)
+                if getattr(em, "_short_prices", None) is not None
+                and bool(getattr(em, "trend_filter", False))]
 
     def _check_primed(self, n_bars: int) -> None:
         # Tech: refuse to start when replay failed to accumulate enough samples
@@ -905,12 +924,19 @@ class LiveRuntime:
         # Why:  measured at ~18.8 s cold versus ~0.09 s warm (§2.7). Without this
         #       the *first real signal* pays the load. Skipped when the emitter
         #       priming already forced a load.
-        if self.forecaster._model is None:
+        # Tech: a router counts as loaded only when every half is.
+        # Why:  hybrid's `RoutedForecaster` has no `_model` of its own; its
+        #       halves load lazily, and the throwaway forecast loads the half of
+        #       the window's last bar (which lends it to a same-checkpoint twin).
+        if any(getattr(fc, "_model", None) is None for fc in _parts(self.forecaster)):
             self.forecaster.forecast(window.reset_index(drop=True).copy())
 
     def _emitter_samples(self) -> int:
-        deque_ = getattr(self.emitter, "_short_prices", None)
-        return len(deque_) if deque_ is not None else -1
+        # Tech: the fewest samples any filtered emitter holds; -1 when none is.
+        # Why:  the floor is per filter, so a router is as primed as its
+        #       least-primed half.
+        emitters = self._filtered_emitters()
+        return min(len(em._short_prices) for em in emitters) if emitters else -1
 
     # ---- the live event paths ----------------------------------------------
 

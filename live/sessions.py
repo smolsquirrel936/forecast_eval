@@ -75,6 +75,13 @@ class SessionPolicy:
     #       because an unmaintained list that silently goes stale would be worse
     #       than none: it would halt a run on a day the market was open.
     holidays: FrozenSet[date] = frozenset()
+    # Tech: an explicit file-name slug; None derives it from the sessions
+    #       (`cache_slug`).
+    # Why:  two deployments may trade the same sessions -- fullday and hybrid are
+    #       both DAY+NIGHT -- and the derived name would give them one ledger,
+    #       one bar cache and one wire. The derived default keeps every existing
+    #       deployment's files where they are.
+    slug: Optional[str] = None
 
     def __post_init__(self) -> None:
         # Tech: reject an empty or unknown session set at construction.
@@ -217,7 +224,11 @@ class SessionPolicy:
         #       collision costs context that cannot be refetched.
         #
         #       Derived from the policy rather than passed in, so a new
-        #       deployment cannot forget to change it.
+        #       deployment cannot forget to change it -- unless the policy names
+        #       its own `slug`, which a second deployment on the same sessions
+        #       must (hybrid beside fullday).
+        if self.slug is not None:
+            return self.slug
         return "_".join(sorted(x.lower() for x in self.sessions))
 
     def same_session_instance(self, a: Any, b: Any) -> bool:

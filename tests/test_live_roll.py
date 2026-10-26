@@ -1246,3 +1246,13 @@ def test_a_month_expires_at_its_last_trading_days_close():
     assert month_expired("202610", datetime(2026, 10, 21, 13, 30))
     assert not month_expired("202611", datetime(2026, 10, 21, 13, 30))
     assert not month_expired("", datetime(2026, 10, 21, 13, 30))
+
+
+def test_an_explicit_slug_separates_deployments_on_the_same_sessions():
+    """Hybrid and fullday both trade DAY+NIGHT; an explicit slug keeps their
+    ledgers, bar caches and wires apart, and changes nothing else."""
+    hybrid = SessionPolicy.both(slug="hybrid")
+    assert hybrid.cache_slug() == "hybrid"
+    assert SessionPolicy.both().cache_slug() == "day_night"
+    assert hybrid.sessions == SessionPolicy.both().sessions
+    assert hybrid.roll_at_time() == SessionPolicy.both().roll_at_time()

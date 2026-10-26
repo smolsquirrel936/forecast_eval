@@ -269,7 +269,11 @@ class OwnerSessionWatch:
             self.recorder.record(event, **fields)
 
 
-DEFAULT_SLUGS = ("day", "night", "day_night")
+# Tech: the deployments the owner serves unless `--slugs` says otherwise.
+# Why:  live runs four deployments (day, night, fullday as `day_night`, hybrid).
+#       A slug with no wire file is harmless: it seeds flat and never counts as
+#       stale (`stale_deployments` skips a stream with no intents yet).
+DEFAULT_SLUGS = ("day", "night", "day_night", "hybrid")
 
 # Tech: the owner's own audit trail, appended beside the ledgers in `--out`.
 # Why:  until 2026-10-07 the owner had none — its anomalies went to a console
@@ -301,7 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "`out.parent` `live/cli.py --broker client` uses.")
     ap.add_argument("--slugs", nargs="+", default=list(DEFAULT_SLUGS),
                     help="Deployment slugs to serve (default: day night "
-                         "day_night).")
+                         "day_night hybrid).")
     ap.add_argument("--contract", default="TXFR1",
                     help="The owner's start-up month: an intent naming no month "
                          "is placed on it, and a ledger row carrying no month "

@@ -98,9 +98,9 @@ def test_a_missing_out_directory_is_refused(tmp_path, capsys):
     assert "not a directory" in capsys.readouterr().err
 
 
-def test_the_parser_defaults_to_the_three_deployments():
+def test_the_parser_defaults_to_the_four_deployments():
     args = build_parser().parse_args(["--out", "."])
-    assert args.slugs == ["day", "night", "day_night"]
+    assert args.slugs == ["day", "night", "day_night", "hybrid"]
 
 
 # ---- the serve loop --------------------------------------------------------
