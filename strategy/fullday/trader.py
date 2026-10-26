@@ -16,6 +16,12 @@ a signal whose ``strength`` falls below the floor implied by ``entry_min_prob``
 submits nothing, while closes are never gated. At the default
 ``entry_min_prob`` 0.50 the floor is 0.0 and the gate is inert, so runs are
 byte-identical to the pre-gate copy.
+
+DIVERGED (fullday_rev_iter33, same plan decision 12 / phase I): the Trader
+gained a re-entry cooldown — after a fill that flattens a position, an OPEN on
+the closed position's side is skipped for ``reentry_cooldown_signals`` signals
+(HOLDs count; the opposite side opens freely). At the default 0 the cooldown
+never arms, so runs are byte-identical to the pre-knob copy.
 """
 from datetime import datetime
 from typing import Literal, Optional
@@ -38,6 +44,7 @@ class Trader:
         max_aggression_ticks: Optional[int] = None,
         entry_min_prob: float = 0.5,
         full_confidence_prob: float = 0.9,
+        reentry_cooldown_signals: int = 0,
     ):
         # Tech: hold the execution handle and order-placement parameters, and
         #       initialize position/entry tracking to flat.
@@ -73,6 +80,24 @@ class Trader:
         #       full_confidence_prob so the gate is never vacuous or total.
         self.entry_min_prob = entry_min_prob
         self.entry_floor = (entry_min_prob - 0.5) / (full_confidence_prob - 0.5)
+        # Tech: re-entry cooldown — after a fill that flattens a position, an
+        #       OPEN on the closed position's side is skipped for this many
+        #       signals (HOLDs count); the opposite side opens freely.
+        # Why:  reversal plan decision 12 (phase I). Every quick-exit mechanism
+        #       before this (phases E/H) died on re-entry churn against the same
+        #       leg; the cooldown attacks exactly that churn without touching
+        #       the exit side. 0 is the inert control — the cooldown never arms,
+        #       so runs are byte-identical to the pre-knob copy. A whole,
+        #       non-negative count is the only meaningful width (signals are
+        #       discrete; the run loop calls on_signal once per stride).
+        if not isinstance(reentry_cooldown_signals, int) or reentry_cooldown_signals < 0:
+            raise ValueError(
+                f"reentry_cooldown_signals must be an int >= 0, "
+                f"got {reentry_cooldown_signals}"
+            )
+        self.reentry_cooldown_signals = reentry_cooldown_signals
+        self._cooldown_side: int = 0        # +1 blocked BUYs, -1 blocked SELLs
+        self._cooldown_left: int = 0        # signals remaining in the cooldown
         self.position = 0  # signed contracts; +long / -short
         self.entry_price: float = 0.0
         self.entry_bar_idx: int = -1
@@ -118,7 +143,11 @@ class Trader:
         # Tech: HOLD means "do nothing further" after the cancel above.
         # Why:  HOLD is a real decision (stand aside), not a no-op — its cancel is
         #       the whole point, so we return without submitting anything.
+        #       A HOLD still counts toward the re-entry cooldown (decision 12):
+        #       the budget is signals seen, not orders placed.
         if direction == "HOLD":
+            if self._cooldown_left > 0:
+                self._cooldown_left -= 1
             return None
 
         # Tech: capture the reference price; entries use a confidence-scaled offset
@@ -139,6 +168,21 @@ class Trader:
         #       no-op and an opposing signal closes only.
         order: Optional[OrderEvent] = None
         if self.position == 0:
+            # Tech: re-entry cooldown — while a cooldown is armed, an OPEN on
+            #       the closed position's side is skipped; every signal seen
+            #       while flat and cooling (this one included) consumes one of
+            #       the K, and the opposite side passes untouched.
+            # Why:  decision 12 — the churn that killed phases E/H was the
+            #       immediate re-entry against the same leg; this blocks only
+            #       that re-entry, leaving exits and opposite-side entries
+            #       exactly as they are. The unconditional cancel above still
+            #       ran, so a gated signal leaves nothing resting (§4.4).
+            if self._cooldown_left > 0:
+                self._cooldown_left -= 1
+                if (direction == "BUY" and self._cooldown_side > 0) or (
+                    direction == "SELL" and self._cooldown_side < 0
+                ):
+                    return None
             # Tech: entry-only conviction gate — a below-floor signal from flat
             #       submits nothing (the unconditional cancel above still ran, so
             #       any resting order is gone per §4.4).
@@ -246,6 +290,16 @@ class Trader:
             self.entry_price = 0.0
             self.entry_bar_idx = -1
             self.entry_timestamp = None
+            # Tech: arm the re-entry cooldown on the closed position's side
+            #       (prev's sign) for K signals.
+            # Why:  decision 12 — the cooldown is measured from the flattening
+            #       fill, not from the signal that requested the close (a
+            #       resting close can fill bars later, and the fill is the
+            #       moment the re-entry risk actually begins). Gated off
+            #       entirely at the control 0.
+            if self.reentry_cooldown_signals > 0:
+                self._cooldown_side = 1 if prev > 0 else -1
+                self._cooldown_left = self.reentry_cooldown_signals
         # (Partial fills / pyramiding would update average entry here; v1
         # uses max_position=1 so this branch is unreachable.)
 

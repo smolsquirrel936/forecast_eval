@@ -72,6 +72,13 @@ factory. This is the file a search for this session edits first.
   break of the last N in-position bars' extreme — model-free, no forecast
   lag. `None` — the inert control; the rule composes through the same any-of
   seam. Stateful (`adoptable=False`).
+- **`reentry_cooldown_signals` (added `fullday_rev_iter33`, reversal decision
+  12, phase I)** is a package-declared knob for the Trader's re-entry
+  cooldown: after a fill that flattens a position, an OPEN on the closed
+  position's side is skipped for K signals (HOLDs count; the opposite side
+  opens freely). `0` — the inert control, the cooldown never arms, runs are
+  byte-identical to the pre-knob package. `make_strategy` raises `ValueError`
+  unless it is an int >= 0.
 
 > **This session is UNTUNED.** The values in `PARAMS` are DAY's, inherited so the
 > package is runnable and parity-checkable. They were not chosen for

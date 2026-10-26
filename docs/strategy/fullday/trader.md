@@ -12,7 +12,7 @@ aggression and sizing, and the fill bookkeeping that feeds `ExitRule` queries.
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
-| `Trader(execution, *, tick_size, aggression_ticks, max_position, max_aggression_ticks, entry_min_prob, full_confidence_prob)` | class | the state machine |
+| `Trader(execution, *, tick_size, aggression_ticks, max_position, max_aggression_ticks, entry_min_prob, full_confidence_prob, reentry_cooldown_signals)` | class | the state machine |
 | `on_signal(direction, market, *, strength)` | method | cancel-then-act; open from flat (entry-gated), close on an opposing signal, never flip |
 | `submit_exit(market)` | method | closing limit for an `ExitRule` firing or a session-boundary forced close |
 | `on_fill(...)` / `position_state()` | method | position mirror and the immutable snapshot `ExitRule`s read |
@@ -29,6 +29,15 @@ aggression and sizing, and the fill bookkeeping that feeds `ExitRule` queries.
   out short of the stop, and a third of historical exits carried a directional
   probability below 0.65. At `entry_min_prob` 0.50 the floor is 0.0 and the
   gate is inert — byte-identical to the pre-gate copy.
+- **Diverged in `fullday_rev_iter33` (reversal decision 12):** the Trader
+  carries a **re-entry cooldown** — after a fill that flattens a position, an
+  OPEN on the closed position's side is skipped for
+  `reentry_cooldown_signals` signals (HOLDs count toward the budget; the
+  opposite side opens freely). The cooldown is armed in `on_fill` at the
+  flattening fill — the moment the re-entry risk begins — and every signal
+  seen while flat and cooling consumes one of the K. At the default 0 the
+  cooldown never arms, so runs are byte-identical to the pre-knob copy. The
+  constructor rejects a negative or non-int count.
 - It is handed to `run_backtest` as a **factory**, not an instance —
   `make_trader(execution)` — because `Execution` is built inside the run
   (`fee_rate` is a run parameter). See [run.py](../../run.md) §2.1 of the split

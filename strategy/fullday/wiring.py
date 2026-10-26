@@ -52,6 +52,13 @@ ride 0.3704).
 package-declared ``channel_exit_bars`` knob: once the position is at least N
 bars old, a long exits when price prints below the lowest of its last N
 in-position bars, a short above the highest. None here — the inert control.
+
+``fullday_rev_iter33`` (same plan, decision 12, phase I control) added the
+package-declared ``reentry_cooldown_signals`` knob: after a fill that flattens
+a position, an OPEN on the closed position's side is skipped for K signals
+(HOLDs count; the opposite side opens freely). Its value here is 0 — the inert
+control, never armed, byte-identical to the pre-knob package. The loop's
+search moves it through ``16 / 48`` as edits to ``PARAMS``.
 """
 from typing import Any, Dict
 
@@ -113,6 +120,14 @@ PARAMS: Dict[str, Any] = {
     # lag. None is the CONTROL: the rule is not composed in, byte-identical
     # to the pre-knob package. Stateful -> adoptable=False.
     "channel_exit_bars": None,
+    # re-entry cooldown — package-declared, beyond the twelve CLI knobs
+    # (D6/D7), reachable only through ``--param reentry_cooldown_signals=...``.
+    # Why:  reversal loop decision 12 (phase I). After a fill that flattens a
+    # position, an OPEN on the closed position's side is skipped for K
+    # signals (HOLDs count); the opposite side opens freely. 0 is the
+    # CONTROL: the cooldown never arms, so runs are byte-identical to the
+    # pre-knob package.
+    "reentry_cooldown_signals": 0,
     # entry-probability gate — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param entry_min_prob=...``.
     # Why:  reversal loop decision 2. 0.50 is the CONTROL value: the floor it
@@ -197,6 +212,19 @@ def make_strategy(
             f"full_confidence_prob ({p['full_confidence_prob']})"
         )
 
+    # Tech: validate the re-entry cooldown's width before anything is built.
+    # Why:  reversal plan decision 12 — the Trader validates it in its own
+    #       constructor too, but the Trader is a factory product (fee sweeps
+    #       rebuild it), so a bad width would otherwise surface only inside
+    #       the run; failing here matches entry_min_prob's treatment above.
+    if not isinstance(p["reentry_cooldown_signals"], int) or p[
+        "reentry_cooldown_signals"
+    ] < 0:
+        raise ValueError(
+            f"reentry_cooldown_signals ({p['reentry_cooldown_signals']}) "
+            f"must be an int >= 0"
+        )
+
     # Tech: build the forecaster and emitter now, but return the Trader as a
     #       *factory* over Execution rather than as an instance.
     # Why:  `run_backtest` owns `Execution` (fee_rate is a run parameter), so a
@@ -228,6 +256,7 @@ def make_strategy(
             max_aggression_ticks=p["max_aggression_ticks"],
             entry_min_prob=p["entry_min_prob"],
             full_confidence_prob=p["full_confidence_prob"],
+            reentry_cooldown_signals=p["reentry_cooldown_signals"],
         )
         # Tech: bind the emitter to the trader this factory just built, so the
         #       exit band knows which side is the exit side.
