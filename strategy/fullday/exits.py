@@ -13,6 +13,10 @@ band) or the Calmar (narrow band). These rules read the tape, not the model:
     ``(1 - giveback_frac)`` of its maximum. The arm is the day_trail lesson:
     a fixed-width trail fires at V-bottoms, and this one cannot fire on a trade
     that never earned 2%.
+  * ``ChannelExit`` (H, decision 11): once the position is at least N bars
+    old, a long exits when price prints below the lowest of its last N
+    in-position bars, a short above the highest — model-free, the tape itself
+    says the trend broke, with no forecast lag.
   * ``AnyOf``: the composition seam — fire when any wrapped rule fires, so the
     percent stop composes with the protection rules (decision 9).
 
@@ -155,6 +159,63 @@ class GivebackTrail(ExitRule):
             (1.0 - self.giveback_frac) * max_gain
 
 
+class ChannelExit(ExitRule):
+    """H: exit when price breaks the extreme of the last N in-position bars.
+
+    Model-free: the tape itself says the trend broke, with no forecast lag.
+    """
+
+    # Tech: stateful — collects the in-position prints.
+    # Why:  same adoption argument as the protection rules; a live resume
+    #       cannot recover the dead process's channel.
+    adoptable = False
+
+    def __init__(self, channel_exit_bars: int):
+        # Tech: require a whole, positive bar count.
+        # Why:  a channel of 0 bars has no window to break; a non-integer has
+        #       no meaning on a bar grid.
+        if not isinstance(channel_exit_bars, int) or channel_exit_bars < 1:
+            raise ValueError(
+                f"channel_exit_bars must be an int >= 1, got {channel_exit_bars}"
+            )
+        self.channel_exit_bars = channel_exit_bars
+        self._prices: List[float] = []
+        self._key = None
+
+    def should_exit(
+        self,
+        position: PositionState,
+        market: MarketEvent,
+        *,
+        bar_idx: int,
+    ) -> bool:
+        # Tech: same new-position reset — entry identity key, prints re-seeded.
+        # Why:  the channel is built from THIS position's bars only, so a roll
+        #       or re-entry starts an empty channel.
+        key = (position.entry_bar_idx, position.entry_price, position.side)
+        if key != self._key:
+            self._key = key
+            self._prices = []
+        # Tech: collect this print, then require at least N prior in-position
+        #       prints before the rule is active ("at least N bars old": the
+        #       entry bar itself is print 1, so age N <-> N+1 prints seen).
+        # Why:  a channel younger than N bars is a noise window; the age gate
+        #       is what makes 1140 bars mean "one fullday trading day".
+        self._prices.append(market.price)
+        if len(self._prices) <= self.channel_exit_bars:
+            return False
+        # Tech: the window is the N prints BEFORE the current one — the current
+        #       print must sit outside it, so it can never be its own extreme.
+        # Why:  decision 11 — a long exits when price prints below the lowest
+        #       of its last N in-position bars, a short above the highest;
+        #       including the current print in the window would make both
+        #       conditions unsatisfiable.
+        window = self._prices[-(self.channel_exit_bars + 1):-1]
+        if position.side == "LONG":
+            return market.price < min(window)
+        return market.price > max(window)
+
+
 class AnyOf(ExitRule):
     """Compose exit rules: fire when any wrapped rule fires (decision 9's seam)."""
 
@@ -192,6 +253,7 @@ class AnyOf(ExitRule):
 #       implementation all three sessions share.
 __all__ = [
     "BreakEvenLock",
+    "ChannelExit",
     "GivebackTrail",
     "AnyOf",
     "EntryPercentStop",

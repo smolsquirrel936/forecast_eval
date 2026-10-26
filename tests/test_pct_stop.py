@@ -42,6 +42,26 @@ def _mkt(price):
     )
 
 
+def _percent_stop_within(rule):
+    # Tech: look through a session's exit composition to the shared percent
+    #       stop nested inside it; a bare rule passes through unchanged.
+    # Why:  DECLARED FREEZE-LINE EXCEPTION (fullday_rev_iter29,
+    #       autoresearch_trading_plan_fullday_reversal.md): fullday's kept
+    #       break-even lock (fullday_rev_iter24/26) composes its EntryPercentStop
+    #       into the package's AnyOf seam, so the wiring no longer returns the
+    #       bare shared rule. The invariant these tests pin — the declared
+    #       stop_pct builds THE shared EntryPercentStop at exactly that width —
+    #       survives composition; this recovers the nested rule so the same
+    #       assertion holds. Day and night never compose, so only the fullday
+    #       parametrization calls this (see TestWiring).
+    if isinstance(rule, EntryPercentStop):
+        return rule
+    for inner in getattr(rule, "rules", ()):
+        if isinstance(inner, EntryPercentStop):
+            return inner
+    return None
+
+
 class TestConstruction:
     @pytest.mark.parametrize("bad", [0.0, -0.01, 1.0, 2.5])
     def test_rejects_non_fractional_widths(self, bad):
@@ -126,8 +146,13 @@ class TestWiring:
         if declared is None:
             assert strat["exit_rule"] is None
         else:
-            assert isinstance(strat["exit_rule"], EntryPercentStop)
-            assert strat["exit_rule"].stop_pct == declared
+            rule = strat["exit_rule"]
+            if session == "fullday":
+                # freeze-line exception: fullday composes (see
+                # _percent_stop_within); day/night keep the bare-rule shape.
+                rule = _percent_stop_within(rule)
+            assert isinstance(rule, EntryPercentStop)
+            assert rule.stop_pct == declared
 
     @pytest.mark.parametrize("session", SESSIONS)
     def test_knob_builds_the_rule(self, session):
@@ -136,6 +161,11 @@ class TestWiring:
         w = _wiring(session)
         strat = w.make_strategy(warmup_bars=10, stop_pct=0.03)
         rule = strat["exit_rule"]
+        if session == "fullday":
+            # freeze-line exception: fullday composes its kept protection
+            # rules around the stop (see _percent_stop_within); the shared
+            # rule is still built, at the declared width.
+            rule = _percent_stop_within(rule)
         assert isinstance(rule, EntryPercentStop)
         assert rule.stop_pct == 0.03
 

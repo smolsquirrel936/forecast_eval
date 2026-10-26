@@ -43,11 +43,26 @@ package-declared ``lock_after_pct`` and ``giveback_frac`` knobs, composed with
 here — the inert control: wiring returns the bare ``EntryPercentStop``, so runs
 are byte-identical to the pre-knob package. The loop's search moves them
 through ``0.02 / 0.01 / 0.03`` and ``0.5 / 0.35`` as edits to ``PARAMS``.
+
+``fullday_rev_iter24`` / ``fullday_rev_iter26`` (phase G1) kept the break-even
+lock at 0.02, then 0.03 — the current incumbent of this loop (Calmar 4.4402,
+ride 0.3704).
+
+``fullday_rev_iter29`` (same plan, decision 11, phase H control) added the
+package-declared ``channel_exit_bars`` knob: once the position is at least N
+bars old, a long exits when price prints below the lowest of its last N
+in-position bars, a short above the highest. None here — the inert control.
 """
 from typing import Any, Dict
 
 from .emitter import ThresholdEmitter
-from .exits import AnyOf, BreakEvenLock, EntryPercentStop, GivebackTrail
+from .exits import (
+    AnyOf,
+    BreakEvenLock,
+    ChannelExit,
+    EntryPercentStop,
+    GivebackTrail,
+)
 from .forecaster import make_forecaster
 from .trader import Trader
 
@@ -90,6 +105,14 @@ PARAMS: Dict[str, Any] = {
     # --resume into a held lot is refused for them.
     "lock_after_pct": 0.03,
     "giveback_frac": None,
+    # price-channel exit — package-declared, beyond the twelve CLI knobs
+    # (D6/D7), reachable only through ``--param channel_exit_bars=...``.
+    # Why:  reversal loop decision 11 (phase H). Once the position is at least
+    # N bars old, a long exits when price prints below the lowest of its last
+    # N in-position bars, a short above the highest — model-free, no forecast
+    # lag. None is the CONTROL: the rule is not composed in, byte-identical
+    # to the pre-knob package. Stateful -> adoptable=False.
+    "channel_exit_bars": None,
     # entry-probability gate — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param entry_min_prob=...``.
     # Why:  reversal loop decision 2. 0.50 is the CONTROL value: the floor it
@@ -235,6 +258,8 @@ def make_strategy(
         exit_rules.append(BreakEvenLock(lock_after_pct=p["lock_after_pct"]))
     if p["giveback_frac"] is not None:
         exit_rules.append(GivebackTrail(giveback_frac=p["giveback_frac"]))
+    if p["channel_exit_bars"] is not None:
+        exit_rules.append(ChannelExit(channel_exit_bars=p["channel_exit_bars"]))
     if not exit_rules:
         exit_rule = None
     elif len(exit_rules) == 1:

@@ -66,6 +66,12 @@ factory. This is the file a search for this session edits first.
   are byte-identical to the pre-knob package. The rules are stateful
   (`adoptable=False`), so a live `--resume` into a held lot is refused for
   them; a roll restarts their state.
+- **`channel_exit_bars` (added `fullday_rev_iter29`, reversal decision 11,
+  phase H)** is a package-declared knob for the price-channel exit in
+  [exits.py](exits.md): once the position is at least N bars old, exit on a
+  break of the last N in-position bars' extreme — model-free, no forecast
+  lag. `None` — the inert control; the rule composes through the same any-of
+  seam. Stateful (`adoptable=False`).
 
 > **This session is UNTUNED.** The values in `PARAMS` are DAY's, inherited so the
 > package is runnable and parity-checkable. They were not chosen for

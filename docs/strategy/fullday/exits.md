@@ -14,6 +14,7 @@ that lets them compose with the shared percent stop.
 |---|---|---|
 | `BreakEvenLock(lock_after_pct)` | class | G1: once best price is `lock_after_pct` in favour, exit at a return to entry |
 | `GivebackTrail(giveback_frac)` | class | G2: once 2% in favour, exit when the open gain falls to `(1-frac)` of its max |
+| `ChannelExit(channel_exit_bars)` | class | H: once N bars old, exit on a break of the last N in-position bars' extreme |
 | `AnyOf(rules)` | class | fire when any wrapped rule fires (decision 9's composition seam) |
 | `EntryPercentStop` | re-export | the shared percent stop, for composition |
 | `GIVEBACK_ARM_PCT` | constant | the give-back trail's arm level (0.02) |
@@ -31,6 +32,12 @@ that lets them compose with the shared percent stop.
   V-bottoms. `GivebackTrail` cannot fire on a trade that never earned 2%, and
   its width grows with the gain banked. At the arming print
   `gain == max_gain`, so it never fires on the arm tick itself.
+- **`ChannelExit`'s window excludes the current print** — the N bars are the
+  in-position prints *before* the current one, so a long breaking below their
+  minimum is a well-defined event (the current print can never be its own
+  extreme). The rule is inert until the position is at least N bars old
+  (N prior prints seen), which is what makes 1140 bars mean "one fullday
+  trading day" (300 day + 840 night bars).
 - **`AnyOf` short-circuits** — the first rule to fire wins the tick, and later
   rules' state updates are skipped. Safe: the close is already submitted, and
   every stateful rule resets on the next trade's new entry identity. The

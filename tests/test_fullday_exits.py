@@ -16,6 +16,7 @@ from forecast_eval.strategy.fullday.exits import (
     GIVEBACK_ARM_PCT,
     AnyOf,
     BreakEvenLock,
+    ChannelExit,
     GivebackTrail,
 )
 from forecast_eval.strategy.fullday.wiring import make_strategy
@@ -188,7 +189,10 @@ def test_anyof_adoptable_is_the_and_of_its_members():
 # -------- wiring: the control and the composition --------------------------------
 
 def test_control_returns_the_bare_percent_stop():
-    strat = make_strategy(warmup_bars=100)
+    strat = make_strategy(
+        warmup_bars=100,
+        lock_after_pct=None, giveback_frac=None, channel_exit_bars=None,
+    )
     assert type(strat["exit_rule"]) is EntryPercentStop
     assert strat["exit_rule"].stop_pct == 0.05
 
@@ -202,7 +206,9 @@ def test_lock_composes_with_the_stop_through_anyof():
 
 
 def test_giveback_composes_with_the_stop_through_anyof():
-    strat = make_strategy(warmup_bars=100, giveback_frac=0.5)
+    strat = make_strategy(
+        warmup_bars=100, lock_after_pct=None, giveback_frac=0.5
+    )
     rule = strat["exit_rule"]
     assert type(rule) is AnyOf
     assert len(rule.rules) == 2
@@ -214,7 +220,10 @@ def test_all_three_exit_rules_compose():
 
 
 def test_no_exit_knobs_set_means_no_exit_rule():
-    strat = make_strategy(warmup_bars=100, stop_pct=None)
+    strat = make_strategy(
+        warmup_bars=100, stop_pct=None,
+        lock_after_pct=None, giveback_frac=None, channel_exit_bars=None,
+    )
     assert strat["exit_rule"] is None
 
 
@@ -230,3 +239,74 @@ def test_wiring_rejects_bad_giveback_frac():
         make_strategy(warmup_bars=100, giveback_frac=0.0)
     with pytest.raises(ValueError, match="giveback_frac"):
         make_strategy(warmup_bars=100, giveback_frac=1.5)
+
+
+# -------- H: ChannelExit -------------------------------------------------------
+
+def test_channel_long_exits_below_the_prior_low():
+    ch = ChannelExit(channel_exit_bars=3)
+    # Four in-position prints (age >= 3): window = [100, 103, 102], and 99
+    # prints below the window's low -> exit.
+    for px in (100.0, 103.0, 102.0):
+        assert ch.should_exit(_pos(), _mkt(px), bar_idx=10) is False
+    assert ch.should_exit(_pos(), _mkt(99.0), bar_idx=13) is True
+
+
+def test_channel_short_exits_above_the_prior_high():
+    ch = ChannelExit(channel_exit_bars=3)
+    for px in (100.0, 97.0, 98.0):
+        assert ch.should_exit(_pos("SHORT"), _mkt(px), bar_idx=10) is False
+    assert ch.should_exit(_pos("SHORT"), _mkt(101.0), bar_idx=13) is True
+
+
+def test_channel_is_inert_before_n_bars():
+    ch = ChannelExit(channel_exit_bars=3)
+    # Only 3 prints seen -> fewer than 3 PRIOR bars -> never fires, however
+    # far price breaks down.
+    for px in (100.0, 103.0, 99.0):
+        assert ch.should_exit(_pos(), _mkt(px), bar_idx=10) is False
+
+
+def test_channel_holds_inside_the_window():
+    ch = ChannelExit(channel_exit_bars=3)
+    for px in (100.0, 103.0, 102.0, 101.0, 102.5):
+        assert ch.should_exit(_pos(), _mkt(px), bar_idx=10) is False
+
+
+def test_channel_does_not_fire_on_its_own_extreme():
+    ch = ChannelExit(channel_exit_bars=3)
+    for px in (100.0, 103.0, 102.0):
+        assert ch.should_exit(_pos(), _mkt(px), bar_idx=10) is False
+    # A print exactly at the window's low (100) is not below it.
+    assert ch.should_exit(_pos(), _mkt(100.0), bar_idx=13) is False
+    assert ch.should_exit(_pos(), _mkt(99.9), bar_idx=13) is True
+
+
+def test_channel_state_resets_on_a_new_entry():
+    ch = ChannelExit(channel_exit_bars=3)
+    for px in (100.0, 103.0, 102.0, 99.0):
+        ch.should_exit(_pos(bar=10), _mkt(px), bar_idx=10)  # arms + fires
+    # A new trade starts an empty channel: inert again.
+    assert ch.should_exit(_pos(bar=42), _mkt(99.0), bar_idx=42) is False
+
+
+def test_channel_rejects_bad_bar_counts():
+    with pytest.raises(ValueError, match="channel_exit_bars"):
+        ChannelExit(channel_exit_bars=0)
+    with pytest.raises(ValueError, match="channel_exit_bars"):
+        ChannelExit(channel_exit_bars=-5)
+    with pytest.raises(ValueError, match="channel_exit_bars"):
+        ChannelExit(channel_exit_bars=1.5)
+
+
+def test_channel_composes_through_wiring():
+    strat = make_strategy(warmup_bars=100, channel_exit_bars=1140)
+    rule = strat["exit_rule"]
+    assert type(rule) is AnyOf
+    assert len(rule.rules) == 3          # stop + lock + channel (lock is kept)
+    assert rule.adoptable is False
+
+
+def test_wiring_rejects_bad_channel_exit_bars():
+    with pytest.raises(ValueError, match="channel_exit_bars"):
+        make_strategy(warmup_bars=100, channel_exit_bars=0)
