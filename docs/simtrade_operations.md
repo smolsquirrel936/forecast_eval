@@ -699,8 +699,8 @@ fullday trades it from the 2026-10-27 restart.
   Result), so this soak is its first clean test.
 - **The 10-27 start** follows "Resuming on the 2026-10-24 code" below, with
   two differences for fullday:
-  - **The old strategy's records are archived.** On 2026-10-26 they were moved
-    out of `outputs/` to `night/archive_fullday_split_iter07_20261026/`:
+  - **The old strategy's records are deleted.** On 2026-10-26 they were moved
+    out of `outputs/`, and the archive was then deleted at the user's request:
     - `fills_day_night.csv` (6 rows, net 0);
     - `soak_epoch_day_night.json`;
     - the wire: `intents_day_night.jsonl` and `events_day_night.jsonl`;
