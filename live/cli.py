@@ -728,6 +728,7 @@ def main(argv=None) -> int:
 
     recorder = Recorder(out / "session.jsonl", simulation=True,
                         meta={"config": cfg.describe(strategy_params),
+                              "slug": cfg.policy.cache_slug(),
                               "strategy_package": cfg.strategy_package,
                               "strategy_sha": strategy_sha(cfg.strategy_package),
                               "git_commit": git_commit(),

@@ -27,7 +27,8 @@ On a shared book `list_positions` gives the account **total** with no way to
 split it, so a restart cannot ask the venue who holds what. It reads each
 deployment's own `fills_<slug>.csv` ([ledger.py](ledger.md)) instead, and a slug
 with no ledger seeds **flat** — a deployment that has never traded is normal, not
-unknown.
+unknown. The default `--slugs` is `day night day_night hybrid`; a slug whose
+deployment is not running seeds flat and is never reported stale.
 
 **`seed_positions` seeds the entry price as well as the size**, using
 `ledger.open_position`, the same reducer `--resume` replays with. The owner

@@ -212,9 +212,13 @@ def series_for_run_dir(run_dir: Any) -> Optional[pd.DataFrame]:
     params = run_dir / "params.json"
     if params.exists():
         try:
-            sessions = json.loads(params.read_text(encoding="utf-8")).get("sessions")
+            p = json.loads(params.read_text(encoding="utf-8"))
+            sessions = p.get("sessions")
             if sessions:
-                policy = SessionPolicy(sessions=tuple(sessions))
+                # Why:  the slug picks `prices_<slug>.csv`; without it a hybrid
+                #       run would read fullday's (both are DAY+NIGHT). Absent in
+                #       older files, where None re-derives the same name.
+                policy = SessionPolicy(sessions=tuple(sessions), slug=p.get("slug"))
         except Exception:                              # noqa: BLE001 — see Why
             policy = None
     if policy is None:

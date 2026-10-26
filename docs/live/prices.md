@@ -40,7 +40,8 @@ downsampled to **one row a minute** before it is kept. The report draws at most
 convention the evaluated tape uses for `close` — so the line is the series the
 strategy was measured on rather than a different summary of the same ticks.
 
-The result is cached in `prices_<slug>.csv`, beside the bar cache and the fill
+The slug comes from the run's `params.json` (`slug`, written since 2026-10-27;
+older files re-derive it from `sessions`). The result is cached in `prices_<slug>.csv`, beside the bar cache and the fill
 ledger and keyed the same way, so DAY and NIGHT cannot mix. It is keyed by run
 directory **name**, so a finished segment is parsed exactly once ever.
 

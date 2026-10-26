@@ -234,6 +234,9 @@ def params_from_meta(records: List[dict], run_dir: Path) -> Optional[dict]:
         "max_position": int(m.group("max_position")),
         "forced_close": m.group("forced_close") == "True",
         "sessions": sessions,
+        # Why:  `slug` is its own `meta` field (since 2026-10-27), like the
+        #       provenance keys below; an older session re-derives it.
+        "slug": meta.get("slug") or SessionPolicy.of(sessions).cache_slug(),
         "roll_at": str(SessionPolicy.of(sessions).roll_at_time()),
         "broker": meta.get("broker"),
         # Tech: the five provenance keys, read from the `meta` header rather than

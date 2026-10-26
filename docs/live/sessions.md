@@ -20,6 +20,7 @@ anchoring all read this object.
 | `holidays` | field | dates closed despite being a weekday. Empty by default |
 | `trading_day(ts)` | method | ISO date of the trading day it belongs to |
 | `same_session_instance(a, b)` | method | same *occurrence* of the same session? |
+| `slug` / `cache_slug()` | field / method | the deployment's file name (`fills_<slug>.csv`, bar cache, wire, prices, run folders); `slug=None` derives it from the sessions (`day`, `night`, `day_night`) |
 | `bars_per_session()` | method | 1-min bars one occurrence of every traded session contributes (NIGHT 840, DAY 300, summed for `both()`) — DAY_SESSION_PLAN C6 |
 | `trading_day(ts, start)` | function | module-level helper for callers with no policy |
 
@@ -98,6 +99,9 @@ keeps losing. The weekday test is deterministic and fully testable offline.
   and halt every morning.
 - **Empty or misspelled session sets raise at construction.** An empty policy
   filters every bar away and is indistinguishable from a dead feed.
+- **Two deployments on the same sessions need an explicit `slug`** (since
+  2026-10-27). Hybrid and fullday are both DAY+NIGHT; the derived name would
+  give them one ledger and one wire. Hybrid's policy is `both(slug="hybrid")`.
 - Frozen dataclass, so it can be shared between the loop, rails and aggregator
   without any of them mutating it.
 
