@@ -38,6 +38,16 @@ aggression and sizing, and the fill bookkeeping that feeds `ExitRule` queries.
   seen while flat and cooling consumes one of the K. At the default 0 the
   cooldown never arms, so runs are byte-identical to the pre-knob copy. The
   constructor rejects a negative or non-int count.
+- **`rolling()`** (2026-10-26, the live half is main `825f069`) is the optional
+  hook that [live/runtime.py](../../live/runtime.md) enters around every call it
+  makes on a roll's behalf ("Roll legs and trader filters").
+  - **Inside it, an OPEN from flat bypasses the cooldown and clears it,** without
+    using up a count. Without the hook, a roll's re-open was a same-side
+    re-entry to the cooldown: the settled leg's single shot was dropped, and
+    each ladder rung burned one count.
+  - **Clearing at the re-open covers both close paths,** including the scheduled
+    close's venue fill, which arrives outside the hook.
+  - **The backtest never enters it,** so every recorded run is unchanged.
 - It is handed to `run_backtest` as a **factory**, not an instance —
   `make_trader(execution)` — because `Execution` is built inside the run
   (`fee_rate` is a run parameter). See [run.py](../../run.md) §2.1 of the split

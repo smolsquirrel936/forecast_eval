@@ -22,7 +22,15 @@ gained a re-entry cooldown — after a fill that flattens a position, an OPEN on
 the closed position's side is skipped for ``reentry_cooldown_signals`` signals
 (HOLDs count; the opposite side opens freely). At the default 0 the cooldown
 never arms, so runs are byte-identical to the pre-knob copy.
+
+DIVERGED (2026-10-26, after the loop; main ``825f069``): the Trader defines
+``rolling()``, the optional hook ``live/runtime.py`` enters around every call it
+makes on a roll's behalf. Inside it, an OPEN from flat bypasses the cooldown and
+clears it, so a roll's re-open is never mistaken for a same-side re-entry. The
+backtest never enters the hook (its spliced tape has no rolls), so every
+recorded run is unchanged.
 """
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Literal, Optional
 
@@ -98,6 +106,7 @@ class Trader:
         self.reentry_cooldown_signals = reentry_cooldown_signals
         self._cooldown_side: int = 0        # +1 blocked BUYs, -1 blocked SELLs
         self._cooldown_left: int = 0        # signals remaining in the cooldown
+        self._rolling: bool = False         # inside rolling(): a roll leg
         self.position = 0  # signed contracts; +long / -short
         self.entry_price: float = 0.0
         self.entry_bar_idx: int = -1
@@ -128,6 +137,23 @@ class Trader:
         if self.max_position <= 1:
             return 1
         return max(1, min(self.max_position, int(round(strength * self.max_position))))
+
+    # ---- roll legs ---------------------------------------------------------
+
+    @contextmanager
+    def rolling(self):
+        # Tech: mark every call made inside this context as a roll leg; the
+        #       flag is cleared on exit, even if the call raises.
+        # Why:  `live/runtime.py` (`_trader_roll_leg`) enters this around the
+        #       roll's close, its settlement fill and both re-opens. A roll's
+        #       re-open is an OPEN from flat on the side just closed, which the
+        #       re-entry cooldown would otherwise skip: the settled leg's single
+        #       shot was dropped, and each ladder rung burned one count.
+        self._rolling = True
+        try:
+            yield
+        finally:
+            self._rolling = False
 
     # ---- signal-driven entries / closes ----------------------------------
 
@@ -177,7 +203,16 @@ class Trader:
             #       that re-entry, leaving exits and opposite-side entries
             #       exactly as they are. The unconditional cancel above still
             #       ran, so a gated signal leaves nothing resting (§4.4).
-            if self._cooldown_left > 0:
+            # Tech: inside rolling(), the open bypasses the cooldown and clears
+            #       it, consuming no count.
+            # Why:  the flatten that armed it was the roll's close (or its
+            #       settlement), not a strategy exit, so there is no re-entry
+            #       to guard against: this open restores the same exposure.
+            #       Clearing it here covers both close paths, including the
+            #       scheduled close's venue fill, which arrives outside the hook.
+            if self._rolling:
+                self._cooldown_left = 0
+            elif self._cooldown_left > 0:
                 self._cooldown_left -= 1
                 if (direction == "BUY" and self._cooldown_side > 0) or (
                     direction == "SELL" and self._cooldown_side < 0

@@ -173,3 +173,68 @@ def test_make_strategy_passes_an_override_through():
 def test_wiring_rejects_a_bad_override():
     with pytest.raises(ValueError, match="reentry_cooldown_signals"):
         make_strategy(warmup_bars=100, reentry_cooldown_signals=-2)
+
+
+# -------- roll legs (live/runtime.py `rolling()` hook, main 825f069) ----------
+#
+# A roll re-opens as an OPEN from flat on the side it just closed. Without the
+# hook the cooldown read that as a same-side re-entry: the settled leg's single
+# shot was dropped, and each scheduled-roll ladder rung burned one count.
+
+def _armed(k=48):
+    tr = _trader(reentry_cooldown_signals=k)
+    _fill(tr, "BUY", bar=0)                      # long opened
+    _fill(tr, "SELL", bar=5)                     # the roll's close -> BUYs blocked
+    assert tr._cooldown_left == k
+    return tr
+
+
+def test_a_roll_re_open_passes_through_the_cooldown():
+    tr = _armed()
+    with tr.rolling():
+        order = tr.on_signal("BUY", _market(), strength=1.0)
+    assert order is not None and order.side == "BUY" and order.intent == "OPEN"
+
+
+def test_a_roll_re_open_clears_the_cooldown():
+    # The flatten was the roll's, not a strategy exit: nothing is left to guard.
+    tr = _armed()
+    with tr.rolling():
+        tr.on_signal("BUY", _market(), strength=1.0)
+    assert tr._cooldown_left == 0
+
+
+def test_the_cooldown_still_blocks_outside_the_hook():
+    tr = _armed(k=2)
+    with tr.rolling():
+        pass                                     # entered and left, no call
+    assert tr.on_signal("BUY", _market(), strength=1.0) is None
+    assert tr._cooldown_left == 1
+
+
+def test_the_hook_is_left_even_when_the_call_raises():
+    tr = _armed()
+    with pytest.raises(RuntimeError):
+        with tr.rolling():
+            raise RuntimeError("broker down")
+    assert tr._rolling is False
+    assert tr.on_signal("BUY", _market(), strength=1.0) is None
+
+
+@pytest.mark.usefixtures("cheap_strategy")
+def test_a_live_settled_leg_is_re_entered_by_the_fullday_trader():
+    # End to end through LiveRuntime: the settlement's fill arms the cooldown,
+    # and the re-entry still goes out.
+    from datetime import datetime
+    from forecast_eval.tests.test_live_roll import _Market, _rolling_runtime
+    rt, rec = _rolling_runtime()
+    tr = Trader(rt.broker, tick_size=1.0, aggression_ticks=0,
+                reentry_cooldown_signals=48)
+    tr.position, tr.entry_price = 1, 17500.0
+    rt.trader = rt.loop.trader = tr
+    rt.settle_rolled_leg(price=17600.0, timestamp=datetime(2026, 8, 19, 14, 55))
+    assert tr.position == 0 and tr._cooldown_left == 48
+    rt._resume_rolled_exposure(_Market(datetime(2026, 8, 19, 16, 0), 17610.0))
+    resumed = [f for e, f in rec.events if e == "roll_exposure_resumed"]
+    assert resumed and resumed[0]["quantity"] == 1
+    assert tr._cooldown_left == 0
