@@ -19,7 +19,7 @@ the Trader sizes on. Its decision is used only for NIGHT-session forecasts.
 - **Copied from `main:strategy/night/emitter.py`** at the DAYNIGHT_TOTO2_RESET_PLAN
   reset (itself a verbatim copy of [strategy/threshold.py](../../threshold.md)), with
   only the import depth changed. It is the NIGHT half's to edit during its phase of
-  `autoresearch_trading_plan_hybrid.md`; the day half must never import it.
+  `autoresearch_trading_plan_hybrid_split07.md`; the day half must never import it.
 - Built by [wiring.py](../wiring.md) at ±0.00045 / `min_prob` 0.5 (the `night_*` knobs).
 - **It sees every forecast, DAY and NIGHT, but decides only for NIGHT.**
   [RoutedEmitter](../router.md) hands each forecast to both halves and keeps the

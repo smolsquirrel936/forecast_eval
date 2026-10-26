@@ -24,7 +24,7 @@ hash-guarded by ``tests/test_strategy_isolation.py``. Diverge freely here.
 HYBRID DAY-HALF COPY. Copied from ``main:strategy/day/emitter.py`` (the
 DAYNIGHT_TOTO2_RESET_PLAN reset, ``20767bb``) with only the relative-import
 depth changed. It is the DAY half's to edit during its phase of
-``autoresearch_trading_plan_hybrid.md``; the other half must never import it.
+``autoresearch_trading_plan_hybrid_split07.md``; the other half must never import it.
 """
 from collections import deque
 from typing import Literal, Optional, Tuple

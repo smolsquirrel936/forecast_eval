@@ -8,7 +8,7 @@ a lot may carry across a session change (``forced_close`` False), as in
 and night packages (DAYNIGHT_TOTO2_RESET_PLAN, ``20767bb``): day ±0.001 /
 ``min_prob`` 0.65, night ±0.00045 / 0.5, both two-sided Toto2-1B at context 3008,
 no exit rule. There is no ``results_hybrid.tsv`` row yet; ``iter01`` of
-``autoresearch_trading_plan_hybrid.md`` — this package unedited — sets the first
+``autoresearch_trading_plan_hybrid_split07.md`` — this package unedited — sets the first
 best.
 
 **The twelve CLI knobs.** ``real_data.py`` resolves twelve unprefixed knobs for
