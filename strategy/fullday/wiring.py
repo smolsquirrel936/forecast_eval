@@ -88,7 +88,7 @@ PARAMS: Dict[str, Any] = {
     # CONTROL: wiring returns the bare EntryPercentStop, byte-identical to the
     # pre-knob package. The rules are stateful -> adoptable=False, so a live
     # --resume into a held lot is refused for them.
-    "lock_after_pct": 0.02,
+    "lock_after_pct": 0.03,
     "giveback_frac": None,
     # entry-probability gate — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param entry_min_prob=...``.
