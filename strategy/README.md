@@ -84,7 +84,7 @@ places orders on.** `live/config.py` holds only the provenance record.
   10, horizon 15 and 60, context 1504, a time stop and two fixed stop-losses,
   and a quantile fan gate.
 - **Stop:** `stop_pct` 0.05, from the width comparison in
-  `outputs/stopcmp_20261018_145644` (whole window, warmup 6000): Calmar
+  `output_backup/outputs_20261027/stopcmp_20261018_145644` (whole window, warmup 6000): Calmar
   **9.1078**, 381 trades, net +30 271, max drawdown −3 324, 11 firings in the
   tape. The other widths: none 7.2974, 0.03 7.0854, 0.07 8.8814, 0.10 5.6650;
   0.20 and wider never fire (max MAE 16.83 %). 0.07 beside it also beats no
@@ -161,7 +161,7 @@ places orders on.** `live/config.py` holds only the provenance record.
   Not taken: the later keeps — buy band 0.0009 (iter08), a 500-tick stop-loss
   (iter09), buy band 0.0008 and sell band −0.0009 (iter12–13, 5.7392).
 - **Stop:** `stop_pct` 0.05, from the width comparison in
-  `outputs/stopcmp_20261018_145644` (warmup 5000, `--train-bars 1651591`):
+  `output_backup/outputs_20261027/stopcmp_20261018_145644` (warmup 5000, `--train-bars 1651591`):
   train Calmar **3.2466**, 142 trades, net +9 674, max drawdown −2 980, 12
   train firings. The other widths (train): none 2.8213, 0.03 2.0734, 0.07
   2.6855, 0.10 2.7895; 0.20 and wider never fire (max MAE 11.98 %). Whole data,
@@ -268,6 +268,10 @@ half manages it (`strategy/hybrid/router.py`).
 14. **Old run folders moved.** `outputs/` was renamed to
     `output_backup_260929/` on 2026-09-29; every `outputs/...` path in the plans
     and in AGENTS.md (the autoresearch run folders, `archive_*`) now lives there.
+    On 2026-10-27 that folder became `output_backup/pre_simtrade_260929/`, and
+    `outputs/` was cut down to live state only: finished loops and reference
+    runs (e.g. `stopcmp_20261018_145644`) went to
+    `output_backup/outputs_20261027/`. `output_backup/README.md` maps them.
 15. **The stops.** Every stop width was chosen on bars it was scored on.
     Night's has no held-out tail at all. Fullday's 0.05 is an **isolated
     peak**: 0.07 falls below no stop on both windows, so a small shift in the

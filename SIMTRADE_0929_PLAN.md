@@ -90,7 +90,8 @@ The three Calmars were scored on different windows and are **not comparable**.
   - The account can hold up to 3 lots in one direction.
   - Three deployments under the owner is untested beyond 2 × 1 lot.
   - The 500 MiB/day data allowance under four logins is unmeasured.
-  - Old `outputs/…` paths in docs now live under `output_backup_260929/`.
+  - Old `outputs/…` paths in docs now live under `output_backup_260929/`
+    (`output_backup/pre_simtrade_260929/` since 2026-10-27).
 - **How to run:** flatten check → owner → 3 clients with `--fresh-start`, and when to start each.
 - **How to stop:** flatten (next run uses `--fresh-start`), or leave positions open and `--resume` with `outputs/` intact.
 - First confirm `test_docs_coverage` and `test_strategy_isolation` accept a non-module file in `strategy/`.
