@@ -31,7 +31,10 @@ built with.
 
 ## Where the values live
 `config/secrets.toml` — **gitignored**, never committed.
-`config/secrets.example.toml` — the committed template.
+`config/secrets.example.toml` — the committed template, with one section per
+deployment in `live/config.py:CONFIGS` (`night`, `day`, `fullday`, `hybrid`;
+tested). Hybrid may reuse another section's keys: six logins on one person
+coexisted on 2026-10-26 ([multi_deploy_probe.md](multi_deploy_probe.md)).
 
 ```toml
 [night]
