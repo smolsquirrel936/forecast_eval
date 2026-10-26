@@ -155,9 +155,13 @@ def test_rejects_non_int_counts():
 # -------- wiring ---------------------------------------------------------------------
 
 def test_make_strategy_passes_the_knob_to_the_trader():
+    # Pinned to PARAMS, not a literal: the loop moves this knob between
+    # iterations (kept values become the new default), and the invariant is
+    # that whatever PARAMS declares is what the built Trader carries.
     strat = make_strategy(warmup_bars=100)
     tr = strat["make_trader"](Execution(fee_rate=0.0))
-    assert tr.reentry_cooldown_signals == 0
+    from forecast_eval.strategy.fullday import wiring
+    assert tr.reentry_cooldown_signals == wiring.PARAMS["reentry_cooldown_signals"]
 
 
 def test_make_strategy_passes_an_override_through():

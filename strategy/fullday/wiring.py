@@ -127,7 +127,7 @@ PARAMS: Dict[str, Any] = {
     # signals (HOLDs count); the opposite side opens freely. 0 is the
     # CONTROL: the cooldown never arms, so runs are byte-identical to the
     # pre-knob package.
-    "reentry_cooldown_signals": 0,
+    "reentry_cooldown_signals": 16,
     # entry-probability gate — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param entry_min_prob=...``.
     # Why:  reversal loop decision 2. 0.50 is the CONTROL value: the floor it
