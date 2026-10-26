@@ -36,10 +36,11 @@ strategy value is a defect waiting to happen — is why the fields were deleted.
 | Symbol | Kind | One-liner |
 |---|---|---|
 | `LiveConfig(...)` | frozen dataclass | provenance, `policy`, and the run-level values that are not strategy (`tick_size`, `fee_rate`, `contract_multiplier`) |
-| `PINNED` / `PINNED_DAY` / `PINNED_FULLDAY` | constants | the three deployments |
+| `PINNED` / `PINNED_DAY` / `PINNED_FULLDAY` / `PINNED_HYBRID` | constants | the four deployments |
+| `PACKAGE_SESSIONS` / `HALVES` | dicts | which sessions each package trades; the halves of a routed package (`hybrid`) |
 | `CONFIGS` / `config_named(name)` | dict / function | the registry `--config` selects from |
 | `is_tuned` | property | False when `source_commit`/`source_calmar` are None — what `cli.py` refuses on |
-| `strategy_package` | property | `"day"`/`"night"`/`"fullday"`, **derived from the policy** |
+| `strategy_package` | property | `"day"`/`"night"`/`"fullday"`, **derived from the policy**, or the named `package` (`"hybrid"`), checked against `PACKAGE_SESSIONS` at construction |
 | `describe(params=None)` | method | one-line banner, provenance first. Pass the run's **resolved** knobs and it renders those; omit them and it describes the deployment. Format is fixed — `tools/session_artifacts.py:_DESCRIBE_RE` parses it back out of recorded `meta` headers |
 | `warmup_days_default(*, emitter_prime_boundaries=500)` | method | calendar-day `--warmup-days` default, derived from `policy.bars_per_session()` — NIGHT 30, DAY 84 — DAY_SESSION_PLAN C6 |
 
@@ -96,6 +97,18 @@ W5a is why the inheritance is not evidence: NIGHT's band on the day tape scores
 Calmar 0.4129 against 3.6006. There is no reason to expect DAY's band to transfer
 to full-day any better. The work that replaces the stub is `tools/band_sweep.py`
 on `TXF_RPT_minute_fullday.csv`.
+
+## `PINNED_HYBRID` (registered 2026-10-27)
+
+Hybrid trades DAY+NIGHT like fullday, so the sessions cannot name its package:
+it sets `package="hybrid"` (refused at construction unless the policy is
+DAY+NIGHT) and `SessionPolicy.both(slug="hybrid")`, so its ledger, bar cache,
+wire, prices and run folders are `*_hybrid*`, never fullday's `day_night`.
+`describe()` renders it half by half (`day[...] night[...]`), because its
+unprefixed band and checkpoint knobs are None; that line does not match
+`tools/session_artifacts.py`'s `_DESCRIBE_RE`, so a rebuild of a hybrid session
+returns None and its own `params.json` is the record. On `main` it is untuned
+(Step 0); the live branch restates `source_note` for the adopted result.
 
 ## What is pinned, and to what
 `results.tsv` row **`4282d33`** — Calmar **3.6006**, 235 trades, net **+24 135.60**

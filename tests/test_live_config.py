@@ -616,3 +616,64 @@ def test_params_json_marks_an_overridden_run_as_not_comparable():
                         strategy_origins={k: pkg for k in _params(PINNED)},
                         out_dir="outputs/x", broker="dryrun")
     assert clean["strategy_overridden"] is False
+
+
+# ---- hybrid: a second deployment on DAY+NIGHT --------------------------------
+
+def test_hybrid_is_registered_with_its_own_package_and_slug():
+    cfg = config_named("hybrid")
+    assert cfg.strategy_package == "hybrid"
+    assert cfg.policy.sessions == SessionPolicy.both().sessions
+    assert cfg.policy.cache_slug() == "hybrid"
+    assert config_named("fullday").strategy_package == "fullday"
+
+
+def test_no_two_deployments_share_a_file_slug():
+    """The slug names the ledger, bar cache, wire and prices. Two deployments on
+    one slug would read each other's fills as their own position."""
+    slugs = [c.policy.cache_slug() for c in CONFIGS.values()]
+    assert len(slugs) == len(set(slugs)), slugs
+
+
+def test_a_named_package_must_trade_the_policys_sessions():
+    """C2 stays impossible when the package is named rather than derived."""
+    with pytest.raises(ValueError, match="hybrid"):
+        LiveConfig(source_commit=None, source_calmar=None, source_dataset="t",
+                   source_note="t", policy=SessionPolicy.night(), package="hybrid")
+
+
+def test_hybrid_describe_renders_each_half():
+    """It has no single band or checkpoint; the old line imported
+    `strategy.hybrid.emitter`, which does not exist, and crashed the banner."""
+    line = config_named("hybrid").describe()
+    p = _params(config_named("hybrid"))
+    assert line.startswith("LiveConfig[")
+    assert f"day[ckpt={p['day_checkpoint']}" in line
+    assert f"band=±{p['day_buy_threshold']}" in line
+    assert f"night[ckpt={p['night_checkpoint']}" in line
+    assert f"band=±{p['night_buy_threshold']}" in line
+
+
+def test_a_hybrid_resume_adopts_its_own_lot_through_the_owner(tmp_path):
+    """End to end with hybrid's real stack: the owner holds -1 for `hybrid`, and
+    a restart must adopt it into the router's two halves (it used to raise:
+    the router's `position` had no setter). Toto2 loads nothing here."""
+    from datetime import datetime
+
+    from forecast_eval.live.broker.client import ClientBroker
+    from forecast_eval.live.owner_process import OwnerProcess
+    from forecast_eval.live.runtime import LiveRuntime
+    from .test_live_owner_process import _Contract, _FakeAPI, _FakeSJ
+
+    now = datetime(2026, 9, 7, 10, 0)
+    owner = OwnerProcess(_FakeAPI(), _Contract(), directory=tmp_path,
+                         slugs=("day_night", "hybrid"), account="ACC", sj=_FakeSJ,
+                         wall_clock=lambda: now)
+    owner.seed_from({"day_night": 1, "hybrid": -1})
+    owner.publish_positions()
+
+    rt = LiveRuntime(config_named("hybrid"), broker=ClientBroker(tmp_path, "hybrid"))
+    adopted = rt.adopt_position(timestamp=now)
+    assert adopted is not None and adopted["position"] == -1
+    assert rt.trader.position == -1
+    assert [h.position for h in rt.trader.halves.values()] == [-1, -1]

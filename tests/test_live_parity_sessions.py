@@ -67,8 +67,22 @@ def _emitter_for(cfg):
     this file pins the session behaviour on top of a strategy that reacts.
     """
     from importlib import import_module
+    from forecast_eval.live.config import HALVES
     from forecast_eval.strategy import wiring as _wiring
     p = _wiring.params(cfg.strategy_package)
+    if cfg.strategy_package in HALVES:
+        # A routed package (hybrid): each half's emitter at its own band, behind
+        # the package's real router.
+        from forecast_eval.strategy.hybrid.router import RoutedEmitter
+        halves = {}
+        for h in HALVES[cfg.strategy_package]:
+            cls = import_module(f"forecast_eval.strategy.{cfg.strategy_package}"
+                                f".{h}_half.emitter").ThresholdEmitter
+            halves[h] = cls(buy_threshold=p[f"{h}_buy_threshold"],
+                            sell_threshold=p[f"{h}_sell_threshold"],
+                            min_prob=p[f"{h}_min_prob"],
+                            full_confidence_prob=p[f"{h}_full_confidence_prob"])
+        return RoutedEmitter(**halves)
     cls = import_module(
         f"forecast_eval.strategy.{cfg.strategy_package}.emitter").ThresholdEmitter
     return cls(buy_threshold=p["buy_threshold"], sell_threshold=p["sell_threshold"],
@@ -332,7 +346,7 @@ def test_each_deployment_trades_enough_for_parity_to_mean_something(mixed_tape):
         cfg = config_named(name)
         frame, agg, events = _deployment_bars(mixed_tape, cfg.policy)
         back = _run_backtest_over(frame, emitter=_emitter_for(cfg),
-                                  aggression_ticks=_params(cfg)["aggression_ticks"],
+                                  aggression_ticks=_params(cfg)["aggression_ticks"] or 0,
                                   max_position=_params(cfg)["max_position"])
         seen[name] = (len(events), agg.n_bars_dropped_off_session,
                       back.n_forecasts, len(back.fills))
@@ -347,7 +361,7 @@ def test_each_deployment_trades_enough_for_parity_to_mean_something(mixed_tape):
 
 # ---- the assertion the old suite structurally could not make ----------------
 
-@pytest.mark.parametrize("session", ["night", "day", "fullday"])
+@pytest.mark.parametrize("session", ["night", "day", "fullday", "hybrid"])
 def test_the_backtest_cli_and_live_resolve_the_same_strategy(session):
     """`real_data.py --strategy X` and a live run of X must be the same strategy.
 
@@ -375,7 +389,7 @@ def test_the_backtest_cli_and_live_resolve_the_same_strategy(session):
     backtest_knobs = {knob: getattr(args, knob) for knob in origins}
 
     # what a live run of the deployment whose policy maps to that package resolves
-    cfg = next(config_named(n) for n in ("night", "day", "fullday")
+    cfg = next(config_named(n) for n in ("night", "day", "fullday", "hybrid")
                if config_named(n).strategy_package == session)
     live_knobs = wiring.make_strategy(cfg.strategy_package, warmup_bars=0,
                                       tick_size=cfg.tick_size)["params"]
@@ -384,7 +398,7 @@ def test_the_backtest_cli_and_live_resolve_the_same_strategy(session):
         f"{session}: the backtest CLI and a live run disagree about the strategy")
 
 
-@pytest.mark.parametrize("session", ["night", "day", "fullday"])
+@pytest.mark.parametrize("session", ["night", "day", "fullday", "hybrid"])
 def test_live_takes_its_components_from_the_seam_and_nowhere_else(session):
     """The structural pin. Comparing `make_strategy` against `make_strategy`
     would be a tautology — it cannot catch a live path that bypasses the seam,
@@ -400,7 +414,7 @@ def test_live_takes_its_components_from_the_seam_and_nowhere_else(session):
     from forecast_eval.live.runtime import LiveRuntime
     from forecast_eval.strategy import wiring
 
-    cfg = next(config_named(n) for n in ("night", "day", "fullday")
+    cfg = next(config_named(n) for n in ("night", "day", "fullday", "hybrid")
                if config_named(n).strategy_package == session)
 
     # Sentinels carry the attributes `LiveRuntime.__init__` reads and nothing

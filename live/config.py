@@ -43,6 +43,21 @@ from typing import Any, Optional
 from .sessions import SessionPolicy
 
 
+# Tech: the packages that trade each session set, and the halves of a package
+#       that puts one strategy per session behind a router.
+# Why:  `fullday` and `hybrid` both trade DAY+NIGHT, so the sessions alone no
+#       longer name the package; a deployment that names one is checked against
+#       this table instead. A routed package has no single emitter, band or
+#       checkpoint, so `describe()` renders it half by half.
+PACKAGE_SESSIONS = {
+    "night": frozenset({"NIGHT"}),
+    "day": frozenset({"DAY"}),
+    "fullday": frozenset({"DAY", "NIGHT"}),
+    "hybrid": frozenset({"DAY", "NIGHT"}),
+}
+HALVES = {"hybrid": ("day", "night")}
+
+
 def _emitter_signature_defaults(package: str) -> dict:
     # Tech: the declared defaults of the two emitter knobs `PARAMS` omits, read
     #       from the package's own emitter class signature.
@@ -55,6 +70,7 @@ def _emitter_signature_defaults(package: str) -> dict:
     #       forecaster too, which is far too much work for a log line.
     import inspect
     from importlib import import_module
+    # Tech: a half is addressed as "<package>.<half>_half" (hybrid's layout).
     cls = import_module(f"..strategy.{package}.emitter", __package__).ThresholdEmitter
     sig = inspect.signature(cls.__init__).parameters
     return {name: sig[name].default
@@ -84,6 +100,12 @@ class LiveConfig:
     source_note: str
 
     policy: SessionPolicy
+    # Tech: the `strategy/` package, when the sessions do not name it; None
+    #       derives it (`strategy_package`).
+    # Why:  hybrid trades DAY+NIGHT like fullday. `__post_init__` checks a named
+    #       package against `PACKAGE_SESSIONS`, so the policy still cannot drift
+    #       from the components.
+    package: Optional[str] = None
 
     # Tech: no strategy fields. The band, the probability gate, the checkpoint,
     #       the cadence, the filter knobs and the trader's risk shape all live in
@@ -101,6 +123,18 @@ class LiveConfig:
     tick_size: float = 1.0            # the contract's tick grid
     fee_rate: float = 0.0002          # what the broker charges, not what to trade
     contract_multiplier: float = 200.0  # TXF point value
+
+    def __post_init__(self) -> None:
+        # Tech: refuse a named package whose sessions differ from the policy's.
+        # Why:  the C2 defect `strategy_package` exists to prevent -- one
+        #       session's policy on another's components -- must stay impossible
+        #       when the package is named rather than derived.
+        if self.package is not None:
+            want = PACKAGE_SESSIONS.get(self.package)
+            if want != frozenset(self.policy.sessions):
+                raise ValueError(
+                    f"package {self.package!r} trades {sorted(want or [])}, "
+                    f"not the policy's {sorted(self.policy.sessions)}")
 
     @property
     def is_tuned(self) -> bool:
@@ -121,7 +155,10 @@ class LiveConfig:
         #       policy, and a deployment running one session's policy against
         #       another session's tuned components is exactly the C2 defect that
         #       `--config` exists to make impossible — reintroduced one level
-        #       down. Deriving it means the two cannot desync at all.
+        #       down. Deriving it means the two cannot desync at all; a named
+        #       `package` is checked against the policy in `__post_init__`.
+        if self.package is not None:
+            return self.package
         sessions = frozenset(self.policy.sessions)
         if sessions == frozenset({"NIGHT"}):
             return "night"
@@ -199,6 +236,29 @@ class LiveConfig:
         from ..strategy import wiring as strategy_wiring
         p = params if params is not None else strategy_wiring.params(
             self.strategy_package)
+        # Tech: a routed package renders its shared knobs once and each half's
+        #       band, gate and filter in a `day[...]` / `night[...]` group.
+        # Why:  it has no single band or checkpoint (its unprefixed knobs are
+        #       None), and its halves live in `<half>_half/`. The line then does
+        #       not match `tools/session_artifacts.py:_DESCRIBE_RE`, whose rebuild
+        #       returns None for it -- the run's own `params.json` is the record.
+        halves = HALVES.get(self.strategy_package)
+        if halves:
+            parts = []
+            for h in halves:
+                d = _emitter_signature_defaults(f"{self.strategy_package}.{h}_half")
+                parts.append(
+                    f"{h}[ckpt={p[f'{h}_checkpoint']} ctx={p[f'{h}_context_length']} "
+                    f"band=±{p[f'{h}_buy_threshold']} min_prob={p[f'{h}_min_prob']} "
+                    f"trend={d['min_trend_ticks']} path={d['path_momentum']} "
+                    f"aggr={p[f'{h}_aggression_ticks']}]")
+            return (
+                f"LiveConfig[{commit} calmar={calmar} "
+                f"{sorted(self.policy.sessions)}] {self.strategy_package} "
+                f"ctx={p['context_length']} stride={p['stride_bars']} "
+                f"horizon={p['horizon_bars']} {' '.join(parts)} "
+                f"maxpos={p['max_position']} forced_close={p['forced_close']}"
+            )
         emitter_defaults = _emitter_signature_defaults(self.strategy_package)
         return (
             f"LiveConfig[{commit} calmar={calmar} "
@@ -388,10 +448,33 @@ PINNED_FULLDAY = LiveConfig(
 )
 
 
+# Tech: the HYBRID deployment -- the DAY half trades the DAY session and the
+#       NIGHT half the NIGHT session, one position between them. It names its
+#       package and its file slug, because fullday also trades DAY+NIGHT.
+# Why:  autoresearch_trading_plan_hybrid_split07.md "Going live" step 1. Never
+#       slug `day_night`: that is fullday's ledger, bar cache and wire. On
+#       `main` the package is Step 0 (the reset day and night settings,
+#       `eaaad1d`), untuned; a live branch that adopts a loop result restates
+#       `source_note`, as it does for the others.
+PINNED_HYBRID = LiveConfig(
+    source_commit=None,
+    source_calmar=None,
+    source_dataset=r"\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_fullday.csv",
+    source_note=(
+        "UNTUNED on main: strategy/hybrid is Step 0 (eaaad1d) -- day half "
+        "band 0.001 / min_prob 0.65, night half band 0.00045 / min_prob 0.5, "
+        "both Toto2-1B at stride 30. Results live in results_hybrid.tsv."
+    ),
+    policy=SessionPolicy.both(slug="hybrid"),
+    package="hybrid",
+)
+
+
 CONFIGS = {
     "night": PINNED,
     "day": PINNED_DAY,
     "fullday": PINNED_FULLDAY,
+    "hybrid": PINNED_HYBRID,
 }
 
 
