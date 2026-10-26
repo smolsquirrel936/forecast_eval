@@ -23,9 +23,11 @@ band) or the Calmar (narrow band). These rules read the tape, not the model:
 The rules are STATEFUL (best price since entry, arming latch) and deliberately
 ``adoptable = False``: a live ``--resume`` into a held lot cannot recover the
 best price the dead process saw, so ``live/runtime.py`` refuses the adoption
-rather than run a lock armed on invented state. A roll closes and reopens the
-position, and the rules detect the new entry (entry_bar_idx/price/side key) and
-restart their state at each roll.
+rather than run a lock armed on invented state. A live roll closes and reopens
+the position, but the fullday Trader carries the original entry
+(entry_bar_idx/price/side, the rules' state key) onto the re-open
+(``candidate_fullday_iter34``), so the rules keep their state across a roll, as
+they do on the backtest's spliced tape. Any other new entry restarts them.
 
 ``run.py`` queries the exit rule only while a position is open (Step 2), so
 these rules never see flat bars and their per-tick state updates cost nothing

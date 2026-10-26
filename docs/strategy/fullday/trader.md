@@ -47,6 +47,13 @@ aggression and sizing, and the fill bookkeeping that feeds `ExitRule` queries.
     each ladder rung burned one count.
   - **Clearing at the re-open covers both close paths,** including the scheduled
     close's venue fill, which arrives outside the hook.
+  - **The re-open keeps the original entry** (`candidate_fullday_iter34`).
+    An OPEN submitted inside the hook is marked as the roll's re-open. When it
+    fills, on the closed position's side, the trader restores the closed
+    position's entry price, bar and time instead of the fill's. So the
+    percent stop keeps its width and the [break-even lock](exits.md) keeps its
+    state, as on the backtest's spliced tape. Any cancel (the next signal, an
+    exit) drops the mark, and the carried entry is used once.
   - **The backtest never enters it,** so every recorded run is unchanged.
 - It is handed to `run_backtest` as a **factory**, not an instance —
   `make_trader(execution)` — because `Execution` is built inside the run

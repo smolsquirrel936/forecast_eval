@@ -23,9 +23,13 @@ that lets them compose with the shared percent stop.
 - **Stateful, therefore `adoptable = False`.** Both protection rules track the
   best price since entry, so a live `--resume` that adopts a held lot
   (`live/runtime.py` `adopt_position`) is refused for them — the best price
-  belongs to the dead process and must not be invented. A roll closes and
-  reopens the position, and the rules detect the new entry by its
-  `(entry_bar_idx, entry_price, side)` identity and restart their state.
+  belongs to the dead process and must not be invented.
+- **Their state survives a live roll.** The rules key their state on the entry's
+  `(entry_bar_idx, entry_price, side)` and restart on a new one. A roll closes
+  and re-opens the position, but the fullday [Trader](trader.md) carries the
+  original entry onto the roll's re-open (`candidate_fullday_iter34`). So the
+  lock keeps its best price and arming, as it does on the backtest's spliced
+  tape. Any other new entry restarts the rules.
 - **`run.py` queries the rule only while a position is open** (Step 2), so the
   rules never see flat bars; per-tick state updates cost nothing while flat.
 - **The G2 arm is the day_trail lesson**: a fixed-width trail fires at

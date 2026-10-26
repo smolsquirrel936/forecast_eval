@@ -107,6 +107,8 @@ class Trader:
         self._cooldown_side: int = 0        # +1 blocked BUYs, -1 blocked SELLs
         self._cooldown_left: int = 0        # signals remaining in the cooldown
         self._rolling: bool = False         # inside rolling(): a roll leg
+        self._roll_reopen: bool = False     # the resting OPEN is a roll's re-open
+        self._closed_entry = None           # (side, price, bar_idx, ts) of the last flatten
         self.position = 0  # signed contracts; +long / -short
         self.entry_price: float = 0.0
         self.entry_bar_idx: int = -1
@@ -165,6 +167,7 @@ class Trader:
         #       first (even for HOLD) guarantees a stale forecast's order can never
         #       outlive the forecast that produced it.
         self.execution.cancel()
+        self._roll_reopen = False           # the cancel took any roll re-open with it
 
         # Tech: HOLD means "do nothing further" after the cancel above.
         # Why:  HOLD is a real decision (stand aside), not a no-op — its cancel is
@@ -255,6 +258,11 @@ class Trader:
         #       (§4.5); returning the order lets the run loop log it.
         if order is not None:
             self.execution.submit(order, current_price=cur)
+            # Tech: remember that this resting OPEN is a roll's re-open.
+            # Why:  its fill arrives later, through LiveLoop and outside
+            #       rolling(); on_fill needs the mark to carry the original
+            #       entry across the roll (see on_fill).
+            self._roll_reopen = self._rolling and order.intent == "OPEN"
         return order
 
     # ---- exit-driven / forced closes -------------------------------------
@@ -276,6 +284,7 @@ class Trader:
         #       a forced close; the close is offset by aggression so it's marketable
         #       and actually gets us flat by the boundary.
         self.execution.cancel()
+        self._roll_reopen = False
         cur = market.price
         offset = self.aggression_ticks * self.tick_size
         qty = abs(self.position)
@@ -315,10 +324,31 @@ class Trader:
             # Why:  ExitRules need the entry reference (stop distance from entry,
             #       bars-in-trade); bar_idx/timestamp are recorded so time-stops can
             #       measure holding period.
-            self.entry_price = fill_price
-            self.entry_bar_idx = bar_idx
-            self.entry_timestamp = timestamp
+            # Tech: a roll's re-open on the closed position's side instead
+            #       restores the closed position's entry (price, bar, time).
+            # Why:  the backtest's spliced tape never closes a position at a
+            #       roll, so its stop and break-even lock keep measuring from the
+            #       original entry. Carrying it here makes live do the same: the
+            #       percent stop keeps its width, and the lock, which keys its
+            #       state on (entry_bar_idx, entry_price, side), keeps its best
+            #       price and arming instead of restarting at the new month.
+            carried = self._closed_entry
+            if (self._roll_reopen and carried is not None
+                    and carried[0] == (1 if new > 0 else -1)):
+                _side, self.entry_price, self.entry_bar_idx, self.entry_timestamp = carried
+            else:
+                self.entry_price = fill_price
+                self.entry_bar_idx = bar_idx
+                self.entry_timestamp = timestamp
+            self._roll_reopen = False
+            self._closed_entry = None
         elif new == 0:
+            # Tech: keep the closing position's entry before clearing it.
+            # Why:  if this flatten is a roll's close, the re-open restores it
+            #       (above). A strategy exit leaves it unused: only a roll's
+            #       re-open reads it, and the next open clears it.
+            self._closed_entry = (1 if prev > 0 else -1, self.entry_price,
+                                  self.entry_bar_idx, self.entry_timestamp)
             # Tech: returned to flat — clear all entry tracking to sentinels.
             # Why:  leaving stale entry data would make position_state() lie on the
             #       next trade and could trip an ExitRule against a closed position.
