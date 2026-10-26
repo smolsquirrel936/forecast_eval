@@ -689,11 +689,21 @@ answered.
 are in `strategy/README.md` and decisions in `SIMTRADE_0929_PLAN.md`, both on
 that branch only.
 
-| Deployment | Source | Notable |
+| Deployment | Source (since) | Notable |
 |---|---|---|
-| day | `day_split_iter02` | band ±0.001, `min_prob` 0.65, stride 30 |
-| night | `night_iter10` | +0.00065 / −0.00045, `min_prob` 0.55, **long-only**, stride 30 |
-| fullday | `fullday_split_iter07` | band ±0.001, `min_prob` 0.50, stride 15 |
+| day | `day_split_iter02` (09-29) | band ±0.001, `min_prob` 0.65, stride 30, stop 0.10 |
+| night | `night_iter30` (10-05; launched as `night_iter10`) | band ±0.0004, `min_prob` 0.6, two-sided, stride 15, stop 0.05 |
+| fullday | `fullday_rev_iter34` (10-27; launched as `fullday_split_iter07`) | band ±0.001, `min_prob` 0.50 / entry 0.60, stride 10, stop 0.05, lock 0.03, cooldown 16 |
+| hybrid | `hybrid_split_iter22` (registered 10-27, **not yet started**) | day half ±0.0005 / 0.60, no opens 09:30–12:59; night half ±0.0007 / 0.50, closes only; stride 30, no stop |
+
+**2026-10-27: hybrid registered for live, not yet started.** Its code is on
+`simtrade_0929` (`58eb8b5`, `5382486`, `5fd2d3d`, `fc27688`), and the live
+support for a second DAY+NIGHT deployment came from `main` (merges `8db3335`,
+`362554d`, `86a697d`). Before its first start: a `[hybrid]` section in
+`config/secrets.toml`, and optionally `bars_cache_day_night.csv` copied to
+`bars_cache_hybrid.csv`. Then start it like the others (§5, with
+`--fresh-start`), owner first. Settings and cautions: `strategy/README.md`
+(caution 19).
 
 **2026-10-26: live fullday adopts `fullday_rev_iter34`.**
 `candidate_fullday_iter34` was merged into `simtrade_0929` (user decision), and

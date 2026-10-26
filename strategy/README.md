@@ -1,6 +1,6 @@
 # strategy/ — what `simtrade_0929` trades
 
-The three session packages (`day/`, `night/`, `fullday/`) as they stand on the
+The four packages (`day/`, `night/`, `fullday/`, `hybrid/`) as they stand on the
 local branch `simtrade_0929`, forked from `main` @ `f830f7d` on 2026-09-29 for
 the three-session simulation trade. The branch is **not** meant to merge into
 `main`. The plan and every decision behind it: `../SIMTRADE_0929_PLAN.md`.
@@ -9,14 +9,14 @@ Live builds each deployment from its package's `wiring.py:make_strategy`
 (LIVE_STRATEGY_ROUTING_PLAN D2), so **the `PARAMS` below are what the simtrade
 places orders on.** `live/config.py` holds only the provenance record.
 
-## Shared by all three
+## Shared by all four
 
 | | |
 |---|---|
 | Forecaster | Toto2-1B (`Datadog/Toto-2.0-1B`), context 3008 bars, horizon 30 bars |
-| Emitter | `ThresholdEmitter`, trend filter + path momentum on, `full_confidence_prob` 0.9 |
+| Emitter | `ThresholdEmitter`, trend filter + path momentum on, `full_confidence_prob` 0.9 (hybrid: one per half, behind a router) |
 | Trader | limit orders at `aggression_ticks` 0, `max_position` 1, no-flip, no pyramiding |
-| Exit rule | `EntryPercentStop` (`exits/pct_stop.py`) at each package's `stop_pct` — closes when the price moves `entry_price × stop_pct` against the position, checked every tick, filled at the next print. Otherwise positions close only on an opposite signal |
+| Exit rule | `EntryPercentStop` (`exits/pct_stop.py`) at each package's `stop_pct` — closes when the price moves `entry_price × stop_pct` against the position, checked every tick, filled at the next print. Otherwise positions close only on an opposite signal. Hybrid has none |
 | `forced_close` | `False` — positions carry across sessions, nights and weekends |
 
 ## Day — `day_split_iter02`
@@ -170,13 +170,40 @@ places orders on.** `live/config.py` holds only the provenance record.
 - **Live source record:** `PINNED_FULLDAY` stays `None`/`None`; its note and
   `wiring.py` docstring now name this commit instead of "UNTUNED, DAY's band".
 
+## Hybrid — `hybrid_split_iter22` (since 2026-10-27; not yet started)
+
+The DAY half trades the DAY session and the NIGHT half the NIGHT session, one
+position between them; a lot carries across the session change and the incoming
+half manages it (`strategy/hybrid/router.py`).
+
+| Knob | Day half | Night half |
+|---|---|---|
+| band | buy +0.0005 / sell −0.0005 | buy +0.0007 / sell −0.0007 |
+| `min_prob` | 0.60 | 0.50 |
+| opens | **none 09:30–12:59** (`day_open_block_start` 9.5 / `_end` 13) | **never** (`night_allow_open` False): closes only |
+| `stop_pct` | none | none |
+| shared | stride 30, Toto2-1B (one copy, both halves), context 3008 | |
+
+- **Source:** `autoresearch_split_0.7_hybrid` @ `9c0741f` (`iter22`), placed on
+  this branch as `58eb8b5` / `5382486` (no merge of the loop branch). Plan and
+  results: `../../autoresearch_trading_plan_hybrid_split07.md`,
+  `results_hybrid.tsv`.
+- **Score:** Calmar **12.8738**, 86 trades, on the **train 70 %**. Held-out
+  approximate Calmar **6.9773** against the baseline's 5.7634 and the day half
+  alone's 0.371, read once after the search ended.
+- **Live:** slug `hybrid` (its own ledger, bar cache and wire; never fullday's
+  `day_night`). Registered by `4b82111` and the five commits before it on
+  `main` (`autoresearch_trading_plan_hybrid_split07.md`, "Going live").
+- **Live source record:** `PINNED_HYBRID` stays `None`/`None`; its note names
+  iter22 (`fc27688`).
+
 ## Cautions
 
-1. **The three Calmars are not comparable.** Day and fullday are train-70 %
+1. **The Calmars are not comparable.** Day, fullday and hybrid are train-70 %
    figures; night's is whole-window. Different windows, different tapes.
 2. **Day's and fullday's held-out 30 % has never been scored**
    (TRAIN_TEST_SPLIT_PLAN §4.4). This simtrade is their first out-of-sample
-   exposure.
+   exposure. Hybrid's was read once, after its search ended (6.9773).
 3. **Night was tuned and scored on the same bars** — every bar the Calmar covers
    was seen by the search that chose the settings. Five keeps out of thirty
    tries is how overfitting looks, and nothing here rules it out.
@@ -191,13 +218,15 @@ places orders on.** `live/config.py` holds only the provenance record.
 6. **Positions are long-lived.** `forced_close=False` everywhere; W5b measured a
    median hold of **20 days** for day's settings. Positions ride through the
    other sessions and weekends, managed only by the percent stop.
-7. **The account can hold up to 3 lots in one direction** — fullday overlaps
-   both day and night, and the owner nets them into one account book. No
+7. **The account can hold up to 4 lots in one direction** — fullday and hybrid
+   each overlap both day and night, and the owner nets them into one account
+   book. No
    `--max-daily-loss-points` and no `--kill-file` are set (decided 2026-09-29).
-8. **Three deployments under the owner is untested.** STRATEGY_SPLIT_PLAN §23
+8. **Four deployments under the owner is untested.** STRATEGY_SPLIT_PLAN §23
    lifted the one-instance rule for two deployments, one lot each, ten minutes.
-   Three for full sessions has never run; this simtrade is that test.
-9. **Data allowance.** Four logins subscribe the same tick stream; what that
+   Three have run full sessions since 2026-09-29; hybrid's first start makes
+   four.
+9. **Data allowance.** Five logins subscribe the same tick stream; what that
    costs against the 500 MiB/day allowance is unmeasured (§18.13). The owner
    warns below 50 MB but does not stop.
 10. **Night's banner is accurate again** (`night_iter30`). `LiveConfig.describe()`
@@ -211,16 +240,16 @@ places orders on.** `live/config.py` holds only the provenance record.
     stride 30). Priming needs 3 non-HOLD signals in the window; if
     either stops with `emitter priming incomplete`, re-run it with
     `--warmup-days 30`. It refuses before trading, so a retry is safe.
-12. **Re-logins and the 5-connection cap (accepted 2026-09-29).** Shioaji
-    allows 5 connections per `person_id`; the owner plus three deployments hold
-    4. Each process re-logs in before every open with `force_refresh=True`, which
-    opens a new connection ~30 s before the old one drops. The owner goes first
-    (08:37, 14:52); **the three deployments go in the same second (08:40,
-    14:55)**, so up to 7 connections can exist briefly. What Shioaji does above 5
-    has never been measured: a refused login retries 60 s later, but an evicted
-    connection could be the owner's. Watch the consoles at 08:40–08:45 and
-    14:55–15:00 for `VERIFY_FAILED` or `relogin` failures. Logins per day (~30)
-    are far under the 1 000/day cap.
+12. **Re-logins and the 5-connection cap.** Shioaji allows 5 connections per
+    `person_id`; the owner plus four deployments hold 5. Each process re-logs in
+    before every open with `force_refresh=True`, which opens a new connection
+    ~30 s before the old one drops. The owner goes first (08:37, 14:52); since
+    2026-10-18 the deployments follow 40 s apart (day 08:40:00, night 08:40:40,
+    fullday 08:41:20, hybrid 08:42:00; 14:55 likewise), so each spike makes 6.
+    **6 was MEASURED on 2026-10-26** (`multi_deploy_probe --sessions 6`): all
+    coexist and the first session stays usable. 7 or more is unmeasured. Watch
+    the consoles at 08:40–08:45 and 14:55–15:00 for `VERIFY_FAILED` or
+    `relogin` failures. Logins per day (~40) are far under the 1 000/day cap.
 13. **Day and night warm up on tape bars spliced to broker bars.** The broker
     serves minute bars only for listed contracts (the front month and the one
     before), so a first run into an empty `outputs/` cannot reach the history
@@ -271,12 +300,26 @@ places orders on.** `live/config.py` holds only the provenance record.
     (500 boundaries); priming replays up to 900. `outputs/` already holds
     fullday's bar cache back to 09-15, which covers it. If fullday ever stops
     with `emitter priming incomplete`, re-run it with `--warmup-days 15`.
+19. **Hybrid has never run live.** Everything it depends on is tested offline
+    (`autoresearch_trading_plan_hybrid_split07.md`, "Going live"), not on a
+    session.
+    - **Credential:** `config/secrets.toml` needs a `[hybrid]` section; it may
+      reuse another section's keys.
+    - **Warm-up:** each half's trend filter must prime on its own (3 samples).
+      The night half's band is 0.0007, so it primes more slowly; if hybrid
+      stops with `emitter priming incomplete`, raise `--warmup-days`.
+    - **The 12:45 roll** re-opens through the day half's open block (`rolling()`,
+      `5fd2d3d`); it has never rolled live.
+    - **`--resume`** adopts into both halves; with no exit rule, nothing blocks
+      a restart into a held lot.
+    - **VRAM:** four Toto2 copies are about 17–21 GiB of the 32 GiB card; check
+      `nvidia-smi` after its first start.
 
 ## How to run
 
-Run everything from the repo root (`night/`), in **four separate terminals**.
+Run everything from the repo root (`night/`), in **five separate terminals**.
 Each process runs until Ctrl-C or a safety halt, and idles outside its own
-session, so all four can start together before the 08:45 open — night simply
+session, so all of them can start together before the 08:45 open — night simply
 waits for 15:00.
 
 **0. The account must be flat.** `--fresh-start` and the owner both refuse
@@ -291,7 +334,9 @@ uv run --no-sync python -m forecast_eval.live.flatten             # only if not 
 this when `outputs/` already holds `bars_cache_day.csv` / `bars_cache_night.csv`
 from an earlier run — every start-up merges the cache with the broker's bars and
 rewrites it. There is no seeder for fullday (`day_night`); its 13-day window
-fits in what the broker serves.
+fits in what the broker serves. Hybrid trades the same sessions, so a first
+hybrid start can take fullday's history by copying
+`outputs/bars_cache_day_night.csv` to `outputs/bars_cache_hybrid.csv`.
 
 ```powershell
 uv run --no-sync python -m forecast_eval.live.seed_cache --data "\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_day.csv"   --out outputs/bars_cache_day.csv   --session day
@@ -305,16 +350,17 @@ client whose owner has never spoken halts.
 uv run --no-sync python -m forecast_eval.live.owner_cli --out outputs --i-understand-this-places-orders
 ```
 
-**2–4. The three deployments**, each sending its orders through the owner:
+**2–5. The four deployments**, each sending its orders through the owner:
 
 ```powershell
 uv run --no-sync python -m forecast_eval.live.cli --strategy day     --broker client --fresh-start --i-understand-this-places-orders
 uv run --no-sync python -m forecast_eval.live.cli --strategy night   --broker client --fresh-start --i-understand-this-places-orders
 uv run --no-sync python -m forecast_eval.live.cli --strategy fullday --broker client --fresh-start --i-understand-this-places-orders
+uv run --no-sync python -m forecast_eval.live.cli --strategy hybrid  --broker client --fresh-start --i-understand-this-places-orders
 ```
 
 Each writes to `outputs/live_<slug>_<timestamp>/` (slugs `day`, `night`,
-`day_night`), and its fill ledger `fills_<slug>.csv` to `outputs/` — the folder
+`day_night`, `hybrid`), and its fill ledger `fills_<slug>.csv` to `outputs/` — the folder
 the owner's `--out` names. Every console prints the account's `person_id` (a
 national ID); read before pasting output anywhere.
 
