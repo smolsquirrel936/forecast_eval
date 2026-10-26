@@ -59,6 +59,13 @@ a position, an OPEN on the closed position's side is skipped for K signals
 (HOLDs count; the opposite side opens freely). Its value here is 0 — the inert
 control, never armed, byte-identical to the pre-knob package. The loop's
 search moves it through ``16 / 48`` as edits to ``PARAMS``.
+
+``candidate_fullday_iter34`` (2026-10-26, after the loop) sets
+``reentry_cooldown_signals`` to 16: the ``fullday_rev_iter34`` config (train
+Calmar 4.4463, ride 0.3614). The loop's final incumbent was ``iter35`` at 48, but
+the post-loop diagnostic held-out read (reversal plan, phase 2 Result) traced
+``iter35``'s held-out drawdown to the 48-signal cooldown. That read used the
+holdout for selection, so this is a forward-test candidate, NOT an adoption.
 """
 from typing import Any, Dict
 
@@ -127,7 +134,7 @@ PARAMS: Dict[str, Any] = {
     # signals (HOLDs count); the opposite side opens freely. 0 is the
     # CONTROL: the cooldown never arms, so runs are byte-identical to the
     # pre-knob package.
-    "reentry_cooldown_signals": 48,
+    "reentry_cooldown_signals": 16,
     # entry-probability gate — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param entry_min_prob=...``.
     # Why:  reversal loop decision 2. 0.50 is the CONTROL value: the floor it
