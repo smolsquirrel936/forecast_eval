@@ -98,7 +98,8 @@ RECHECK_GRACE = timedelta(seconds=20)
 # Why:  autoresearch_trading_plan_hybrid_split07.md "Going live" step 2. An
 #       unlisted name gets slot 0, so hybrid would refresh in the same second as
 #       day. With four deployments the steady state is already 5 and each spike
-#       makes 6, which the plan's step-3 probe must clear before hybrid starts.
+#       makes 6. MEASURED 2026-10-26 (`multi_deploy_probe --mode sessions
+#       --sessions 6`): 6 coexist and the first session stays usable.
 DEPLOYMENT_STAGGER = timedelta(seconds=40)
 STAGGER_ORDER = ("day", "night", "fullday", "hybrid")
 

@@ -99,6 +99,13 @@ session; this run only logs in.
 
 Exit **1** if a login is refused or the first session is dead.
 
+**Measured 2026-10-26, `--sessions 6`** (a holiday, every live process
+stopped): all 6 logins up, `connections` 1 → 6, the first session still usable
+and seeing 6. Exit 0. This is the re-login peak of the owner plus four
+deployments (hybrid plan "Going live" step 3). Quota after the run: 696 989
+bytes used of `limit_bytes` 524 288 000 (0.1 %); a full session's tick usage
+per deployment is still unmeasured.
+
 ## `--mode lag` — X2, the number the rail needs
 
 [STRATEGY_SPLIT_PLAN §18.9](../../STRATEGY_SPLIT_PLAN.md) established that the

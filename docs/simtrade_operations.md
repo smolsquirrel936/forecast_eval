@@ -491,7 +491,12 @@ one drops, against Shioaji's **5 per `person_id`** cap with four processes
 connected. Until 2026-10-18 the three deployments re-logged in the same second,
 briefly up to 7. They are now 40 s apart (`relogin.DEPLOYMENT_STAGGER`), so each
 spike clears before the next and the peak is 5; the owner still goes first.
-What Shioaji does above 5 has never been measured.
+**Above 5 was measured on 2026-10-26** (a holiday, every live process stopped):
+`multi_deploy_probe --mode sessions --sessions 6` opened 6 simulation logins,
+`usage()` reported `connections=6`, and the first session was still usable.
+So a sixth connection is neither refused nor evicts an older one, which is the
+peak a fourth deployment (hybrid) makes during each re-login. 7 or more is
+still unmeasured.
 
 ## 8. Reports while the simtrade runs
 
