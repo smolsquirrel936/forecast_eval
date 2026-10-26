@@ -716,11 +716,21 @@ fullday trades it from the 2026-10-27 restart.
     new soak epoch keeps the new config's record apart from the old one's:
 
     ```powershell
-    uv run --no-sync python -m forecast_eval.live.cli --strategy fullday --broker client --fresh-start --contract TXFK6 --i-understand-this-places-orders
+    uv run --no-sync python -m forecast_eval.live.cli --strategy fullday --broker client --fresh-start --i-understand-this-places-orders
     ```
 
     Expect the banner to read `stride=10 ... min_prob=0.5`, with no
     `resume:` line.
+  - **No `--contract` on any of the four.** The October contract expired on
+    10-21, so `TXFR1` now resolves to November: both 2026-10-26 start-ups
+    printed `contract TXFR1 -> ... delivery_month=202611`. Steps 4–5 below
+    were written with `--contract TXFK6`, which is equivalent now; it can be
+    dropped. Night's ledger is still unstamped, so its first start stamps its
+    rows 202611, the month it holds.
+  - **`--contract` is needed again only in the roll window** (11-17 12:45 →
+    11-18 13:30, table above). There, a restarted deployment that has rolled
+    takes `--contract TXFL6`, and so does the owner while any seed row is
+    unstamped (§6.5).
 - **Superseded:** the paper candidate (§6.10, worktree `night/fullday_cand34/`,
   started 2026-10-26 11:56) runs the same config, so it duplicates live
   fullday from here on.
