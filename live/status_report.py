@@ -441,6 +441,16 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
     long_only = bool(pkg.get("long_only", False))
     buy, sell = params.get("buy_threshold"), params.get("sell_threshold")
     min_prob, horizon = params.get("min_prob"), params.get("horizon_bars") or 30
+    # Tech: a routed package's per-session band and gate, `{"day": {...}, ...}`,
+    #       read from its `<half>_` knobs; None for a single-strategy package.
+    # Why:  hybrid's unprefixed band knobs are None, so every forecast read as
+    #       inside the band. Each forecast is judged by the half of its own
+    #       session. Read from the package like `long_only`, so a `--param` on
+    #       a half knob is not reflected (`overridden` flags that run).
+    halves = {h: {"buy": pkg.get(f"{h}_buy_threshold"),
+                  "sell": pkg.get(f"{h}_sell_threshold"),
+                  "min_prob": pkg.get(f"{h}_min_prob")}
+              for h in ("day", "night") if f"{h}_buy_threshold" in pkg} or None
     # Tech: each bar's position in the soak's bar series, keyed (folder, bar_idx).
     # Why:  the realized return is the price `horizon` bars after the forecast's
     #       bar. Counting along the whole series rather than within one folder
@@ -456,6 +466,10 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
         r, pu = p.get("predicted_return"), p.get("prob_up")
         if r is None:
             continue
+        if halves:
+            sess = classify_session(datetime.fromisoformat(e["timestamp"]))
+            half = halves.get((sess or "").lower(), {})
+            buy, sell, min_prob = half.get("buy"), half.get("sell"), half.get("min_prob")
         direction = "BUY" if buy is not None and r >= buy else (
             "SELL" if sell is not None and r <= sell else None)
         crossed = direction is not None
@@ -528,8 +542,9 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
         "heartbeat": hb,
         "heartbeat_age_s": max(0.0, (now - datetime.fromisoformat(hb)).total_seconds()) if hb else None,
         "params": {
-            "sessions": params.get("sessions", []), "buy": buy, "sell": sell,
-            "min_prob": min_prob, "horizon": horizon, "stride": params.get("stride_bars"),
+            "sessions": params.get("sessions", []),
+            "buy": None if halves else buy, "sell": None if halves else sell,
+            "min_prob": None if halves else min_prob, "halves": halves, "horizon": horizon, "stride": params.get("stride_bars"),
             "ctx": params.get("context_length"), "ckpt": params.get("checkpoint"),
             "max_position": params.get("max_position"), "long_only": long_only,
             "git": params.get("git_commit"), "dirty": params.get("git_dirty"),

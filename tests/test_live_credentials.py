@@ -94,3 +94,14 @@ def test_the_repr_never_carries_key_material():
     assert "SUPERSECRETKEY" not in text
     assert "SUPERSECRETVALUE" not in text
     assert "<redacted>" in text
+
+
+def test_the_template_has_a_section_for_every_deployment():
+    """`cli.py` loads the credential named after the deployment; a deployment
+    missing from the template is one a fresh `secrets.toml` cannot start."""
+    import tomllib
+
+    from forecast_eval.live.config import CONFIGS
+    template = credentials.CONFIG_DIR / "secrets.example.toml"
+    sections = tomllib.loads(template.read_text(encoding="utf-8"))
+    assert set(CONFIGS) <= set(sections), sorted(set(CONFIGS) - set(sections))
