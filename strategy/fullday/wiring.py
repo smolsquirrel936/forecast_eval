@@ -25,6 +25,13 @@ flat whose signal strength falls below the floor it implies, while closes stay
 ungated. Its value here is 0.50 — the inert control, floor 0.0, byte-identical
 to the pre-knob package. The loop's search moves it through
 ``0.55 / 0.60 / 0.65 / 0.70`` as edits to ``PARAMS``.
+
+``fullday_rev_iter16`` (same plan, decision 8 / phase E) added the
+package-declared ``exit_threshold`` knob: while positioned, an opposite signal
+clears at ``|predicted_return| >= exit_threshold`` while entries keep the full
+band. Its value here is 0.001 — equal to the band, the inert control, so runs
+are byte-identical to the pre-knob package. The loop's search moves it through
+``0.0005 / 0.00025 / 0.0`` as edits to ``PARAMS``.
 """
 from typing import Any, Dict
 
@@ -67,6 +74,15 @@ PARAMS: Dict[str, Any] = {
     # knob. The gate applies to opens only; min_prob (above) stays the exit
     # gate inside the emitter.
     "entry_min_prob": 0.50,
+    # exit-side band — package-declared, beyond the twelve CLI knobs
+    # (D6/D7), reachable only through ``--param exit_threshold=...``.
+    # Why:  reversal loop decision 8 (phase E). While positioned, an opposite
+    # signal needs only |predicted_return| >= exit_threshold; from flat, and
+    # on the same side, the full band above still applies. 0.001 equals the
+    # band — the CONTROL value, at which the exit cut *is* the sell band, so
+    # a run at 0.001 must be byte-identical to one without the knob. min_prob,
+    # the trend filter and the path check still gate the exit signal.
+    "exit_threshold": 0.001,
 }
 
 # Tech: the knob's tuned value — 0.05, ADOPTED on simtrade_0929 (2026-10-18).
@@ -153,10 +169,11 @@ def make_strategy(
         sell_threshold=p["sell_threshold"],
         min_prob=p["min_prob"],
         full_confidence_prob=p["full_confidence_prob"],
+        exit_threshold=p["exit_threshold"],
     )
 
     def make_trader(execution: Any) -> Trader:
-        return Trader(
+        trader = Trader(
             execution=execution,
             tick_size=tick_size,
             aggression_ticks=p["aggression_ticks"],
@@ -165,6 +182,16 @@ def make_strategy(
             entry_min_prob=p["entry_min_prob"],
             full_confidence_prob=p["full_confidence_prob"],
         )
+        # Tech: bind the emitter to the trader this factory just built, so the
+        #       exit band knows which side is the exit side.
+        # Why:  reversal decision 8's mechanism — the emitter reads the live
+        #       signed position through the getter at each forecast (fills land
+        #       before emit in run.py's tick order, so no look-ahead, and the
+        #       frozen engine needs no new seam). Re-binding on every call
+        #       keeps a re-made trader (fee sweeps re-run make_trader) the
+        #       emitter's sole counterpart.
+        emitter.bind_position(lambda: trader.position)
+        return trader
 
     # Tech: build the percent stop only when its knob is set; None means no
     #       exit rule, exactly what every recorded run before this knob used.

@@ -48,6 +48,16 @@ factory. This is the file a search for this session edits first.
   `min_prob <= entry_min_prob < full_confidence_prob` — below `min_prob` the
   gate is vacuous, at/above `full_confidence_prob` unreachable (the strength
   ramp saturates at 1.0). Its `PARAMS` value 0.50 is the inert control.
+- **`exit_threshold` (added `fullday_rev_iter16`, reversal decision 8)** is a
+  package-declared knob like the two above: while positioned, an opposite
+  signal clears at `|predicted_return| >= exit_threshold`; entries keep the
+  full band. `make_strategy` builds the emitter with it and `make_trader`
+  binds the emitter to each trader it builds
+  (`emitter.bind_position(lambda: trader.position)`), which is how the emitter
+  knows the exit side without touching frozen `run.py`. The emitter's
+  constructor raises `ValueError` unless the band is symmetric
+  (`buy == -sell`) and `0 <= exit_threshold <= buy_threshold`. Its `PARAMS`
+  value 0.001 equals the band — the inert control, byte-identical runs.
 
 > **This session is UNTUNED.** The values in `PARAMS` are DAY's, inherited so the
 > package is runnable and parity-checkable. They were not chosen for
