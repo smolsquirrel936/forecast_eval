@@ -306,6 +306,74 @@ def test_priming_check_is_skipped_when_the_filter_is_off():
     assert rt.warm
 
 
+def _routed_emitter(rt, night_band=0.00045):
+    # Hybrid's shape: one emitter per half behind a router. The day half is the
+    # fixture's own emitter; the night half gets its own band.
+    from forecast_eval.strategy.hybrid.router import RoutedEmitter
+    from forecast_eval.strategy.night.emitter import ThresholdEmitter
+    night = ThresholdEmitter(buy_threshold=night_band, sell_threshold=-night_band,
+                             min_prob=0.5, full_confidence_prob=0.9)
+    return RoutedEmitter(day=rt.emitter, night=night)
+
+
+def test_priming_checks_every_half_of_a_routed_emitter():
+    """Hybrid's halves each run a trend filter behind one router. The check used
+    to read `_short_prices` off the router itself, found none, and skipped -- so
+    a half that primed nothing traded with its filter open."""
+    rt = _runtime()
+    rt.emitter = _routed_emitter(rt, night_band=1.0)    # night never non-HOLD
+    with pytest.raises(RuntimeError, match="priming incomplete"):
+        rt.warm_up(_bars(CTX + 60))
+    assert not rt.warm
+
+
+def test_a_routed_emitter_whose_halves_both_prime_starts():
+    rt = _runtime()
+    rt.emitter = _routed_emitter(rt)
+    rt.warm_up(_bars(CTX + 60))
+    assert rt.warm
+    assert all(len(h._short_prices) >= 3 for h in rt.emitter.halves.values())
+
+
+def _routed_forecaster():
+    from forecast_eval.strategy.hybrid.forecaster import RoutedForecaster
+    return RoutedForecaster(_Cheap(), _Cheap(), warmup_bars=0,
+                            stride_bars=STRIDE, horizon_bars=5)
+
+
+def test_a_routed_forecaster_is_prewarmed():
+    """Hybrid's forecaster is a router with no `_model` of its own; the prewarm
+    read it directly and raised AttributeError."""
+    rt = _runtime()
+    rt.forecaster = _routed_forecaster()
+    rt.warm_up(_bars(CTX + 60))
+    assert rt.warm
+    assert all(h._model is not None for h in rt.forecaster.halves.values())
+
+
+def test_a_routed_forecaster_releases_the_gpu_cache():
+    """The router holds no `_torch`; its halves do, after their lazy load."""
+    calls = []
+
+    class _Cuda:
+        @staticmethod
+        def is_available():
+            return True
+
+        @staticmethod
+        def empty_cache():
+            calls.append("empty_cache")
+
+    class _Torch:
+        cuda = _Cuda
+
+    rt = _runtime()
+    rt.forecaster = _routed_forecaster()
+    rt.forecaster.halves["DAY"]._torch = _Torch
+    rt.warm_up(_bars(CTX + 60))
+    assert calls == ["empty_cache"]
+
+
 def test_priming_does_not_trade_the_past():
     """Replayed forecasts must be discarded, not acted on."""
     rt = _runtime()

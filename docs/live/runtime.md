@@ -123,6 +123,11 @@ bar. Held once, at start-up — the per-bar path stays on `broker_position()`.
   handle is read off the forecaster, so this module still never imports torch.
 - **An under-primed emitter refuses to start.** Below 3 samples the filter fails
   open; refusing is recoverable (widen the window), trading unfiltered is not.
+- **A router is checked half by half** (since 2026-10-27). Hybrid's emitter and
+  forecaster are routers holding one per session (`.halves`). The priming floor,
+  the prewarm and the GPU-cache release read each half; the router itself holds
+  no deque, model or torch handle, so reading it skipped the check and crashed
+  the prewarm.
 - **`warm_up` rejects bars from outside the policy**, and requires at least
   `context_length` of them. Both are startup errors, not warnings.
 - **`on_tick` raises before `warm_up`.** Trading on a partial context is the exact
