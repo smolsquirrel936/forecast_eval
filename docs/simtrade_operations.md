@@ -420,11 +420,32 @@ and four things follow from that:
 2. Copy `forecast_eval/CLAUDE.md` too (also ignored).
    `test_docs_coverage.py::test_internal_doc_links_resolve` fails without it.
 
-**Start** (PowerShell, from the candidate worktree's root):
+**Start** (PowerShell). **The `cd` is not optional:** `python -m` imports
+`forecast_eval` from the current folder, and the default `--out` is relative to
+it.
 
 ```powershell
+cd D:\Users\squirrel\Documents\paper\myPaper\forecast_eval_folder\night\fullday_cand34
 uv run --no-sync python -m forecast_eval.live.cli --strategy fullday --broker dryrun --resume --warmup-days 15 --no-telegram
 ```
+
+**Check the banner before leaving it running.**
+- **Right folder:** the `LiveConfig[...]` line shows the candidate's settings
+  (for the iter34 candidate, `stride=10 ... min_prob=0.5`). On a first start
+  there is no `ledger:` line and no `resume: N inherited fill(s)` line.
+- **Wrong folder (`night\`):** the same command runs the **main checkout's**
+  config and writes into **live's `outputs\`**: live's ledger, restart guard,
+  bar cache and run folders. Its paper fills would land in the ledger the
+  owner seeds live from.
+  - **Happened 2026-10-26 11:50,** caught before any fill. Signs: banner
+    `stride=30 ... min_prob=0.65`, `ledger: 6 row(s) without a month stamped
+    TXFK6`, `resume: 6 inherited fill(s)`.
+  - **Recovery:**
+    1. Ctrl-C.
+    2. Confirm `fills_appended 0` in the summary, or remove any paper rows
+       from the live ledger.
+    3. Confirm `run_in_flight: false`.
+    4. Move the stray `live_<slug>_<ts>/` folder out of live's `outputs\`.
 
 - **`--no-telegram`:** its alerts would carry the same deployment name as live
   fullday. Read its state from its own `outputs/` (§3) instead.
