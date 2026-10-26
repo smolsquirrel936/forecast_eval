@@ -52,7 +52,7 @@ PARAMS: Dict[str, Any] = {
     "checkpoint": "Datadog/Toto-2.0-1B",
     "context_length": 3008,
     "horizon_bars": 30,
-    "stride_bars": 15,
+    "stride_bars": 10,
     # emitter
     "buy_threshold": 0.001,
     "sell_threshold": -0.001,
@@ -73,7 +73,7 @@ PARAMS: Dict[str, Any] = {
     # still opens and a run at 0.50 must be byte-identical to one without the
     # knob. The gate applies to opens only; min_prob (above) stays the exit
     # gate inside the emitter.
-    "entry_min_prob": 0.50,
+    "entry_min_prob": 0.60,
     # exit-side band — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param exit_threshold=...``.
     # Why:  reversal loop decision 8 (phase E). While positioned, an opposite
