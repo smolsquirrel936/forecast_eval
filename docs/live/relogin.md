@@ -45,8 +45,9 @@ open − 5 min ............ open − 1 min ...... open
 ## The deployments are staggered (since 2026-10-18)
 `force_refresh=True` opens its new connection ~30 s before the old one drops
 (Q9 below). With the owner and three deployments connected, three refreshes in
-the same second briefly made **7** against the cap of 5, and what Shioaji does
-above 5 has never been measured. Each deployment now starts its re-login window
+the same second briefly made **7** against the cap of 5, and what Shioaji did
+above 5 was then unmeasured (6 was measured on 2026-10-26: all coexist, the
+first session survives; [multi_deploy_probe.md](multi_deploy_probe.md)). Each deployment now starts its re-login window
 `stagger_slot × 40 s` late (08:40:00 / 08:40:40 / 08:41:20, and 14:55 likewise),
 so each spike clears before the next and the peak is 5. Later, never earlier,
 so the owner's 08:37–08:39 window stays clear. Verify stays at open − 1 min for
@@ -56,8 +57,9 @@ FeedWatch's lost-session re-login ([feedwatch.md](feedwatch.md)).
 
 **Hybrid has the fourth slot (since 2026-10-26)**, at 08:42:00 / 14:57:00. Its
 window is 2 min, still two attempts (tested). Owner plus four deployments is 5
-connections at steady state, so each refresh briefly makes 6; the hybrid plan's
-"Going live" step 3 measures what Shioaji does then, before hybrid's first start.
+connections at steady state, so each refresh briefly makes 6. Measured on
+2026-10-26: 6 logins coexist and the first stays usable (hybrid plan "Going
+live" step 3).
 
 ## The verify window
 One minute before the open, an injected health check runs — **an authenticated
