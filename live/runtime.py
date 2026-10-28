@@ -40,6 +40,7 @@ from ..execution import Execution
 from ..portfolio import Portfolio
 from ..strategy import wiring as strategy_wiring
 from ..trader import Trader
+from . import exit_state
 from .backfill import fetch_bars, fetch_bars_continuous
 from .broker.base import Broker
 from .broker.dryrun import DryRunBroker
@@ -315,7 +316,10 @@ class LiveRuntime:
     # ---- resuming into an open position ------------------------------------
 
     def adopt_position(self, *, timestamp: Any,
-                       fallback: Optional[Any] = None) -> Optional[dict]:
+                       fallback: Optional[Any] = None,
+                       exit_state_path: Optional[Any] = None,
+                       exit_state_injected: Optional[dict] = None,
+                       ) -> Optional[dict]:
         # Tech: read what the venue holds and seed the Trader's and Portfolio's
         #       mirrors from it. Returns a summary of what was adopted, or None
         #       when the account is flat or the broker cannot answer.
@@ -366,13 +370,38 @@ class LiveRuntime:
                 f"— flatten with `python -m forecast_eval.live.flatten`, then "
                 f"restart.")
         rule = self.loop.exit_rule
-        if rule is not None and not getattr(rule, "adoptable", False):
+        restorable = getattr(rule, "restorable", False)
+        if exit_state_injected and not restorable:
             raise ValueError(
-                f"cannot adopt a position while the ExitRule "
-                f"{type(rule).__name__} is configured: it is not adoptable — the "
-                f"entry bar index belongs to the previous process and is not "
-                f"recoverable, so any bars-held rule would measure from a "
-                f"sentinel.")
+                f"--exit-state was given, but the ExitRule "
+                f"{type(rule).__name__} has no restorable state to take it.")
+        # Tech: a rule that is neither adoptable nor restorable refuses; a
+        #       restorable one resolves its state now — typed, else from the
+        #       file — and refuses if neither can be trusted.
+        # Why:  resolved BEFORE the mirrors are seeded, so a refusal leaves the
+        #       runtime exactly as it found it. The state is checked against the
+        #       venue's side and entry here because those are the only facts
+        #       about the lot this process has (`exit_state.resolve`).
+        restore = None
+        if rule is not None and not getattr(rule, "adoptable", False):
+            if not restorable:
+                raise ValueError(
+                    f"cannot adopt a position while the ExitRule "
+                    f"{type(rule).__name__} is configured: it is not adoptable — "
+                    f"the entry bar index belongs to the previous process and is "
+                    f"not recoverable, so any bars-held rule would measure from a "
+                    f"sentinel.")
+            if exit_state_path is None and not exit_state_injected:
+                raise ValueError(
+                    f"cannot adopt a position while the ExitRule "
+                    f"{type(rule).__name__} is configured without its saved "
+                    f"state: no exit-state file was named and no --exit-state "
+                    f"was given.")
+            restore = exit_state.resolve(
+                keys=tuple(rule.state_keys),
+                side="LONG" if held.signed_qty > 0 else "SHORT",
+                entry_price=float(held.avg_price),
+                path=exit_state_path, injected=exit_state_injected)
         if self.trader.position != 0:
             raise ValueError(
                 f"adopt_position ran with the mirror already at "
@@ -407,6 +436,16 @@ class LiveRuntime:
             #       in for one; the numbers are indistinguishable otherwise.
             "source": source,
         }
+        # Tech: hand the resolved state to the rule against the snapshot the
+        #       loop will query, and report what was restored and from where.
+        # Why:  the snapshot carries the adopted entry identity (bar -1, venue
+        #       entry, side), which is the key a stateful rule checks on its
+        #       first bar — restoring under any other key would be reset there.
+        if restore is not None:
+            state, state_source = restore
+            rule.restore_state(self.trader.position_state(), state)
+            adopted["exit_state"] = state
+            adopted["exit_state_source"] = state_source
         if self.recorder is not None:
             self.recorder.record("position_adopted", **adopted)
         return adopted

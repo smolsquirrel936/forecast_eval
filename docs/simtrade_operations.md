@@ -48,6 +48,7 @@ production account.
 | `fills_<slug>.csv` | the deployment's fill [ledger](live/ledger.md), every soak epoch; absent = never filled | owner start-up seed, `--resume` replay |
 | `soak_epoch_<slug>.json` | the current [soak epoch](live/soak_epoch.md) and the retired ones | `--resume` / `--fresh-start` |
 | `live_restart_<slug>.json` | [RestartGuard](live/startup.md) state: `run_in_flight`, backoff, backfills today, `last_heartbeat` | every start |
+| `exit_state_<slug>.json` | a `restorable` exit rule's state for the held lot (fullday's lock: `best_price`), rewritten on change, deleted when flat ([exit_state](live/exit_state.md)); absent = flat or no stateful rule | `--resume` |
 | `live_account_<slug>.json` | the account fingerprint | every start |
 | `bars_cache_<slug>.csv` | warm-up bar cache, **rewritten only at start-up** ([seed_cache](live/seed_cache.md)) | every start |
 | `intents_<slug>.jsonl` / `events_<slug>.jsonl` | the [wire](live/intents.md): client → owner intents; owner → client fills and `position` events (one a second) | the running pair |
@@ -165,6 +166,23 @@ the previous process ([runtime.py](live/runtime.md) `adopt_position`,
 [exits/base.py](exits/base.md)). From 2026-10-12 to 10-14 every rule was
 refused, so a held lot had to be flattened.
 
+**A held lot resumes under a stateful rule too, if its state is known**
+(since 2026-10-29). A rule that declares itself `restorable` (fullday's
+break-even lock: the best price since entry) has its state written to
+`exit_state_<slug>.json` on every change while live
+([exit_state.py](live/exit_state.md)). `--resume` restores it from that file
+when the file matches the adopted lot's side and entry. Otherwise, type it:
+
+```powershell
+uv run --no-sync python -m forecast_eval.live.cli --strategy fullday --broker client --resume --exit-state best_price=<price> --i-understand-this-places-orders
+```
+
+A typed `--exit-state` overrides the file. Without either, the start is
+refused (exit 5) and the message names the keys to type. For a lock, the value
+is the best **bar price** since the entry fill: the highest for a long, the
+lowest for a short. Read it from the `bar` events in the run's `session.jsonl`
+while `position` is non-zero.
+
 Every restart writes a **new** `live_<slug>_<timestamp>/` folder, so one soak's
 artifacts are split across folders; the soak epoch is what ties them together.
 
@@ -199,8 +217,10 @@ Pick one.
   Nothing manages the position in between: no strategy, no exit, no stop-loss.
   Over a weekend that changes little, since the market is closed, but the
   Monday gap lands on it unmanaged. This is the **recommended** path under the
-  owner. A declared `stop_pct` resumes armed at the venue's entry (§5); only
-  an exit rule that is not `adoptable` refuses (exit 5) and forces a flatten.
+  owner. A declared `stop_pct` resumes armed at the venue's entry (§5), and a
+  `restorable` rule resumes from `exit_state_<slug>.json` or a typed
+  `--exit-state` (§5). Only an exit rule that is neither refuses (exit 5) and
+  forces a flatten.
 - **Flatten.** This must happen in session hours, with **all four processes
   stopped** first. Run `flatten --dry-run --out-parent outputs`, which is
   read-only and names whose lots are held, then the same command without

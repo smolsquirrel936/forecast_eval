@@ -15,6 +15,8 @@ take-profit, etc.
 | `PositionState` | dataclass | read-only open-position view: side, size, entry price/bar/timestamp |
 | `ExitRule` | ABC | `should_exit(position, market, bar_idx) -> bool` |
 | `ExitRule.adoptable` | class attr, default `False` | True when the rule reads only `side`/`size`/`entry_price` — safe on a live `--resume` |
+| `ExitRule.restorable`, `state_keys` | class attrs, default `False`, `()` | True when a non-adoptable rule's per-trade state round-trips as `{key: number}` |
+| `ExitRule.export_state()` / `restore_state(position, state)` | methods | the state to save (default `None`), and seeding it back (default raises) |
 
 ## Key points
 - An ExitRule expresses only the **decision** (close now or not); the Trader owns
@@ -28,6 +30,12 @@ take-profit, etc.
   price from the venue, but `entry_bar_idx` / `entry_timestamp` get sentinels.
   A rule opts in with `adoptable = True` only if it never reads those two;
   anything else (a time stop, a trail) is refused at start-up.
+- **`restorable` is the second way through** (2026-10-29). A rule whose state is
+  a few numbers (a break-even lock's best price since entry) exports it. Live
+  writes that state to `exit_state_<slug>.json`
+  ([live/exit_state.py](../live/exit_state.md)), and `--resume` restores it from
+  that file or from a typed `--exit-state KEY=VALUE`. A rule that is neither
+  adoptable nor restorable is still refused.
 
 ## Related
 [stop_loss.py](stop_loss.md) · [time_stop.py](time_stop.md) · [trader.py](../trader.md) · [SPEC §4.1](../../SPEC.md)

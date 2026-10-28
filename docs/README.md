@@ -124,6 +124,7 @@ Three invariants make this honest (all enforced in code + tests):
 | [live/v1c_check.py](live/v1c_check.md) | `kbars` convention probe | how the right-labelling was discovered |
 | [live/v72_probe.py](live/v72_probe.md) | simulation-ordering probe | how "can we even place a futures order?" was answered |
 | [live/credentials.py](live/credentials.md) | `load(deployment)` | which API key a deployment logs in with, and the guards that stop one being committed |
+| [live/exit_state.py](live/exit_state.md) | `ExitStateFile`, `resolve` | a stateful exit rule's state on disk (`exit_state_<slug>.json`), so `--resume` can continue a held lot — or a typed `--exit-state` |
 | [live/soak_epoch.py](live/soak_epoch.md) | soak identity | what `--fresh-start` and `--resume` actually mean across a restart |
 | [live/seed_cache.py](live/seed_cache.md) | warm-up bar cache | why a restart does not re-backfill from scratch |
 | [live/flatten.py](live/flatten.md) | close whatever is held | the one tool that closes a position nothing else can — and now says whose lots it is closing |

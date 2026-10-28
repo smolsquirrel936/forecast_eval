@@ -83,6 +83,7 @@ from forecast_eval.live.config import CONFIGS, PINNED, config_named  # noqa: E40
 from forecast_eval.param_override import parse_overrides       # noqa: E402
 from forecast_eval.strategy import wiring as strategy_wiring   # noqa: E402
 from forecast_eval.live import credentials                       # noqa: E402
+from forecast_eval.live import exit_state                        # noqa: E402
 from forecast_eval.live.ledger import (FillLedger, ledger_path,     # noqa: E402
                                        net_position, open_position)
 from forecast_eval.live.contracts import (                        # noqa: E402
@@ -419,6 +420,17 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--param", action="append", default=[], metavar="KEY=VALUE",
                     help="Override one strategy knob, e.g. --param min_prob=0.6. "
                          "Repeatable.")
+    # Tech: repeatable KEY=VALUE naming a restorable exit rule's state, used by
+    #       `--resume` in place of `exit_state_<slug>.json`.
+    # Why:  a stateful exit rule (fullday's break-even lock) can only resume a
+    #       held lot with the state the dead process had. The file normally
+    #       carries it; this is for a lot the file never saw, or a file that is
+    #       wrong. It overrides the file outright, so it is typed, not defaulted.
+    ap.add_argument("--exit-state", action="append", default=[],
+                    metavar="KEY=VALUE",
+                    help="With --resume: the held lot's exit-rule state, e.g. "
+                         "--exit-state best_price=47376. Overrides "
+                         "exit_state_<slug>.json. Repeatable.")
     ap.add_argument("--contract", default="TXFR1")
     ap.add_argument("--duration-minutes", type=float, default=None,
                     help="Stop after this long. Default: run until the session "
@@ -598,6 +610,21 @@ def main(argv=None) -> int:
     #       has only two sources, so a comprehension beats a shared helper.
     strategy_origins = {k: ("param" if k in strategy_overrides
                             else cfg.strategy_package) for k in strategy_params}
+
+    # Tech: parse --exit-state here too, and refuse it without --resume.
+    # Why:  the same "pure argument work runs first" rule as --param above. The
+    #       state belongs to a lot being resumed; on any other start it would be
+    #       silently ignored, which is the mismatch a typed override must not
+    #       produce.
+    try:
+        exit_state_injected = exit_state.parse_injection(args.exit_state)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 5
+    if exit_state_injected and not args.resume:
+        print("ERROR: --exit-state is resume state; it needs --resume",
+              file=sys.stderr)
+        return 5
 
     # Tech: no provenance gate. An unprovenanced deployment runs; its lack of a
     #       `results.tsv` row is recorded, not enforced.
@@ -971,20 +998,46 @@ def main(argv=None) -> int:
         #       net non-zero, and the next dry-run fill pairs against a lot the
         #       Trader does not know it has.
         inherited = ledger.replay() if args.resume else []
+        exit_state_path = _state_path(state_file.parent, cfg.policy,
+                                      "exit_state")
         try:
             adopted = rt.adopt_position(timestamp=datetime.now(),
-                                        fallback=open_position(inherited))
+                                        fallback=open_position(inherited),
+                                        exit_state_path=exit_state_path,
+                                        exit_state_injected=exit_state_injected)
         except ValueError as exc:
             alerter.fatal("startup_refused", str(exc), gate="adopt_position")
             return 5
         if adopted:
             whence = ("the venue" if adopted["source"] == "venue"
                       else f"the {cfg.policy.cache_slug()} ledger")
+            restored = ""
+            if "exit_state" in adopted:
+                state_from = ("--exit-state"
+                              if adopted["exit_state_source"] == "injected"
+                              else exit_state_path.name)
+                restored = (f"; exit state {adopted['exit_state']} "
+                            f"from {state_from}")
             alerter.info("resumed",
                          f"adopted {adopted['position']:+d} lot(s) @ "
-                         f"{adopted['entry_price']:.2f} from {whence}")
-        elif args.broker in ORDER_PLACING_BROKERS:
-            print("this deployment is flat — starting from no position")
+                         f"{adopted['entry_price']:.2f} from {whence}{restored}")
+        else:
+            if exit_state_injected:
+                alerter.warn("exit_state_unused",
+                             f"--exit-state {exit_state_injected} was given "
+                             f"but there is no held lot to restore it into")
+            if args.broker in ORDER_PLACING_BROKERS:
+                print("this deployment is flat — starting from no position")
+
+        # Tech: attach the exit-state writer when the rule is restorable.
+        # Why:  from the first bar on, every change to the rule's state lands in
+        #       `exit_state_<slug>.json`, so the next restart can resume this lot
+        #       without anyone typing it (`live/exit_state.py`).
+        if getattr(rt.loop.exit_rule, "restorable", False):
+            rt.loop.exit_state_sink = exit_state.ExitStateFile(
+                exit_state_path, rule=rt.loop.exit_rule,
+                slug=cfg.policy.cache_slug(), contract=ledger.contract,
+                soak_id=epoch.soak_id if epoch else None, recorder=recorder)
 
         # Tech: replay this deployment's fills for the live soak, and seed the
         #       loop's list with them; fall back to one synthetic opening fill

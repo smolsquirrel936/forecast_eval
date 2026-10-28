@@ -6,7 +6,7 @@ causes the Trader to submit a closing limit at `current_price ∓ aggression`.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from typing import Dict, Literal, Optional, Tuple
 
 from ..events import MarketEvent
 
@@ -37,6 +37,35 @@ class ExitRule(ABC):
     #       adopted position; the default keeps any rule that has not said so
     #       — a time stop, a trail — refused rather than timed from a sentinel.
     adoptable: bool = False
+
+    # Tech: True when a rule that is NOT adoptable can still be resumed, because
+    #       its per-trade state round-trips through `export_state` /
+    #       `restore_state` as a flat dict of numbers named in `state_keys`.
+    #       Defaults to False with no keys; a subclass opts in.
+    # Why:  a stateful rule (a break-even lock's best price since entry) cannot
+    #       be rebuilt from the venue's side and entry, but it can be written to
+    #       a file while live (`live/exit_state.py`) and read back, or typed in
+    #       by hand, at the next `--resume`. Named keys are what make the typed
+    #       form checkable: an unknown or missing key refuses the restart.
+    restorable: bool = False
+    state_keys: Tuple[str, ...] = ()
+
+    def export_state(self) -> Optional[Dict[str, float]]:
+        # Tech: the rule's per-trade state as `{key: number}`, or None when it
+        #       holds none (no position queried yet, or a stateless rule).
+        # Why:  the live loop writes this after every bar's exit check, so it
+        #       must be cheap and JSON-safe; None means "nothing worth saving".
+        return None
+
+    def restore_state(self, position: PositionState,
+                      state: Dict[str, float]) -> None:
+        # Tech: seed the per-trade state for `position` from `state`, so the
+        #       next `should_exit` continues the trade instead of restarting it.
+        # Why:  called once by `adopt_position` on a restorable rule, before
+        #       the first bar; a rule that has not opted in must never be
+        #       handed state it would silently ignore.
+        raise NotImplementedError(
+            f"{type(self).__name__} has no restorable state")
 
     @abstractmethod
     def should_exit(

@@ -57,6 +57,7 @@ live half and V3's shadow parity are both read back from.
 | `--resume` | off | Continue the current [soak epoch](soak_epoch.md). **Required with an order-placing broker** (with `--fresh-start`, exactly one). Bootstraps the first epoch if none exists yet |
 | `--flatten-aggression-ticks` | `5` | how far through the touch a FLATTEN close is priced before going IOC (`shioaji` only) |
 | `--strategy {night,day,fullday}` | `night` | the deployment: its session policy and its `strategy/<session>/` package, which is where every strategy value now lives (D2). **`--config` is an accepted alias** for the same argument (D5). Since 2026-09-09 an **UNTUNED deployment is no longer refused** — see below |
+| `--exit-state KEY=VALUE` | — | with `--resume` only: the held lot's exit-rule state (e.g. `best_price=47376`), overriding `exit_state_<slug>.json`. Repeatable; keys must be exactly the rule's `state_keys` ([exit_state.py](exit_state.md)) |
 | `--param KEY=VALUE` | — | override one strategy knob, repeatable, coerced against the package's `PARAMS` (D7). A run carrying one is not comparable to any `results.tsv` row; `params.json` records the resolved set |
 | `--contract` | `TXFR1` | resolved by attribute, falling back to key lookup |
 | `--duration-minutes` | none | stop after this long; otherwise runs until Ctrl-C |
@@ -99,7 +100,7 @@ artifacts. What no longer happens is a refusal.
 | `2` | credentials not in the environment |
 | `3` | [RestartGuard](startup.md) refused to start (backoff, backfill cap, or quota headroom) |
 | `4` | **flatten incomplete** — a position was still open after a `FLATTEN` halt |
-| `5` | refused before the first bar — no acknowledgement flag, neither/both of `--fresh-start`/`--resume`, `--fresh-start` against a non-flat account, or a held position that cannot be adopted (above `max_position`, or an `ExitRule` is configured), *(the untuned-deployment refusal was removed 2026-09-09 — see below)* |
+| `5` | refused before the first bar — no acknowledgement flag, neither/both of `--fresh-start`/`--resume`, `--fresh-start` against a non-flat account, or a held position that cannot be adopted (above `max_position`, an `ExitRule` that is neither adoptable nor restorable, or a restorable one whose state is neither typed nor on disk for this lot), a malformed `--exit-state` or one without `--resume`, *(the untuned-deployment refusal was removed 2026-09-09 — see below)* |
 
 ## Start-up order (each step gates the next)
 1. **`RestartGuard.begin`** — *before* login, before any query. Every start
