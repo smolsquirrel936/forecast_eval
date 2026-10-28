@@ -18,6 +18,7 @@ transcribed **unchanged**. That equivalence is the V0 gate.
 |---|---|---|
 | `LiveLoop(forecaster, emitter, broker, trader, portfolio, *, exit_rule, forced_close_on_session_end, history_window, recorder, rails, alerter, expected_position)` | class | collaborators are injected, not constructed |
 | `expected_position` | ctor arg | optional `callable() -> Optional[int]`: what WE believe the ACCOUNT holds. `None`, or a call returning `None`, keeps the deployment's own position as the reconcile mirror (§16) |
+| `exit_state_sink` | attribute, default `None` | set by the CLI to an [ExitStateFile](exit_state.md); `update(position_or_None, market)` runs after every bar's exit check, so a restorable rule's state reaches disk. Skipped on a halted bar with the rest of Step 2 |
 | `on_bar(market)` | method | the whole per-tick body for one bar |
 | `result()` | method | packs into the same `BacktestResult` the backtest returns |
 | `fills` / `orders` / `forecasts` / `signals` | attribute | the audit trail as it accumulates |

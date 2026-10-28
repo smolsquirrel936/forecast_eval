@@ -90,6 +90,14 @@ class LiveLoop:
         #       unaffected either way; this only matters once two deployments
         #       share a venue book (§14).
         self.expected_position = expected_position
+        # Tech: an optional writer with `update(position_state_or_None, market)`,
+        #       called after every bar's exit check; None by default and set by
+        #       the entry point (`live/exit_state.py` `ExitStateFile`).
+        # Why:  a fifth passenger, optional for the same parity reason as the
+        #       four above. It persists a restorable exit rule's per-trade state
+        #       so a restart can resume the lot instead of refusing it, and it
+        #       only reads the rule after the rule has decided.
+        self.exit_state_sink: Any = None
         self._stride = forecaster.forecast_stride_bars
         self._warmup = forecaster.warmup_bars
 
@@ -339,6 +347,14 @@ class LiveLoop:
                     self._n_orders += 1
                     self._n_exits += 1
                     self._note_order(order, "exit", bar_idx)
+            # Tech: hand the writer this bar's position (None when flat) once
+            #       the rule has seen the bar.
+            # Why:  after `should_exit`, so the saved state includes this bar's
+            #       price — exactly what the rule would carry into the next one.
+            #       Skipped with the rest of Step 2 on a halted bar, when the
+            #       rule is not queried and its state does not move either.
+            if self.exit_state_sink is not None:
+                self.exit_state_sink.update(pos, market)
 
         # Step 3 — forecast boundary.
         # Tech: fire only once warm-up is complete and we are exactly on a stride

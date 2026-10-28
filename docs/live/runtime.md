@@ -25,7 +25,7 @@ first live decision, and only the first is obvious.
 | Symbol | Kind | One-liner |
 |---|---|---|
 | `LiveRuntime(config, *, broker=None, recorder=None, rails=None, rails_config=None, simulation=True, emitter_prime_boundaries=900, tick_capture=None)` | class | builds the whole stack; defaults to [DryRunBroker](broker/dryrun.md) |
-| `adopt_position(*, timestamp, fallback=None)` | method | seed both mirrors from the venue's held position — or from `fallback` when the broker has no venue — or `None` when flat; raises when the state cannot be adopted |
+| `adopt_position(*, timestamp, fallback=None, exit_state_path=None, exit_state_injected=None)` | method | seed both mirrors from the venue's held position — or from `fallback` when the broker has no venue — or `None` when flat; restores a `restorable` exit rule's state ([exit_state.py](exit_state.md)); raises when the state cannot be adopted |
 | `venue_position` | attribute | what the venue answered at start-up; `None` when none was asked |
 | `fetch_warmup_bars(api, contract, start, end, *, cache_path=None, front_month_at=None)` | method | [fetch_bars_continuous](backfill.md) with *this* runtime's policy — the caller never picks one; `contract` may be a list, spliced on volume |
 | `settle_rolled_leg(*, price, timestamp, session=None)` | method | close the expiring month in both mirrors, add the settlement to `loop.fills` (so the ledger and `trades.csv` see it), and arm the same exposure for re-entry (§2.6) |
@@ -82,6 +82,7 @@ bar. Held once, at start-up — the per-bar path stays on `broker_position()`.
 | 1 lot | adopted at the **venue's** average entry price |
 | Above `max_position` | raises — `Trader.on_fill` cannot average a second lot's entry (§2.10) |
 | An `ExitRule` that is not `adoptable` (e.g. `TimeStop`) | raises — the entry *bar index* belongs to the dead process |
+| A `restorable` `ExitRule` (fullday's `BreakEvenLock`) | adopted when its state resolves — typed `--exit-state` first, else `exit_state_<slug>.json` for the same side and entry — and restored into the rule; raises otherwise, before seeding anything ([exit_state.py](exit_state.md)) |
 | An `adoptable` `ExitRule` (`EntryPercentStop`, `FixedStopLoss`) | adopted — the rule reads only side and entry price, both seeded from the venue |
 | Called twice | raises — adoption seeds a fresh mirror, once |
 
