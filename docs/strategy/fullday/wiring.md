@@ -64,8 +64,10 @@ factory. This is the file a search for this session edits first.
   trail, composed with `stop_pct` through the any-of seam. Both `None` — the
   inert control: `make_strategy` returns the bare `EntryPercentStop`, so runs
   are byte-identical to the pre-knob package. The rules are stateful
-  (`adoptable=False`), so a live `--resume` into a held lot is refused for
-  them; a roll restarts their state.
+  (`adoptable=False`) but restorable: a live `--resume` into a held lot
+  restores their best price from `exit_state_<slug>.json` or a typed
+  `--exit-state`, and refuses without one. A roll keeps their state (the
+  Trader carries the original entry; [exits.md](exits.md)).
 - **`channel_exit_bars` (added `fullday_rev_iter29`, reversal decision 11,
   phase H)** is a package-declared knob for the price-channel exit in
   [exits.py](exits.md): once the position is at least N bars old, exit on a

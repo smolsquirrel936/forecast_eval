@@ -286,14 +286,21 @@ half manages it (`strategy/hybrid/router.py`).
     - **Resume:** a position carried into a `--resume` start is judged against
       the current width at once. One already beyond it closes on the first
       tick.
-16. **Fullday cannot `--resume` into a held lot** (since 2026-10-27). Its
-    break-even lock tracks the best price since entry, which a dead process
-    takes with it, so the lock is not `adoptable` and `adopt_position` refuses
-    with exit 5.
-    - **Stop and restart fullday only while it is flat.**
-    - **To restart it while it holds:** flatten first (`live/flatten.py`, in
-      session hours), then start with `--fresh-start`.
-    - **Day and night are unaffected:** their percent stops still resume.
+16. **Fullday resumes a held lot only with its lock's best price** (since
+    2026-10-29; from 10-27 to 10-29 it could not resume at all). The break-even
+    lock tracks the best price since entry, which the venue cannot supply, so
+    the lock is not `adoptable`. It is `restorable`: live writes the best price
+    to `outputs/exit_state_day_night.json` on every change, and `--resume`
+    restores it from there.
+    - **No file for this lot** (opened before 2026-10-29, or the file is from
+      another lot): `adopt_position` refuses with exit 5 and names the fix:
+      `--exit-state best_price=<price>`, the best bar price since the entry
+      fill (highest for a long, lowest for a short; the `bar` events in
+      `session.jsonl` while `position` is non-zero).
+    - **Flattening is no way out on the shared account:** `flatten` closes the
+      account's net, which can be 0 while fullday holds (10-29: day −1, fullday
+      +1).
+    - **Day and night are unaffected:** their percent stops resume as before.
 17. **A weekday market holiday can halt a running deployment.**
     `SessionPolicy.holidays` is empty, so a holiday's session reads as open.
     Once a deployment has seen ticks, 900 s of holiday silence halts it with

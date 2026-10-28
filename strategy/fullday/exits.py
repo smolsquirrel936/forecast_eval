@@ -21,9 +21,13 @@ band) or the Calmar (narrow band). These rules read the tape, not the model:
     percent stop composes with the protection rules (decision 9).
 
 The rules are STATEFUL (best price since entry, arming latch) and deliberately
-``adoptable = False``: a live ``--resume`` into a held lot cannot recover the
-best price the dead process saw, so ``live/runtime.py`` refuses the adoption
-rather than run a lock armed on invented state. A live roll closes and reopens
+``adoptable = False``: the venue cannot tell a restart the best price the dead
+process saw. The lock and the trail are ``restorable`` instead (2026-10-29):
+their whole state is that one ``best_price``, which live writes to
+``exit_state_<slug>.json`` and ``--resume`` restores (or the operator types with
+``--exit-state best_price=...``); ``live/runtime.py`` still refuses an adoption
+with neither, rather than run a lock armed on invented state. ``ChannelExit``
+carries N bars of prices and stays refused. A live roll closes and reopens
 the position, but the fullday Trader carries the original entry
 (entry_bar_idx/price/side, the rules' state key) onto the re-open
 (``candidate_fullday_iter34``), so the rules keep their state across a roll, as
@@ -47,7 +51,25 @@ from ...exits.pct_stop import EntryPercentStop
 GIVEBACK_ARM_PCT = 0.02
 
 
-class BreakEvenLock(ExitRule):
+class _BestPriceState:
+    # Tech: the restorable half of a rule whose per-trade state is the best
+    #       price since entry (`_best`) under the entry-identity key (`_key`).
+    # Why:  BreakEvenLock and GivebackTrail track exactly the same quantity, so
+    #       one `best_price` key restores either — and AnyOf can hand the same
+    #       typed value to both. Restoring under the adopted snapshot's identity
+    #       is what stops `should_exit`'s new-trade check resetting it.
+    restorable = True
+    state_keys = ("best_price",)
+
+    def export_state(self):
+        return None if self._best is None else {"best_price": self._best}
+
+    def restore_state(self, position: PositionState, state) -> None:
+        self._key = (position.entry_bar_idx, position.entry_price, position.side)
+        self._best = float(state["best_price"])
+
+
+class BreakEvenLock(_BestPriceState, ExitRule):
     """G1: lock a break-even exit once the trade has been well in profit."""
 
     # Tech: stateful — tracks the best price since entry — so the rule cannot
@@ -103,7 +125,7 @@ class BreakEvenLock(ExitRule):
         return armed and market.price >= position.entry_price
 
 
-class GivebackTrail(ExitRule):
+class GivebackTrail(_BestPriceState, ExitRule):
     """G2: once armed (2% in favour), exit on giving back a fraction of the max gain."""
 
     # Tech: stateful — best price since entry plus the arm latch.
@@ -230,6 +252,40 @@ class AnyOf(ExitRule):
         #       must not run one adoptable and one unadoptable rule as a set.
         self.rules = list(rules)
         self.adoptable = all(r.adoptable for r in self.rules)
+        # Tech: restorable when every member is adoptable or restorable and at
+        #       least one is restorable; the keys are the union of the
+        #       restorable members'.
+        # Why:  the same "as resumable as its least resumable member" rule as
+        #       `adoptable` — one ChannelExit in the set keeps the whole set
+        #       refused. The adoptable members (the percent stop) need nothing.
+        self._stateful = [r for r in self.rules if not r.adoptable]
+        self.restorable = bool(self._stateful) and all(
+            r.restorable for r in self._stateful)
+        self.state_keys = tuple(sorted(
+            {k for r in self._stateful if r.restorable for k in r.state_keys}))
+
+    def export_state(self):
+        # Tech: merge the stateful members' states; None until every one holds
+        #       some.
+        # Why:  shared keys mean the same quantity (`_BestPriceState`), so the
+        #       first member's value stands. They can differ only after a bar
+        #       where an earlier member fired and short-circuited a later one's
+        #       update, and that bar has already submitted the close.
+        merged = {}
+        for rule in self._stateful:
+            state = rule.export_state()
+            if state is None:
+                return None
+            for key, value in state.items():
+                merged.setdefault(key, value)
+        return merged
+
+    def restore_state(self, position: PositionState, state) -> None:
+        # Tech: hand each stateful member the keys it declares.
+        # Why:  `adopt_position` has already checked `state` carries exactly
+        #       `state_keys`, so every member finds its own.
+        for rule in self._stateful:
+            rule.restore_state(position, {k: state[k] for k in rule.state_keys})
 
     def should_exit(
         self,

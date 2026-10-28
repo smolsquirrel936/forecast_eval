@@ -483,16 +483,14 @@ uv run --no-sync python -m forecast_eval.live.cli --strategy fullday --broker dr
   did in 0.4 % of windows.
 - **`--resume`:** replays its own ledger and adopts the paper position.
 
-**Restart limit: a held paper position cannot be resumed under a stateful
-exit rule.** `adopt_position` refuses (exit 5) an exit rule that is not
-`adoptable`, and fullday's break-even lock is not: its best price belongs to
-the dead process. So:
-
-- **Restart the candidate only while it is flat.** Leave it running through
-  weekends and pauses (§6.3); it idles outside its sessions.
-- **If it must stop while holding,** restart it without `--resume`. It then
-  starts flat, and the forward record has a gap at that point, which must be
-  noted where the result is read.
+**Restart under a stateful exit rule** (since 2026-10-29). Fullday's
+break-even lock is not `adoptable`, but it is `restorable`: the candidate
+writes its best price to `exit_state_<slug>.json` in its own `outputs/`, and
+`--resume` restores it from there (§5). If the file is missing or belongs to
+another lot, the start refuses (exit 5). Then either type the state with
+`--exit-state best_price=<price>`, or restart without `--resume`. In the
+second case it starts flat, and the forward record has a gap at that point,
+which must be noted where the result is read.
 
 **Rolls:** it rolls on its own, like any deployment (§6.5), through the same
 runtime path. A trader with entry filters needs the runtime's `rolling()` hook
@@ -733,9 +731,10 @@ fullday trades it from the 2026-10-27 restart.
   0.03, `reentry_cooldown_signals` 16. Details: `strategy/README.md`.
 - **Live roll fixes it carries:** the `rolling()` hook (main `825f069`); the
   cooldown lets a roll's re-open through; the re-open keeps the original entry.
-- **Restart rule:** fullday **cannot `--resume` into a held lot**, because the
-  lock is not adoptable (exit 5). Stop it only while flat, or flatten first
-  and use `--fresh-start`.
+- **Restart rule:** until 2026-10-29, fullday **could not `--resume` into a
+  held lot**, because the lock is not adoptable (exit 5). Since then, the lock
+  is restorable: `--resume` restores its best price from
+  `exit_state_day_night.json`, or from a typed `--exit-state` (§5).
 - **The held-out numbers are optimistic.** The config was chosen with the
   held-out window (`autoresearch_trading_plan_fullday_reversal.md`, phase 2
   Result), so this soak is its first clean test.
@@ -904,6 +903,9 @@ repeat step 5 only; the ledgers are already stamped.
 | 2026-10-20 14:59 | **false FATAL `session_unverified` from day and fullday.** `_verify` (`live/cli.py:1201`) requires a tick between the 14:55/14:56 re-login and 14:59; held on `TXFK6`, the first trial prints came at 14:59:50 and 14:59:55, after the check (14:59:00) and its recovery (~14:59:21). Not a dead feed: `usage()` passed, `TXFK6` had no trial print from 14:50 either (before the re-login), and normal ticks resumed at 15:00 with no repair. Night, still on `TXFJ6` (~12 trial prints a minute), passed. `roll_backwards_ignored` at the same re-logins is correct: `TXFR1` still names 202610 until expiry |
 | 2026-10-20 16:17–16:18 | **owner restarted alone on November.** Ctrl-C 16:17:24. `--contract TXF202611` refused at once (`RuntimeError: contract 'TXF202611' not found via api.Contracts.Futures.TXF`; nothing placed). **`--contract TXFK6` works** (the container is keyed by code): serving 16:18:43, seeded day 0, night +1 @46418, day_night −1 @46421, account +0, agreed with the venue. 79 s silent, under the deployments' 90 s `owner_timeout`: no halt. Ticks checked after: all three on `TXFK6`, per-minute counts identical, lag ~1.07 s |
 | 2026-10-24 (nothing running) | **roll re-open entries re-priced to November** in `fills_night.csv` and `fills_day_night.csv`. Each is set to the last `TXFK6` print at or before its fill instant in the run's `ticks.csv`, and the fee is recomputed at 0.0002: night BUY 15:40:04.583 46418 → **46581** (print 15:40:04.304), fullday SELL 12:48:10.742 46421 → **46588** (print 12:48:08.762). Both lots had already closed, so this changes realized P&L. Night's LONG to 46828 goes from +410 to **+247** gross (net 391.35 → 228.32). Fullday's SHORT to 47408 goes from −987 to **−820** (net −1005.77 → −838.80). The newest run folders' `fills.csv`/`trades.csv` (`live_night_20261020_233853`, `live_day_night_20261020_233915`) were corrected to match and checked against `build_trades`. The 10-19 run folders are kept as recorded. Nets unchanged: night −1 @45621, fullday flat. Originals in `output_backup/outputs_20261027/_backup_roll_entryfix_20261024/` |
+| 2026-10-29 02:19–02:30 | **network drop; all stopped by hand.** From 02:19:47, every FeedWatch check was `unreachable` (`NotReady`). Re-logins were then refused with `ip: 49.218.229.188 not allow.` (a new public IP after the reconnect). The owner raised `owner_session_lost` at 02:26 after 4 re-logins. Ctrl-C 02:29:46–02:30:12, owner last, all clean; nothing filled during the outage. Held: day −1 @ 47025, fullday +1 @ 46616; owner seed `account: 0` (the two lots net out at the venue) |
+| 2026-10-29 02:42 | owner, day, night and hybrid restarted (`--resume`). **Fullday refused** (exit 5, gate `adopt_position`, `AnyOf` not adoptable: the break-even lock's best price died with the process). `flatten` was no way out: the account's net was 0 |
+| 2026-10-29 | **exit-rule state on disk, user go.** `main` `c9c539b`: `ExitRule.restorable`, `live/exit_state.py` (`exit_state_<slug>.json` written on change, `--exit-state KEY=VALUE` overrides it). On `simtrade_0929`: the lock and the trail restore `best_price`. Fullday's state for the held lot was reconstructed from `live_day_night_20261027_074029/session.jsonl`: highest bar price while holding = **47376** (10-28 15:23), +1.63 %, below the lock's arm at 48014.5, so the lock was unarmed. Fullday's `strategy_sha` changes; trading does not (`should_exit` is untouched, and only live calls the new methods) |
 
 **Open questions:**
 

@@ -310,3 +310,88 @@ def test_channel_composes_through_wiring():
 def test_wiring_rejects_bad_channel_exit_bars():
     with pytest.raises(ValueError, match="channel_exit_bars"):
         make_strategy(warmup_bars=100, channel_exit_bars=0)
+
+
+# -------- restoring the state on a live resume (2026-10-29) ---------------------
+
+def test_a_restored_armed_lock_fires_on_the_first_bar():
+    """The point of restoring: an armed lock resumes armed. A fresh lock seeded
+    at the restart's price would hold at the entry — the protection lost."""
+    lock = BreakEvenLock(lock_after_pct=0.02)
+    adopted = _pos(bar=-1)
+    lock.restore_state(adopted, {"best_price": 103.0})
+    assert lock.should_exit(adopted, _mkt(100.0), bar_idx=0) is True
+    assert BreakEvenLock(lock_after_pct=0.02).should_exit(
+        adopted, _mkt(100.0), bar_idx=0) is False
+
+
+def test_a_restored_unarmed_lock_still_arms_later():
+    lock = BreakEvenLock(lock_after_pct=0.02)
+    adopted = _pos(bar=-1)
+    lock.restore_state(adopted, {"best_price": 101.5})
+    assert lock.should_exit(adopted, _mkt(100.0), bar_idx=0) is False
+    assert lock.should_exit(adopted, _mkt(102.0), bar_idx=1) is False
+    assert lock.should_exit(adopted, _mkt(100.0), bar_idx=2) is True
+
+
+def test_the_lock_exports_its_best_price():
+    lock = BreakEvenLock(lock_after_pct=0.02)
+    assert lock.export_state() is None
+    for px in (100.5, 102.5, 101.0):
+        lock.should_exit(_pos(), _mkt(px), bar_idx=10)
+    assert lock.export_state() == {"best_price": 102.5}
+
+
+def test_a_restored_trail_keeps_its_max_gain():
+    trail = GivebackTrail(giveback_frac=0.5)
+    adopted = _pos(bar=-1)
+    trail.restore_state(adopted, {"best_price": 110.0})   # max gain 10
+    assert trail.should_exit(adopted, _mkt(105.1), bar_idx=0) is False
+    assert trail.should_exit(adopted, _mkt(105.0), bar_idx=1) is True
+
+
+def test_anyof_with_the_lock_is_restorable_by_best_price():
+    stop = EntryPercentStop(stop_pct=0.05)
+    lock = BreakEvenLock(lock_after_pct=0.02)
+    combo = AnyOf([stop, lock])
+    assert combo.adoptable is False and combo.restorable is True
+    assert combo.state_keys == ("best_price",)
+    combo.restore_state(_pos(bar=-1), {"best_price": 103.0})
+    assert lock.export_state() == combo.export_state() == {"best_price": 103.0}
+
+
+def test_anyof_hands_one_best_price_to_the_lock_and_the_trail():
+    lock = BreakEvenLock(lock_after_pct=0.02)
+    trail = GivebackTrail(giveback_frac=0.5)
+    combo = AnyOf([EntryPercentStop(stop_pct=0.05), lock, trail])
+    combo.restore_state(_pos(bar=-1), {"best_price": 110.0})
+    assert lock.export_state() == trail.export_state() == {"best_price": 110.0}
+
+
+def test_a_channel_in_the_set_keeps_it_refused():
+    """ChannelExit carries N bars of prices, not a best price: not restorable."""
+    combo = AnyOf([BreakEvenLock(lock_after_pct=0.02),
+                   ChannelExit(channel_exit_bars=3)])
+    assert combo.restorable is False
+
+
+def test_the_live_fullday_rule_is_restorable():
+    """The adopted config (iter34: stop 0.05 + lock 0.03) — the rule that refused
+    to resume on 2026-10-29."""
+    rule = make_strategy(warmup_bars=100)["exit_rule"]
+    assert rule.adoptable is False
+    assert rule.restorable is True and rule.state_keys == ("best_price",)
+
+
+@pytest.mark.usefixtures("cheap_strategy")
+def test_a_resume_restores_the_live_rule(tmp_path):
+    from forecast_eval.live.broker.base import HeldPosition
+
+    from .test_live_resume import NOW, _runtime
+    rt = _runtime(HeldPosition(1, 46616.0))
+    rule = rt.loop.exit_rule = make_strategy(warmup_bars=100)["exit_rule"]
+    adopted = rt.adopt_position(timestamp=NOW,
+                                exit_state_path=tmp_path / "absent.json",
+                                exit_state_injected={"best_price": 47376.0})
+    assert adopted["exit_state_source"] == "injected"
+    assert rule.export_state() == {"best_price": 47376.0}

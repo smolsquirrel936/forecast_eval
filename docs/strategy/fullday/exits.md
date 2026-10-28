@@ -20,10 +20,15 @@ that lets them compose with the shared percent stop.
 | `GIVEBACK_ARM_PCT` | constant | the give-back trail's arm level (0.02) |
 
 ## Key points / gotchas
-- **Stateful, therefore `adoptable = False`.** Both protection rules track the
-  best price since entry, so a live `--resume` that adopts a held lot
-  (`live/runtime.py` `adopt_position`) is refused for them — the best price
-  belongs to the dead process and must not be invented.
+- **Stateful, therefore `adoptable = False` — but restorable** (2026-10-29).
+  Both protection rules track the best price since entry, which the venue
+  cannot tell a restart. Their whole state is that one number, so they declare
+  `restorable` with `state_keys = ("best_price",)` (a shared `_BestPriceState`
+  mixin). Live writes it to `exit_state_<slug>.json`
+  ([live/exit_state.py](../../live/exit_state.md)), and `--resume` restores it
+  from that file or from a typed `--exit-state best_price=...`. With neither,
+  `adopt_position` still refuses: the best price must not be invented.
+  `ChannelExit` carries N bars of prices and is **not** restorable.
 - **Their state survives a live roll.** The rules key their state on the entry's
   `(entry_bar_idx, entry_price, side)` and restart on a new one. A roll closes
   and re-opens the position, but the fullday [Trader](trader.md) carries the
@@ -45,7 +50,10 @@ that lets them compose with the shared percent stop.
 - **`AnyOf` short-circuits** — the first rule to fire wins the tick, and later
   rules' state updates are skipped. Safe: the close is already submitted, and
   every stateful rule resets on the next trade's new entry identity. The
-  composite's `adoptable` is the AND of its members'.
+  composite's `adoptable` is the AND of its members'. It is `restorable` when
+  every non-adoptable member is, with the union of their keys. On restore it
+  hands the one `best_price` to the lock and the trail alike, and on export
+  the first member's value stands.
 - **Widths are validated in the constructors** (`0 < lock_after_pct < 1`,
   `0 < giveback_frac < 1`), which `wiring.make_strategy` surfaces as
   `ValueError`.
