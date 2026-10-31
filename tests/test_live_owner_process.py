@@ -895,15 +895,56 @@ def test_a_deployment_that_has_never_spoken_is_not_stale(tmp_path):
     assert owner.stale_deployments() == []
 
 
-def test_a_silent_deployment_is_reported(tmp_path):
+def _old_heartbeat(tmp_path, slug="day", age=9999.0):
     import json
     import time
     from forecast_eval.live.intents import intent_path
-    intent_path(tmp_path, "day").write_text(
-        json.dumps({"seq": 1, "ts": time.time() - 9999, "kind": "heartbeat"})
+    intent_path(tmp_path, slug).write_text(
+        json.dumps({"seq": 1, "ts": time.time() - age, "kind": "heartbeat"})
         + "\n", encoding="utf-8")
-    owner, _ = _owner(tmp_path, deployment_timeout=60.0)
+
+
+def test_a_silent_deployment_is_reported(tmp_path):
+    _old_heartbeat(tmp_path)
+    clock = _Clock()
+    owner, _ = _owner(tmp_path, deployment_timeout=60.0, clock=clock)
+    clock.t = 61.0
     assert owner.stale_deployments() == ["day"]
+
+
+def test_a_record_from_before_the_owner_started_is_not_silence_yet(tmp_path):
+    """2026-10-19 04:29: an owner started after the weekend read every
+    deployment's pre-pause intents and reported them silent at once, while
+    they were still starting."""
+    _old_heartbeat(tmp_path)
+    clock = _Clock()
+    owner, _ = _owner(tmp_path, deployment_timeout=180.0, clock=clock)
+    assert owner.stale_deployments() == []
+    clock.t = 180.0
+    assert owner.stale_deployments() == [], "the timeout is inclusive"
+    clock.t = 181.0
+    assert owner.stale_deployments() == ["day"]
+
+
+def test_a_deployment_that_speaks_after_the_start_is_timed_from_then(tmp_path):
+    _old_heartbeat(tmp_path)
+    clock = _Clock()
+    owner, _ = _owner(tmp_path, deployment_timeout=180.0, clock=clock)
+    clock.t = 100.0
+    ClientBroker(tmp_path, "day").heartbeat()
+    clock.t = 500.0                       # long after the start-up window
+    assert owner.stale_deployments() == [], "its heartbeat is fresh"
+
+
+def test_after_the_start_up_window_silence_is_reported_as_before(tmp_path):
+    """Once the owner has run a full timeout, a record's own age decides."""
+    clock = _Clock()
+    owner, _ = _owner(tmp_path, deployment_timeout=60.0, clock=clock)
+    clock.t = 1000.0
+    _old_heartbeat(tmp_path, age=61.0)
+    assert owner.stale_deployments() == ["day"]
+    _old_heartbeat(tmp_path, age=30.0)
+    assert owner.stale_deployments() == []
 
 
 def test_a_fresh_heartbeat_is_not_stale(tmp_path):

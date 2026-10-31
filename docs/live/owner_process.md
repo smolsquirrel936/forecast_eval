@@ -269,5 +269,14 @@ therefore six missed beats: the process has stopped. Until 2026-10-07 nothing
 called `heartbeat()`, so a deployment was timed from its last *order*. From 10-06
 on, fullday was reported as silent every 30 s while running normally.
 
+**Silence is counted from no earlier than the owner's start.** On 2026-10-19
+04:29 an owner started after a pause read intent files whose last record
+predated the pause, so the first check reported day, night and fullday silent
+while they were still starting. A slug is now stale when
+`min(age of its last record, time since this owner started)` exceeds the
+timeout. So for the first 180 s after an owner start nothing is reported. After
+that a record's own age decides, as before. An in-process re-login is not a
+start and changes nothing.
+
 ## Related
 [live/owner.py](owner.md) · [live/broker/client.py](broker/client.md) · [live/intents.py](intents.md) · [live/broker/shioaji.py](broker/shioaji.md) · [STRATEGY_SPLIT_PLAN.md](../../STRATEGY_SPLIT_PLAN.md)

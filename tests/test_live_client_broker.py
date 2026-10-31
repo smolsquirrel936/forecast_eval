@@ -350,8 +350,11 @@ def test_a_beating_deployment_is_never_stale_to_the_owner(tmp_path):
     its last ORDER and printed it as silent every 30 s."""
     from forecast_eval.live.owner_process import OwnerProcess
 
+    now = [0.0]                           # the owner starts at 0 ...
     owner = OwnerProcess(None, None, directory=tmp_path, slugs=["day"],
-                         account="ACC", deployment_timeout=60.0)
+                         account="ACC", deployment_timeout=60.0,
+                         clock=lambda: now[0])
+    now[0] = 1000.0                       # ... and has run long past the timeout
     path = intent_path(tmp_path, "day")
     path.write_text(json.dumps({"seq": 1, "ts": 0.0, "kind": "submit"}) + "\n",
                     encoding="utf-8")
