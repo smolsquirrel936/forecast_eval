@@ -65,6 +65,34 @@ only ever one. Here it would attribute one deployment's fill to another, so an
 unattributable deal raises an anomaly instead. A test pins that a lone working
 order is still not assumed.
 
+## `claim` — a leg whose placement raised (2026-10-30)
+
+When `place_order` raises, the owner registers the leg with
+`unconfirmed=True`, no ids, and the `price` actually sent (an urgent leg goes
+through the touch, not at `order.limit_price`). `_match` can never find such a
+leg, so `claim(side, quantity, price, order_id=, ordno=, trade=, deal=)` gives a
+venue report's ids to it:
+
+- an **order report** or **trade-list entry** must match the leg's size and
+  sent price exactly;
+- a **deal** (`deal=True`) must fit the leg's remainder at the sent price or
+  better (an ROD limit can trade better than its limit, never worse).
+
+It refuses a report with no ids, and a report whose ids the book has ever held
+(`_known_ids`, finished legs included), so a late duplicate deal for a finished
+order is never booked a second time. When two unconfirmed legs fit, it raises
+an anomaly instead of guessing, for the same reason `_match` has no sole-order
+fallback. With one owner every order on the session is ours (§14), so a report
+for an unknown order that fits the one leg whose fate is unknown is that leg.
+
+`orphan(leg)` marks an unconfirmed leg whose deployment has been told
+`rejected`. It stays tracked and claimable, because the venue can still take it
+late. `working_for`, `has_pending`, `all_working` and `mark_cancel_requested`
+leave orphans out, so an orphan does not hold back that deployment's next
+`done`. `in_flight()` keeps them, because they can still fill. `needs_lookup()`
+lists the legs only the venue's trade list can settle: unconfirmed and not
+orphaned, or a cancel waiting for a trade object (`defer_cancel`).
+
 ## Fills accumulate; the first deal does not finish an order
 
 MEASURED (§18.9): a 2-lot order filled as two 1-lot deals nine seconds apart. So

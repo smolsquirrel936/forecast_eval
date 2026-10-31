@@ -109,6 +109,22 @@ class Working:
     filled: int = 0
     cancel_requested: bool = False
     dead: bool = False
+    # Tech: the price actually sent; whether the venue's answer to the
+    #       placement is still unknown, and since when (owner clock); whether
+    #       its deployment has been told `rejected` for it; whether a cancel is
+    #       waiting for a trade object to cancel with.
+    # Why:  2026-10-30 (simtrade_operations §11) — `place_order` raised a
+    #       timeout, the venue took the order anyway and it filled 28 minutes
+    #       later, and the deal matched nothing because the leg had never been
+    #       registered. A leg whose placement raised is kept, with no ids, so a
+    #       later report can claim it (`claim`); `price` is what such a report
+    #       is matched on, because an urgent leg is sent through the touch and
+    #       not at `order.limit_price`.
+    price: Optional[float] = None
+    unconfirmed: bool = False
+    placed_at: float = 0.0
+    orphaned: bool = False
+    cancel_deferred: bool = False
 
     @property
     def remaining(self) -> int:
@@ -136,6 +152,13 @@ class OrderBook:
         self._lock = threading.RLock()
         self._working: List[Working] = []
         self._seen_deals: Set[Tuple[Any, Any]] = set()
+        # Tech: every venue order number and placement id this book has ever
+        #       held, finished legs included.
+        # Why:  `claim` attributes a report by side, size and price, so it
+        #       must never take one whose ids belong to an order already
+        #       known — a late duplicate deal for a finished leg would
+        #       otherwise be booked a second time against an unconfirmed one.
+        self._known_ids: Set[str] = set()
         self._net = 0
         # Tech: the account net split by dated month code. A caller that names
         #       no month means `default_code`, the owner's start-up month.
@@ -269,22 +292,47 @@ class OrderBook:
                                      settled=held, account_net=self._net)
             return held
 
+    # Tech: the views below leave out orphaned legs, except `in_flight`.
+    # Why:  an orphan's deployment has been told `rejected` (`orphan`), so it
+    #       must not hold back that deployment's next `done` or be touched by
+    #       its next cancel. It can still fill, though, so the reconcile's
+    #       in-flight allowance keeps counting it.
     def working_for(self, slug: str) -> List[Working]:
         with self._lock:
-            return [w for w in self._working if w.slug == slug and not w.dead]
+            return [w for w in self._working
+                    if w.slug == slug and not w.dead and not w.orphaned]
 
     def has_pending(self, slug: str) -> bool:
         return bool(self.working_for(slug))
 
     def all_working(self) -> List[Working]:
         with self._lock:
+            return [w for w in self._working if not w.dead and not w.orphaned]
+
+    def in_flight(self) -> List[Working]:
+        """Every leg that can still fill, orphans included."""
+        with self._lock:
             return [w for w in self._working if not w.dead]
+
+    def needs_lookup(self) -> List[Working]:
+        """Legs only the venue's trade list can settle: unconfirmed, or a cancel
+        waiting for a trade object."""
+        with self._lock:
+            return [w for w in self._working if not w.dead and (
+                (w.unconfirmed and not w.orphaned) or w.cancel_deferred)]
+
+    def knows(self, *ids: Any) -> bool:
+        """Whether any of these order ids or numbers was ever held here."""
+        with self._lock:
+            return any(str(i) in self._known_ids for i in ids if i)
 
     # ---- placing ----------------------------------------------------------
 
     def register(self, slug: str, order: OrderEvent, leg: Leg, *,
                  trade: Any = None, order_id: Optional[str] = None,
-                 ordno: Optional[str] = None, code: str = "") -> Working:
+                 ordno: Optional[str] = None, code: str = "",
+                 price: Optional[float] = None, unconfirmed: bool = False,
+                 placed_at: float = 0.0) -> Working:
         # Tech: start tracking one placed leg.
         # Why:  registration is separate from placement because this module never
         #       talks to the venue — the owner places, then hands back whatever
@@ -294,10 +342,112 @@ class OrderBook:
             working = Working(slug=slug, order=order, octype=leg.octype,
                               quantity=leg.quantity, trade=trade,
                               order_id=order_id, ordno=ordno,
-                              code=code or self.default_code)
+                              code=code or self.default_code, price=price,
+                              unconfirmed=unconfirmed, placed_at=placed_at)
             self._working.append(working)
             self._net_by_code.setdefault(working.code, 0)
+            self._known_ids.update(str(i) for i in (order_id, ordno) if i)
             return working
+
+    def claim(self, *, side: str, quantity: int, price: float,
+              order_id: Any = None, ordno: Any = None, trade: Any = None,
+              deal: bool = False) -> Optional[Working]:
+        """Give a venue report's ids to the one unconfirmed leg it fits."""
+        # Tech: among unconfirmed legs on `side`, find the one this report
+        #       fits — an order of exactly its size and price, or with
+        #       `deal=True` a deal within its remainder at its price or better
+        #       — and give it the ids (and trade object). None when no leg
+        #       fits, the ids are already known, or the report has no ids; an
+        #       anomaly when more than one leg fits.
+        # Why:  2026-10-30 — a leg whose placement raised has no ids, so
+        #       `_match` can never find it. With one owner every order on the
+        #       session is ours (§14), so a report for an unknown order on the
+        #       side, size and price of the one leg whose fate is unknown is
+        #       that leg. Two such legs cannot be told apart, and guessing would
+        #       give one deployment's fill to another (`_match`).
+        ids = [i for i in (order_id, ordno) if i]
+        with self._lock:
+            if not ids or any(str(i) in self._known_ids for i in ids):
+                return None
+            fits = [w for w in self._working
+                    if w.unconfirmed and not w.dead and w.order.side == side
+                    and self._fits(w, quantity, price, deal)]
+            if not fits:
+                return None
+            if len(fits) > 1:
+                self._anomaly(
+                    f"venue report fits {len(fits)} unconfirmed orders: "
+                    f"{side} {quantity} @ {price} ordno={ordno!r} "
+                    f"order_id={order_id!r}")
+                return None
+            working = fits[0]
+            working.unconfirmed = False
+            working.order_id = order_id or working.order_id
+            working.ordno = str(ordno) if ordno else working.ordno
+            if trade is not None:
+                working.trade = trade
+            self._known_ids.update(str(i) for i in ids)
+            if self.recorder is not None:
+                self.recorder.record(
+                    "owner_claimed", slug=working.slug, side=side,
+                    quantity=quantity, price=price, order_id=order_id,
+                    ordno=ordno, by="deal" if deal else
+                    ("trade list" if trade is not None else "order event"),
+                    orphaned=working.orphaned)
+            return working
+
+    @staticmethod
+    def _fits(working: Working, quantity: int, price: float,
+              deal: bool) -> bool:
+        # Tech: an order report must match the leg's size and sent price; a
+        #       deal must fit its remainder at the sent price or better.
+        # Why:  an ROD limit never trades through its own limit, but it can
+        #       trade better than it, and a deal may be one part of the leg
+        #       (§18.9). Prices are compared to within a hair because both
+        #       sides are floats off the same tick grid.
+        sent = working.price if working.price is not None \
+            else working.order.limit_price
+        if not deal:
+            return quantity == working.quantity and abs(price - sent) < 1e-6
+        if not 0 < quantity <= working.remaining:
+            return False
+        if working.order.side == "BUY":
+            return price <= sent + 1e-6
+        return price >= sent - 1e-6
+
+    def attach_trade(self, working: Working, trade: Any) -> None:
+        # Tech: give a claimed leg the venue's trade object.
+        # Why:  `cancel_order` needs the trade object, and a leg claimed from a
+        #       callback has only ids; the trade list is where the object is.
+        with self._lock:
+            working.trade = trade
+
+    def defer_cancel(self, working: Working) -> None:
+        # Tech: flag a cancel that waits for the leg's trade object.
+        # Why:  a leg with no trade object cannot be cancelled yet; the owner's
+        #       next trade-list lookup sends the cancel (`needs_lookup`).
+        with self._lock:
+            working.cancel_requested = True
+            working.cancel_deferred = True
+
+    def cancel_sent(self, working: Working) -> None:
+        with self._lock:
+            working.cancel_deferred = False
+
+    def orphan(self, working: Working) -> None:
+        # Tech: mark an unconfirmed leg whose deployment has been told
+        #       `rejected`; it stays tracked and claimable.
+        # Why:  the deadline only says the venue did not show the order in
+        #       time, not that it never will — on 2026-10-30 the venue took
+        #       the order 35 s after the timeout. A deal for it must still be
+        #       booked, not dropped as unknown.
+        with self._lock:
+            working.orphaned = True
+            if self.recorder is not None:
+                self.recorder.record("owner_orphaned", slug=working.slug,
+                                     side=working.order.side,
+                                     quantity=working.quantity,
+                                     price=working.price)
 
     def mark_cancel_requested(self, slug: str) -> List[Working]:
         # Tech: flag this deployment's legs as cancel-requested and return them;
@@ -309,7 +459,8 @@ class OrderBook:
         #       flag serves, because `_match` already searches every leg rather
         #       than a single slot.
         with self._lock:
-            legs = [w for w in self._working if w.slug == slug and not w.dead]
+            legs = [w for w in self._working
+                    if w.slug == slug and not w.dead and not w.orphaned]
             for leg in legs:
                 leg.cancel_requested = True
             return legs
@@ -338,6 +489,7 @@ class OrderBook:
             for working in self._working:
                 if working.order_id and working.order_id == order_id:
                     working.ordno = str(ordno)
+                    self._known_ids.add(str(ordno))
                     return
 
     def on_deal(self, *, ordno: Any, trade_id: Any, exchange_seq: Any,

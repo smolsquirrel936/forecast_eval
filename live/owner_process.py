@@ -62,6 +62,18 @@ DEFAULT_DEPLOYMENT_TIMEOUT = 180.0
 #       booking seen; an unexplainable difference still fails at once.
 DEFAULT_RECONCILE_GRACE = 120.0
 
+# Tech: how long a leg whose `place_order` raised may stay unconfirmed before
+#       its deployment is told `rejected`, and how often the venue's trade list
+#       is read while one is.
+# Why:  MEASURED 2026-10-30 (simtrade_operations §11): night's stop close hit a
+#       30 s `ShioajiTimeoutError`, and the venue reported it `New` 35 s after
+#       the timeout. 120 s is over 3x that. The deadline is only judged on a
+#       trade-list read that succeeded, so a venue that cannot be asked keeps
+#       the leg unconfirmed rather than calling it rejected. Five seconds keeps
+#       `update_status` well inside its rate limit.
+DEFAULT_UNCONFIRMED_TIMEOUT = 120.0
+UNCONFIRMED_LOOKUP_INTERVAL = 5.0
+
 # Tech: the venue clock's offset from UTC, added to a deal's epoch `ts`.
 # Why:  MEASURED 2026-10-08 (simtrade_0929): a deal's `ts` is a UTC epoch, while
 #       every other timestamp here — bars, orders, ticks — is naive Taipei time.
@@ -112,6 +124,7 @@ class OwnerProcess:
         flatten_aggression_ticks: int = 5,
         deployment_timeout: float = DEFAULT_DEPLOYMENT_TIMEOUT,
         reconcile_grace: float = DEFAULT_RECONCILE_GRACE,
+        unconfirmed_timeout: float = DEFAULT_UNCONFIRMED_TIMEOUT,
         clock: Callable[[], float] = time.monotonic,
         recorder: Any = None,
         on_anomaly: Optional[Callable[[str], None]] = None,
@@ -165,6 +178,11 @@ class OwnerProcess:
         self._recent: Deque[Tuple[float, int, str]] = deque()
         self.reconcile_note: Optional[str] = None
         self.frozen: Optional[str] = None
+        # Tech: the deadline for an unconfirmed leg, and when the trade list
+        #       was last read for one (None: not yet).
+        # Why:  see DEFAULT_UNCONFIRMED_TIMEOUT and `resolve_unconfirmed`.
+        self.unconfirmed_timeout = unconfirmed_timeout
+        self._last_lookup: Optional[float] = None
         # Tech: the observers are assigned BEFORE the book is constructed.
         # Why:  the default book is given `self._anomaly` as its callback, and
         #       that method reads `self.anomalies` and `self.recorder`. Building
@@ -300,6 +318,7 @@ class OwnerProcess:
                 continue
             for intent in intents:
                 self._act(slug, intent)
+        self.resolve_unconfirmed()
         self.publish_positions()
 
     def _act(self, slug: str, intent: Dict[str, Any]) -> None:
@@ -421,14 +440,31 @@ class OwnerProcess:
             trade = self.api.place_order(
                 self.contract if contract is None else contract, venue_order)
         except Exception as exc:                        # noqa: BLE001
-            self._anomaly(f"{slug}: place_order raised: {exc!r}")
-            self._emit(slug, "rejected", reason=f"place_order raised: {exc!r}")
+            # Tech: keep the leg, unconfirmed and with no ids, and tell the
+            #       deployment nothing yet; `resolve_unconfirmed` and the
+            #       callbacks settle it.
+            # Why:  a raise says the answer was lost, not that the order was.
+            #       2026-10-30: night's stop close timed out here, was answered
+            #       `rejected`, and the venue took it anyway — its deal 28
+            #       minutes later matched nothing, was dropped, and froze the
+            #       owner. The deployment's order stays pending meanwhile, so
+            #       the fill reaches its ledger the ordinary way.
+            self._anomaly(f"{slug}: place_order raised: {exc!r}; the venue "
+                          f"may still have the order — waiting for it")
+            self.book.register(slug, order, leg, code=code or self.code,
+                               price=price, unconfirmed=True,
+                               placed_at=self._clock())
+            if self.recorder is not None:
+                self.recorder.record(
+                    "owner_place_unconfirmed", slug=slug, side=order.side,
+                    price=price, octype=leg.octype, quantity=leg.quantity,
+                    contract=code or self.code, error=repr(exc))
             return
         working = self.book.register(
             slug, order, leg, trade=trade,
             order_id=_dig(trade, "order", "id"),
             ordno=_dig(trade, "order", "ordno"),
-            code=code or self.code,
+            code=code or self.code, price=price,
         )
         # Tech: record which deployment each venue order belongs to.
         # Why:  `ordno -> slug` lived only in memory, so when the owner stopped
@@ -450,10 +486,111 @@ class OwnerProcess:
         #       our signal changed is the exact interference the split exists to
         #       prevent.
         for working in self.book.mark_cancel_requested(slug):
+            # Tech: a leg with no trade object gets its cancel later.
+            # Why:  only an unconfirmed or callback-claimed leg lacks one, and
+            #       `resolve_unconfirmed` sends the cancel once the trade list
+            #       has produced it.
+            if working.trade is None:
+                self.book.defer_cancel(working)
+                if self.recorder is not None:
+                    self.recorder.record("owner_cancel_deferred", slug=slug,
+                                         ordno=working.ordno)
+                continue
             try:
                 self.api.cancel_order(working.trade)
             except Exception as exc:                    # noqa: BLE001
                 self._anomaly(f"{slug}: cancel_order raised: {exc!r}")
+
+    def resolve_unconfirmed(self) -> None:
+        """Settle legs only the venue's trade list can: unconfirmed placements
+        and cancels waiting for a trade object."""
+        # Tech: at most every UNCONFIRMED_LOOKUP_INTERVAL while such legs
+        #       exist, read the trade list; give each listed order's trade
+        #       object to its leg, claiming an unconfirmed one by side, size and
+        #       price; finish a claimed leg the venue failed or cancelled with
+        #       nothing dealt; send deferred cancels; and answer `rejected` for
+        #       an unconfirmed leg still missing past `unconfirmed_timeout`.
+        # Why:  the callbacks claim a leg the moment the venue speaks
+        #       (`_handle_order`, `_handle_deal`), but only the trade list can
+        #       say an order is NOT there, and only it holds the trade object
+        #       `cancel_order` needs. A read that fails changes nothing: an
+        #       order whose fate cannot be learnt stays pending, because
+        #       calling it rejected is how the 2026-10-30 fill was lost.
+        pending = self.book.needs_lookup()
+        if not pending:
+            return
+        now = self._clock()
+        if (self._last_lookup is not None
+                and now - self._last_lookup < UNCONFIRMED_LOOKUP_INTERVAL):
+            return
+        self._last_lookup = now
+        from .flatten import is_working
+        try:
+            self.api.update_status(self.account)
+            trades = self.api.list_trades() or []
+        except Exception as exc:                        # noqa: BLE001
+            if self.recorder is not None:
+                self.recorder.record("owner_lookup_failed", error=repr(exc))
+            return
+
+        for trade in trades:
+            oid = _dig(trade, "order", "id")
+            ordno = _dig(trade, "order", "ordno")
+            leg = self.book.match(oid, ordno)
+            if leg is None:
+                leg = self.book.claim(
+                    side="BUY" if str(_dig(trade, "order", "action")).endswith(
+                        "Buy") else "SELL",
+                    quantity=int(_dig(trade, "order", "quantity") or 0),
+                    price=float(_dig(trade, "order", "price") or 0.0),
+                    order_id=oid, ordno=ordno, trade=trade)
+                if leg is None:
+                    continue
+            elif not any(leg is w for w in pending):
+                # Tech: an ordinary leg is left to its callbacks.
+                # Why:  only the legs that needed this read are acted on here.
+                continue
+            elif leg.trade is None:
+                self.book.attach_trade(leg, trade)
+            # Tech: a claimed order the venue failed or cancelled with
+            #       nothing dealt is finished here.
+            # Why:  its callback may never come for an order whose placement
+            #       raised, and without one the deployment would wait forever.
+            #       Anything dealt is left to the deal callbacks to book.
+            status = str(_dig(trade, "status", "status")).split(".")[-1].lower()
+            if status in ("failed", "cancelled") and leg.filled == 0 and not int(
+                    _dig(trade, "status", "deal_quantity") or 0):
+                self.book.finish(leg)
+                if status == "failed" and not leg.orphaned:
+                    self._emit(leg.slug, "rejected",
+                               reason=f"venue failed ordno {ordno!r} after "
+                                      f"place_order raised")
+                else:
+                    self._maybe_done(leg.slug)
+                continue
+            if leg.cancel_deferred:
+                self.book.cancel_sent(leg)
+                if is_working(trade):
+                    try:
+                        self.api.cancel_order(trade)
+                    except Exception as exc:            # noqa: BLE001
+                        self._anomaly(
+                            f"{leg.slug}: cancel_order raised: {exc!r}")
+
+        # Tech: an unconfirmed leg the list still lacks past the deadline is
+        #       answered `rejected` and kept as an orphan.
+        # Why:  DEFAULT_UNCONFIRMED_TIMEOUT. Kept, because the venue could
+        #       still take it late; a deal for it is then booked and reported
+        #       (`_handle_deal`) instead of dropped.
+        for leg in self.book.needs_lookup():
+            if (leg.unconfirmed
+                    and now - leg.placed_at > self.unconfirmed_timeout):
+                self.book.orphan(leg)
+                reason = (f"place_order raised and the venue showed no "
+                          f"{leg.order.side} {leg.quantity} @ {leg.price} "
+                          f"within {self.unconfirmed_timeout:.0f}s")
+                self._anomaly(f"{leg.slug}: {reason}")
+                self._emit(leg.slug, "rejected", reason=reason)
 
     def _settle(self, slug: str, intent: Dict[str, Any]) -> None:
         # Tech: take the deployment's lots in the named month off the book, and
@@ -560,17 +697,37 @@ class OwnerProcess:
                                  op_code=op_code, ordno=ordno, order_id=oid)
 
         working = self.book.match(oid, ordno)
+        # Tech: an order report for an unknown order may be the answer to a
+        #       placement that raised; give it to the leg it fits.
+        # Why:  2026-10-30 — this report (`New`, ordno 19EFD2) arrived 35 s
+        #       after the timeout and was ignored, because nothing matched.
+        if working is None and op_type == "New":
+            working = self.book.claim(
+                side="BUY" if str(order.get("action", "")).endswith("Buy")
+                else "SELL",
+                quantity=int(order.get("quantity", 0) or 0),
+                price=float(order.get("price", 0.0) or 0.0),
+                order_id=oid, ordno=ordno)
         if op_code != "00":
             reason = (f"order rejected: op_type={op_type} op_code={op_code} "
                       f"{operation.get('op_msg', '')}").strip()
             self._anomaly(reason)
             if working is not None:
-                self._emit(working.slug, "rejected", reason=reason)
+                if not working.orphaned:
+                    self._emit(working.slug, "rejected", reason=reason)
                 self.book.finish(working)
             return
 
         if working is None:
             return
+        # Tech: an orphan the venue has accepted is cancelled.
+        # Why:  its deployment was told `rejected` and has halted, so an order
+        #       left resting would fill into a ledger nobody is writing.
+        if working.orphaned and op_type == "New":
+            self._anomaly(f"{working.slug}: the venue accepted ordno {ordno!r} "
+                          f"after its deployment was told it was rejected — "
+                          f"cancelling it")
+            self.book.defer_cancel(working)
         if ordno:
             self.book.learn_ordno(oid, ordno)
         if op_type == "Cancel":
@@ -595,13 +752,23 @@ class OwnerProcess:
         # Tech: the month of the leg this deal is for, read before booking.
         # Why:  `_recent` keeps the race per month (`_in_flight_explains`), and
         #       a fully filled leg is finished by `on_deal` itself.
+        side = "BUY" if action.endswith("Buy") else "SELL"
         leg = self.book.match(msg.get("trade_id"), msg.get("ordno"))
+        # Tech: a deal for an unknown order may be the first word on a
+        #       placement that raised; give it to the leg it fits.
+        # Why:  the order report that would have claimed it can arrive after
+        #       the deal (`learn_ordno`), and without a claim the deal is
+        #       dropped as unknown — the 2026-10-30 failure.
+        if leg is None:
+            leg = self.book.claim(side=side, quantity=quantity, price=price,
+                                  order_id=msg.get("trade_id"),
+                                  ordno=msg.get("ordno"), deal=True)
         code = leg.code if leg is not None and leg.code else self.code
         booked = self.book.on_deal(
             ordno=msg.get("ordno"),
             trade_id=msg.get("trade_id"),
             exchange_seq=msg.get("exchange_seq"),
-            side="BUY" if action.endswith("Buy") else "SELL",
+            side=side,
             price=price,
             quantity=quantity,
             timestamp=pd.Timestamp(msg["ts"], unit="s") + VENUE_UTC_OFFSET
@@ -611,6 +778,16 @@ class OwnerProcess:
         if booked is None:
             return
         slug, fill = booked
+        # Tech: a fill on an orphan is booked and forwarded, and reported.
+        # Why:  the book now agrees with the venue, so the owner need not
+        #       freeze; but the deployment was told `rejected` and has halted,
+        #       so its ledger lacks this fill until a person adds it (§6.9).
+        if leg is not None and leg.orphaned:
+            self._anomaly(
+                f"{slug}: fill on an order it was told was rejected — "
+                f"fills_{slug}.csv needs it by hand (simtrade_operations "
+                f"§6.9): {fill.timestamp} {fill.side} {fill.quantity} @ "
+                f"{fill.fill_price} fee {fill.fee:.4f} {code}")
         # Tech: remember when this deal moved the book, and by how much.
         # Why:  the other side of the race `reconcile` tolerates — a deal booked
         #       a moment before `list_positions` catches up puts the book AHEAD
@@ -770,7 +947,7 @@ class OwnerProcess:
             self._recent.popleft()
         code = self.code if code is None else code
         sign = 1 if diff > 0 else -1
-        in_flight = sum(w.remaining for w in self.book.all_working()
+        in_flight = sum(w.remaining for w in self.book.in_flight()
                         if (1 if w.order.side == "BUY" else -1) == sign
                         and (w.code or self.code) == code)
         lagging = sum(abs(s) for _, s, c in list(self._recent)
