@@ -380,3 +380,62 @@ def test_a_refused_deal_does_not_move_the_entry():
     _fill(book, "day", "BUY", 1, 100.0, "111")
     _fill(book, "day", "BUY", 5, 999.0, "111", seq="2")   # overfills the leg
     assert book.entry_for("day") == 100.0
+
+# ---- claim: a leg whose placement raised (2026-10-30) ----------------------
+
+def _unconfirmed(book, slug="night", side="SELL", qty=1, price=100.0):
+    return book.register(slug, _order(side=side, qty=qty, price=price),
+                         Leg(NEW, qty), price=price, unconfirmed=True)
+
+
+def test_an_order_report_of_its_size_and_price_claims_the_leg():
+    book = _book()
+    leg = _unconfirmed(book)
+    assert book.claim(side="SELL", quantity=1, price=100.0,
+                      order_id="X", ordno="19EFD2") is leg
+    assert leg.unconfirmed is False and leg.ordno == "19EFD2"
+    assert book.match(None, "19EFD2") is leg
+
+
+def test_an_order_report_at_another_price_does_not_claim():
+    book = _book()
+    _unconfirmed(book)
+    assert book.claim(side="SELL", quantity=1, price=101.0, ordno="Z") is None
+
+
+def test_a_report_with_no_ids_does_not_claim():
+    book = _book()
+    _unconfirmed(book)
+    assert book.claim(side="SELL", quantity=1, price=100.0) is None
+
+
+def test_a_deal_claims_within_the_remainder_at_the_limit_or_better():
+    book = _book()
+    _unconfirmed(book, qty=2)
+    assert book.claim(side="SELL", quantity=3, price=100.0, ordno="A",
+                      deal=True) is None, "more than the leg"
+    assert book.claim(side="SELL", quantity=1, price=99.0, ordno="A",
+                      deal=True) is None, "a SELL below its limit"
+    assert book.claim(side="SELL", quantity=1, price=101.0, ordno="A",
+                      deal=True) is not None
+
+
+def test_a_late_duplicate_for_a_finished_order_is_never_claimed():
+    """Its ordno is known, so it cannot be booked again against another leg."""
+    book = _book()
+    (done,) = _place(book, "day", side="SELL", order_id="D", ordno="111")
+    _fill(book, "day", "SELL", 1, 100.0, "111")
+    book.forget_dead()
+    _unconfirmed(book)
+    assert book.claim(side="SELL", quantity=1, price=100.0, ordno="111",
+                      deal=True) is None
+
+
+def test_an_orphan_is_out_of_the_working_views_but_still_in_flight():
+    book = _book()
+    leg = _unconfirmed(book)
+    book.orphan(leg)
+    assert book.has_pending("night") is False
+    assert book.all_working() == [] and book.mark_cancel_requested("night") == []
+    assert book.in_flight() == [leg]
+    assert book.claim(side="SELL", quantity=1, price=100.0, ordno="L") is leg

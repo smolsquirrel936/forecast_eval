@@ -138,6 +138,48 @@ reconcile flagged a desync that needed a person.
   compared, but still published to that deployment). Restart the owner before
   that deployment; the restarted owner drops the lot when seeding.
 
+## A `place_order` that raises is not a rejection (2026-10-30)
+
+**MEASURED** ([simtrade_operations §11](../simtrade_operations.md)): night's
+stop close hit a 30 s `ShioajiTimeoutError` in `place_order`. The owner
+answered `rejected` without registering the leg, and night halted. The venue
+had taken the order anyway: it reported `New` (ordno `19EFD2`) 35 s after the
+timeout, and the order dealt 28 minutes later. Nothing matched the deal, so it
+was dropped as `deal for an unknown order`. The reconcile then froze the owner
+(`account mirror 2 != venue 1`), and the fill had to be added to
+`fills_night.csv` by hand.
+
+A raise says the answer was lost, not that the order was. So now:
+
+- **The leg is kept, unconfirmed** (`OrderBook.claim` in [owner.py](owner.md)),
+  and the deployment hears nothing yet. Its order stays pending, so when the fill
+  comes it reaches its ledger the ordinary way. `owner_place_unconfirmed` is
+  recorded, plus an anomaly saying the venue may still have the order.
+- **The callbacks claim it.** An unknown `New` order report, or an unknown
+  deal, that fits the leg's side, size and price takes the leg
+  (`owner_claimed`). Deals then match on `ordno` as usual.
+- **`resolve_unconfirmed()`** runs on every `poll()`. While a leg needs it, it
+  reads `update_status` + `list_trades` at most every
+  `UNCONFIRMED_LOOKUP_INTERVAL` (5 s). A listed order claims its leg and gives
+  it the trade object. A claimed order the venue `Failed` with nothing dealt is
+  answered `rejected`; one it `Cancelled` with nothing dealt is finished. A
+  cancel the deployment asked for while the leg had no trade object
+  (`owner_cancel_deferred`) is sent then.
+- **The deadline**, `unconfirmed_timeout` (`DEFAULT_UNCONFIRMED_TIMEOUT`,
+  120 s, over 3x the measured 35 s): an unconfirmed leg the trade list still
+  lacks is answered `rejected`, and the deployment halts as before. It is only
+  judged after a trade-list read that succeeded (`owner_lookup_failed`
+  otherwise). A venue that cannot be asked keeps the order pending.
+- **The leg is kept as an orphan** (`owner_orphaned`), because the venue can
+  still take it late. If the venue reports it `New`, the owner cancels it,
+  since nobody is managing it. If it fills anyway, the deal is booked and
+  forwarded, so the book agrees with the venue and the owner does not freeze.
+  An anomaly then gives the fill to add to that deployment's ledger by hand
+  (§6.9), because the halted deployment did not write it.
+- **The reconcile counts an unconfirmed leg, or an orphan, as in flight**
+  (`OrderBook.in_flight`). So the venue running ahead of a late deal is waited
+  out like any other fill in flight.
+
 ## A restart does not replay the intent streams
 
 A fresh `JsonlStream` reads from byte 0, so a restarted owner used to place
@@ -154,7 +196,9 @@ reported as the same anomaly `poll` raises. The deployment side does the same
 With a `recorder`, the owner writes `owner_intent`, `owner_placed` (slug, side,
 price, octype, `order_id`, `ordno`), `owner_order_event`, `owner_deal` (from
 the book), `owner_reconcile_pending` / `_settled`, `owner_frozen`,
-`owner_intents_skipped` and every anomaly. `owner_placed` is the record that
+`owner_intents_skipped`, the unconfirmed-placement records
+(`owner_place_unconfirmed`, `owner_claimed`, `owner_cancel_deferred`,
+`owner_lookup_failed`, `owner_orphaned`) and every anomaly. `owner_placed` is the record that
 was missing on 10-06: nothing on disk said whose order `14AD46` was.
 
 **Each deployment is told its OWN size, never the account's.** That is the
@@ -184,7 +228,8 @@ with a test:
 
 - a **corrupt intent stream** is an anomaly for that slug and the others are
   still drained in the same `poll()`;
-- a **place failure** emits `rejected` to the deployment that asked, not to all
+- a **place failure** keeps only the asking deployment's order pending, and a
+  `rejected` after the deadline goes to that deployment alone, not to all
   three;
 - a **venue rejection** (`op_code != "00"`) is routed to the owning leg's slug.
 

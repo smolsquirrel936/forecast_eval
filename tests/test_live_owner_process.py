@@ -49,7 +49,18 @@ class _FakeAPI:
         self.callback = None
         self.positions = positions if positions is not None else []
         self.raise_on_place = raise_on_place
+        self.trades = []                 # what list_trades answers
+        self.lookups = 0
+        self.raise_on_lookup = False
         self._n = 0
+
+    def update_status(self, account=None):
+        self.lookups += 1
+        if self.raise_on_lookup:
+            raise RuntimeError("venue unreachable")
+
+    def list_trades(self):
+        return list(self.trades)
 
     def set_order_callback(self, cb):
         self.callback = cb
@@ -157,16 +168,227 @@ def test_urgent_intents_are_priced_through_the_touch(tmp_path):
 
 
 def test_a_place_failure_is_reported_to_that_deployment_only(tmp_path):
-    owner, api = _owner(tmp_path, api=_FakeAPI(raise_on_place=True))
+    """Once the venue's trade list has lacked the order past the deadline."""
+    clock = _Clock()
+    owner, api = _owner(tmp_path, api=_FakeAPI(raise_on_place=True),
+                        clock=clock)
     day, night = ClientBroker(tmp_path, "day"), ClientBroker(tmp_path, "night")
     day.submit(OrderEvent(timestamp=TS, side="BUY", limit_price=100.0,
                           intent="OPEN", quantity=1), current_price=100.0)
+    owner.poll()
+    clock.t = 121.0
     owner.poll()
     rails = []
     day.rails = type("R", (), {"halt": lambda s, r, a: rails.append(r)})()
     day.poll_fills(MarketEvent(timestamp=TS, price=100.0, volume=1, session="DAY"))
     assert any("owner rejected" in r for r in rails)
     assert night.has_pending() is False
+
+
+# ---- a place_order that raised (2026-10-30) ---------------------------------
+
+def _raised_sell(tmp_path, clock=None, slug="night", price=44889.0):
+    """An owner whose place_order raised on a SELL 1 for `slug` — night's stop
+    close of 2026-10-30, which timed out and was then taken by the venue."""
+    clock = clock or _Clock()
+    owner, api = _owner(tmp_path, api=_FakeAPI(raise_on_place=True),
+                        clock=clock)
+    client = ClientBroker(tmp_path, slug)
+    client.submit(OrderEvent(timestamp=TS, side="SELL", limit_price=price,
+                             intent="CLOSE", quantity=1), current_price=price)
+    owner.poll()
+    api.raise_on_place = False
+    return owner, api, client, clock
+
+
+def _full_order_event(owner, ordno, oid, action="Sell", price=44889.0, qty=1,
+                      op_type="New", op_code="00"):
+    owner._on_event(type("S", (), {"name": "FuturesOrder"})(), {
+        "operation": {"op_type": op_type, "op_code": op_code, "op_msg": ""},
+        "order": {"ordno": ordno, "id": oid, "action": action, "price": price,
+                  "quantity": qty},
+        "contract": {"code": "TXFI6"},
+    })
+
+
+class _ListedTrade:
+    """A trade as `list_trades` returns it."""
+
+    def __init__(self, oid, ordno, action="Sell", price=44889.0, qty=1,
+                 status="Submitted", dealt=0):
+        self.order = type("o", (), {"id": oid, "ordno": ordno,
+                                    "action": action, "price": price,
+                                    "quantity": qty})()
+        self.status = type("s", (), {"status": status,
+                                     "deal_quantity": dealt})()
+
+
+def _market():
+    return MarketEvent(timestamp=TS, price=100.0, volume=1, session="NIGHT")
+
+
+def _halts(client):
+    rails = []
+    client.rails = type("R", (), {"halt": lambda s, r, a: rails.append(r)})()
+    return rails
+
+
+def test_a_place_failure_leaves_the_order_pending_not_rejected(tmp_path):
+    owner, api, night, _ = _raised_sell(tmp_path)
+    rails = _halts(night)
+    assert night.poll_fills(_market()) == []
+    assert rails == []
+    assert night.has_pending() is True
+    assert owner.book.has_pending("night") is True
+    assert "may still have the order" in owner.anomalies[0]
+
+
+def test_the_10_30_case_a_late_accept_and_its_deal_reach_the_deployment(tmp_path):
+    """New 19EFD2 35 s after the timeout, the deal 28 minutes later: both are
+    now this leg's, the fill reaches night, and the venue agrees."""
+    owner, api, night, clock = _raised_sell(tmp_path)
+    clock.t = 35.0
+    _full_order_event(owner, "19EFD2", "OIDX")
+    clock.t = 1700.0
+    _deal(owner, "19EFD2", side="Sell", qty=1, price=44889.0, trade_id="OIDX")
+    (fill,) = night.poll_fills(_market())
+    assert fill.side == "SELL" and fill.fill_price == 44889.0
+    assert night.has_pending() is False, "done follows the fill"
+    assert not any("unknown order" in a for a in owner.anomalies)
+    assert owner.book.net_for("night") == -1
+    api.positions = [_Row(1, "Sell")]
+    assert owner.reconcile() is True
+
+
+def test_a_deal_alone_claims_the_unconfirmed_leg(tmp_path):
+    """The order report can come after the deal (`learn_ordno`)."""
+    owner, api, night, _ = _raised_sell(tmp_path)
+    _deal(owner, "19EFD2", side="Sell", qty=1, price=44890.0, trade_id="OIDX")
+    (fill,) = night.poll_fills(_market())
+    assert fill.fill_price == 44890.0, "a SELL may deal above its limit"
+    assert not any("unknown order" in a for a in owner.anomalies)
+
+
+@pytest.mark.parametrize("side,price", [("Buy", 44889.0), ("Sell", 44888.0)])
+def test_a_deal_that_cannot_be_the_leg_is_not_claimed(tmp_path, side, price):
+    """Wrong side, or a SELL below its limit: still an unknown order."""
+    owner, api, night, _ = _raised_sell(tmp_path)
+    _deal(owner, "ZZ1", side=side, qty=1, price=price)
+    assert night.poll_fills(_market()) == []
+    assert any("unknown order" in a for a in owner.anomalies)
+    assert owner.book.has_pending("night") is True
+
+
+def test_an_urgent_leg_is_matched_on_the_price_actually_sent(tmp_path):
+    clock = _Clock()
+    owner, api = _owner(tmp_path, api=_FakeAPI(raise_on_place=True),
+                        clock=clock)
+    day = ClientBroker(tmp_path, "day")
+    with day.urgent():
+        day.submit(OrderEvent(timestamp=TS, side="SELL", limit_price=100.0,
+                              intent="CLOSE", quantity=1), current_price=100.0)
+    owner.poll()
+    _full_order_event(owner, "N9", "OID9", price=95.0)
+    assert owner.book.match("OID9", "N9") is not None
+
+
+def test_two_legs_one_report_could_be_are_not_guessed_between(tmp_path):
+    owner, api, night, _ = _raised_sell(tmp_path)
+    api.raise_on_place = True
+    ClientBroker(tmp_path, "day").submit(
+        OrderEvent(timestamp=TS, side="SELL", limit_price=44889.0,
+                   intent="OPEN", quantity=1), current_price=44889.0)
+    owner.poll()
+    _deal(owner, "19EFD2", side="Sell", qty=1, price=44889.0)
+    assert night.poll_fills(_market()) == []
+    assert any("fits 2 unconfirmed orders" in a for a in owner.anomalies)
+
+
+def test_the_trade_list_claims_the_leg_and_a_deferred_cancel_is_sent(tmp_path):
+    owner, api, night, clock = _raised_sell(tmp_path)
+    night.cancel()
+    owner.poll()
+    assert api.cancelled == [], "nothing to cancel with yet"
+    listed = _ListedTrade("OIDX", "19EFD2")
+    api.trades = [listed]
+    clock.t = 10.0
+    owner.poll()
+    assert api.cancelled == [listed]
+    assert owner.book.match("OIDX", "19EFD2").trade is listed
+    _full_order_event(owner, "19EFD2", "OIDX", op_type="Cancel")
+    night.poll_fills(_market())
+    assert night.has_pending() is False
+
+
+def test_the_trade_list_is_read_at_most_every_interval(tmp_path):
+    owner, api, night, clock = _raised_sell(tmp_path)
+    reads = api.lookups
+    owner.poll()
+    assert api.lookups == reads
+    clock.t = 5.0
+    owner.poll()
+    assert api.lookups == reads + 1
+
+
+def test_a_venue_failed_order_in_the_trade_list_is_rejected(tmp_path):
+    owner, api, night, clock = _raised_sell(tmp_path)
+    api.trades = [_ListedTrade("OIDX", "19EFD2", status="Failed")]
+    clock.t = 10.0
+    owner.poll()
+    rails = _halts(night)
+    night.poll_fills(_market())
+    assert any("venue failed" in r for r in rails)
+    assert owner.book.has_pending("night") is False
+
+
+def test_no_rejection_without_a_trade_list_read_that_succeeded(tmp_path):
+    owner, api, night, clock = _raised_sell(tmp_path)
+    api.raise_on_lookup = True
+    clock.t = 500.0
+    owner.poll()
+    rails = _halts(night)
+    night.poll_fills(_market())
+    assert rails == []
+    assert night.has_pending() is True
+
+
+def test_an_unconfirmed_leg_explains_the_venue_running_ahead(tmp_path):
+    """The deal can lag the position by tens of seconds (§23.7)."""
+    owner, api, night, _ = _raised_sell(tmp_path)
+    api.positions = [_Row(1, "Sell")]
+    assert owner.reconcile() is True
+    assert "explained by orders in flight" in owner.reconcile_note
+
+
+def test_a_late_accept_after_the_deadline_is_cancelled(tmp_path):
+    owner, api, night, clock = _raised_sell(tmp_path)
+    clock.t = 121.0
+    owner.poll()                                   # rejected: orphaned
+    _full_order_event(owner, "19EFD2", "OIDX")
+    assert any("cancelling it" in a for a in owner.anomalies)
+    listed = _ListedTrade("OIDX", "19EFD2")
+    api.trades = [listed]
+    clock.t = 130.0
+    owner.poll()
+    assert api.cancelled == [listed]
+
+
+def test_a_fill_on_an_orphan_is_booked_and_reported(tmp_path):
+    owner, api, night, clock = _raised_sell(tmp_path)
+    clock.t = 121.0
+    owner.poll()
+    _deal(owner, "19EFD2", side="Sell", qty=1, price=44889.0, trade_id="OIDX")
+    assert owner.book.net_for("night") == -1
+    assert any("needs it by hand" in a for a in owner.anomalies)
+    api.positions = [_Row(1, "Sell")]
+    assert owner.reconcile() is True, "the book agrees with the venue"
+
+
+def test_an_orphan_does_not_hold_back_the_next_done(tmp_path):
+    owner, api, night, clock = _raised_sell(tmp_path)
+    clock.t = 121.0
+    owner.poll()
+    assert owner.book.has_pending("night") is False
 
 
 def test_a_malformed_submit_intent_does_not_place(tmp_path):
