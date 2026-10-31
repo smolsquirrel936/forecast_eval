@@ -169,6 +169,9 @@ class OwnerProcess:
         #       reads; append/popleft are atomic, and a reader takes a snapshot.
         self.reconcile_grace = reconcile_grace
         self._clock = clock
+        # Tech: when this owner started, on `clock`.
+        # Why:  `stale_deployments` counts silence from no earlier than this.
+        self._started = clock()
         # Tech: Taipei wall time, for telling which months have expired.
         # Why:  expiry is a calendar instant (`roll.month_expired`), which the
         #       monotonic `clock` cannot express. Injected so a test can stand
@@ -977,10 +980,19 @@ class OwnerProcess:
         #       notice. Nothing is closed on this signal — deciding what to do
         #       about an absent deployment holding a lot is a risk call (§7.4),
         #       not a mechanical one, so this reports and stops.
+        #
+        #       Tech: silence is counted from the later of the deployment's
+        #             last record and this owner's start.
+        #       Why:  2026-10-19 04:29 — an owner started after a pause reads
+        #             intent files whose last record predates the pause, so
+        #             every deployment still starting up was reported silent
+        #             on the first check. A deployment gets the same timeout
+        #             to speak after an owner start as between two intents.
+        since_start = self._clock() - self._started
         stale = []
         for slug in self.slugs:
             age = self._in[slug].age_seconds()
-            if age is not None and age > self.deployment_timeout:
+            if age is not None and min(age, since_start) > self.deployment_timeout:
                 stale.append(slug)
         return stale
 
