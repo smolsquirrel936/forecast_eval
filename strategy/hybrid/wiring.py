@@ -1,15 +1,22 @@
-"""HYBRID's strategy wiring — UNTUNED; both halves at the reset defaults.
+"""HYBRID's strategy wiring — hybrid_split_iter22 plus the 2026-11-01 percent stops.
 
 **The DAY half trades the DAY session and the NIGHT half the NIGHT session**, and
 a lot may carry across a session change (``forced_close`` False), as in
 ``fullday``. Each half's knobs are prefixed ``day_`` / ``night_``.
 
-**These values were not chosen for the hybrid.** They are ``main``'s reset day
-and night packages (DAYNIGHT_TOTO2_RESET_PLAN, ``20767bb``): day ±0.001 /
-``min_prob`` 0.65, night ±0.00045 / 0.5, both two-sided Toto2-1B at context 3008,
-no exit rule. There is no ``results_hybrid.tsv`` row yet; ``iter01`` of
-``autoresearch_trading_plan_hybrid_split07.md`` — this package unedited — sets the first
-best.
+**The code is the reset packages'; the values are tuned.** Both halves are
+copied from ``main``'s reset day and night packages (DAYNIGHT_TOTO2_RESET_PLAN,
+``20767bb``), Toto2-1B at context 3008. ``hybrid_split_iter22`` (``9c0741f`` on
+``autoresearch_split_0.7_hybrid``, ``results_hybrid.tsv``; adopted here as
+``58eb8b5``) tuned them in one joint search
+(``autoresearch_trading_plan_hybrid_split07.md``): day ±0.0005 / ``min_prob`` 0.60,
+no openings 09:30–13:00; night ±0.0007 / 0.5, closing carried lots but never
+opening. Train Calmar 12.8738, held-out 6.9773.
+
+**The stops were added after the search** (2026-11-01, HYBRID_PCTSTOP_REPORT.md on
+``autoresearch_hybrid_pctstop_1101``): day ``stop_pct`` 0.05, night 0.06, a user
+decision against that report's None/None — see ``PARAMS``. With them the package
+no longer reproduces the iter22 row: train Calmar 12.2446, held-out 6.92.
 
 **The twelve CLI knobs.** ``real_data.py`` resolves twelve unprefixed knobs for
 every package. Four mean the same here as anywhere: ``stride_bars`` and
@@ -66,7 +73,16 @@ PARAMS: Dict[str, Any] = {
     "day_full_confidence_prob": 0.9,
     "day_aggression_ticks": 0,
     "day_max_aggression_ticks": None,
-    "day_stop_pct": None,
+    # Adopted 2026-11-01 from HYBRID_PCTSTOP_REPORT.md (autoresearch_hybrid_pctstop_1101,
+    # cell day 0.05 / night 0.06): the tightest widths that do not wreck the
+    # held-out read — day 0.03 churns (test Calmar 1.34), night 0.05 fires a
+    # second loser (test 3.73 / MDD -3288). A user decision against the report's
+    # None/None: train Calmar 12.87 -> 12.24, MDD -1129 -> -1157; test 6.98 -> 6.92,
+    # MDD -2342 unchanged. With day at 0.05 the night stop never fired on either
+    # window (night 0.06-0.08 are byte-identical); it caps a carried lot overnight,
+    # when only the night rule is checked. --param day_stop_pct=none
+    # night_stop_pct=none restores the stop-less run.
+    "day_stop_pct": 0.05,
     # hybrid_split_iter18: the day half stops opening positions in the midday
     # lull (start inclusive / end exclusive) — those train entries lost -1267
     # points over 30 while morning (08-10) entries made +8467. hybrid_split_iter20
@@ -87,7 +103,7 @@ PARAMS: Dict[str, Any] = {
     "night_full_confidence_prob": 0.9,
     "night_aggression_ticks": 0,
     "night_max_aggression_ticks": None,
-    "night_stop_pct": None,
+    "night_stop_pct": 0.06,         # see day_stop_pct
     # hybrid_split_iter09: the night half closes but never opens (its own
     # entries measured -997.1 train points at iter08); --param night_allow_open=true
     # restores the copied behavior

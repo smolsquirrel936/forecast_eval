@@ -29,16 +29,24 @@ half's Forecaster, SignalEmitter, Trader and optional percent stop from its
 | `day_*` / `night_*` | `checkpoint`, `context_length`, the band, `min_prob`, `full_confidence_prob`, `aggression_ticks`, `max_aggression_ticks`, `stop_pct` for that half |
 
 ## Key points / gotchas
-- **UNTUNED.** Both halves start at `main`'s reset session packages
-  (DAYNIGHT_TOTO2_RESET_PLAN, `20767bb`): day ±0.001 / `min_prob` 0.65, night
-  ±0.00045 / 0.5, two-sided, Toto2-1B, context 3008, no exit rule. The search is
-  `autoresearch_trading_plan_hybrid_split07.md` (repo root): one joint search over
-  both halves, one half per iteration.
+- **Tuned: `hybrid_split_iter22` plus percent stops.** The code of both halves
+  is `main`'s reset session packages (DAYNIGHT_TOTO2_RESET_PLAN, `20767bb`),
+  Toto2-1B, context 3008; the values come from the joint search
+  `autoresearch_trading_plan_hybrid_split07.md` (repo root), final iter22
+  (`9c0741f`, adopted as `58eb8b5`): day ±0.0005 / `min_prob` 0.60, no openings
+  09:30–13:00; night ±0.0007 / 0.5, closes only. Train Calmar 12.8738,
+  held-out 6.9773.
+- **Percent stops since 2026-11-01:** `day_stop_pct` 0.05, `night_stop_pct` 0.06,
+  from `HYBRID_PCTSTOP_REPORT.md` (`autoresearch_hybrid_pctstop_1101`) — a user
+  decision against the report's None/None. Train Calmar 12.2446 (−4.9 %), MDD
+  −1157 (was −1129); held-out 6.92, MDD −2342 unchanged. The night stop never
+  fired with the day stop on; it caps a carried lot overnight.
+  `--param day_stop_pct=none night_stop_pct=none` restores the iter22 run.
 - **Registered for live** (2026-10-27) as `PINNED_HYBRID` in `live/config.py`:
   named package `hybrid`, file slug `hybrid` (never fullday's `day_night`). Live
   builds from this same `make_strategy`.
-- `exit_rule` is None unless a half sets `stop_pct`, so the unedited package
-  runs exactly the reset packages' path (no exit step).
+- `exit_rule` is a `RoutedExitRule` when either half sets `stop_pct`, None when
+  neither does — then `run_backtest` skips the exit step, as the reset packages do.
 - Stateful objects (emitters' deques, traders' mirrors, forecasters' model
   cache) are built fresh on every `make_strategy` call.
 

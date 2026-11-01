@@ -228,9 +228,19 @@ def test_only_the_half_with_a_stop_can_exit():
 
 
 def test_the_exit_rule_is_none_until_a_half_sets_a_stop():
-    assert wiring.make_strategy(warmup_bars=0)["exit_rule"] is None
-    rule = wiring.make_strategy(warmup_bars=0, night_stop_pct=0.05)["exit_rule"]
+    assert wiring.make_strategy(warmup_bars=0, day_stop_pct=None,
+                                night_stop_pct=None)["exit_rule"] is None
+    rule = wiring.make_strategy(warmup_bars=0, day_stop_pct=None,
+                                night_stop_pct=0.05)["exit_rule"]
     assert rule.halves["DAY"] is None and rule.halves["NIGHT"].stop_pct == 0.05
+
+
+def test_the_package_default_carries_the_adopted_stops():
+    """Adopted 2026-11-01 from HYBRID_PCTSTOP_REPORT.md: day 0.05 / night 0.06."""
+    rule = wiring.make_strategy(warmup_bars=0)["exit_rule"]
+    assert rule.halves["DAY"].stop_pct == 0.05
+    assert rule.halves["NIGHT"].stop_pct == 0.06
+    assert rule.adoptable is True
 
 
 # ---- R3/R4/R5: forecaster ---------------------------------------------------

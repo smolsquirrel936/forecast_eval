@@ -16,7 +16,7 @@ places orders on.** `live/config.py` holds only the provenance record.
 | Forecaster | Toto2-1B (`Datadog/Toto-2.0-1B`), context 3008 bars, horizon 30 bars |
 | Emitter | `ThresholdEmitter`, trend filter + path momentum on, `full_confidence_prob` 0.9 (hybrid: one per half, behind a router) |
 | Trader | limit orders at `aggression_ticks` 0, `max_position` 1, no-flip, no pyramiding |
-| Exit rule | `EntryPercentStop` (`exits/pct_stop.py`) at each package's `stop_pct` — closes when the price moves `entry_price × stop_pct` against the position, checked every tick, filled at the next print. Otherwise positions close only on an opposite signal. Hybrid has none |
+| Exit rule | `EntryPercentStop` (`exits/pct_stop.py`) at each package's `stop_pct` — closes when the price moves `entry_price × stop_pct` against the position, checked every tick, filled at the next print. Otherwise positions close only on an opposite signal. Hybrid routes one per half (`RoutedExitRule`) |
 | `forced_close` | `False` — positions carry across sessions, nights and weekends |
 
 ## Day — `day_split_iter02`
@@ -181,7 +181,7 @@ half manages it (`strategy/hybrid/router.py`).
 | band | buy +0.0005 / sell −0.0005 | buy +0.0007 / sell −0.0007 |
 | `min_prob` | 0.60 | 0.50 |
 | opens | **none 09:30–12:59** (`day_open_block_start` 9.5 / `_end` 13) | **never** (`night_allow_open` False): closes only |
-| `stop_pct` | none | none |
+| `stop_pct` | **0.05** (since 2026-11-01) | **0.06** (since 2026-11-01) |
 | shared | stride 30, Toto2-1B (one copy, both halves), context 3008 | |
 
 - **Source:** `autoresearch_split_0.7_hybrid` @ `9c0741f` (`iter22`), placed on
@@ -191,6 +191,11 @@ half manages it (`strategy/hybrid/router.py`).
 - **Score:** Calmar **12.8738**, 86 trades, on the **train 70 %**. Held-out
   approximate Calmar **6.9773** against the baseline's 5.7634 and the day half
   alone's 0.371, read once after the search ended.
+- **Stops (2026-11-01):** day 0.05 / night 0.06 from `HYBRID_PCTSTOP_REPORT.md`
+  (`autoresearch_hybrid_pctstop_1101`), a user decision against the report's
+  None/None. With them: train Calmar 12.2446, MDD −1157 (was −1129); held-out
+  6.92, MDD −2342 unchanged. The night stop never fired with the day stop on;
+  it caps a carried lot overnight, where only the night rule is checked.
 - **Live:** slug `hybrid` (its own ledger, bar cache and wire; never fullday's
   `day_night`). Registered by `4b82111` and the five commits before it on
   `main` (`autoresearch_trading_plan_hybrid_split07.md`, "Going live").
