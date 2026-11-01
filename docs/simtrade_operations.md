@@ -714,6 +714,46 @@ that branch only.
 | fullday | `fullday_rev_iter34` (10-27; launched as `fullday_split_iter07`) | band ±0.001, `min_prob` 0.50 / entry 0.60, stride 10, stop 0.05, lock 0.03, cooldown 16 |
 | hybrid | `hybrid_split_iter22` (registered 10-27, **not yet started**) | day half ±0.0005 / 0.60, no opens 09:30–12:59; night half ±0.0007 / 0.50, closes only; stride 30, stop 0.05 day / 0.06 night (11-01) |
 
+**2026-11-01: hybrid's new stops — resume first, fresh-start once flat (user
+go, plan A).** Hybrid trades `day_stop_pct` 0.05 / `night_stop_pct` 0.06 from
+its next start (`4c35dd5`); the user wants the new config in a new soak epoch.
+`--fresh-start` cannot come first: hybrid holds **+1 @ 47102**, and the start
+refuses a deployment that is not flat (exit 5, `gate=fresh_start`). `flatten`
+cannot close it alone either: day holds −1 @ 47025, so the account nets 0 (the
+10-29 trap). So the new stop closes the old lot, then hybrid restarts fresh.
+
+1. **Before 08:30 on 11-02, owner first, then all four with `--resume`** (§5),
+   hybrid included:
+
+    ```powershell
+    uv run --no-sync python -m forecast_eval.live.cli --strategy hybrid --broker client --resume --i-understand-this-places-orders
+    ```
+
+    Expect hybrid to adopt +1 @ 47102 with the stops armed from that entry:
+    **day 44747, night 44276**. The last print was 44433 (10-31 05:00), 5.67 %
+    under the entry.
+2. **If 11-02 opens below 44747, the day stop sells on the first day tick**
+   (about −2,350 points or worse, booked in the old epoch). Confirm hybrid is
+   flat: a SELL row in `fills_hybrid.csv`, and `position` `signed_qty` 0 in
+   `events_hybrid.jsonl`.
+3. **Stop hybrid alone** (§4) **and start it fresh:**
+
+    ```powershell
+    uv run --no-sync python -m forecast_eval.live.cli --strategy hybrid --broker client --fresh-start --i-understand-this-places-orders
+    ```
+
+    Do it in a window where hybrid cannot open: **09:30–12:59** (the day half's
+    open block) or **any time in the night session** (the night half never
+    opens). Between 08:45 and 09:29 the day half can re-enter right after the
+    stop, and a new lot makes the fresh start refuse again. Owner and the
+    other three keep running; the owner's seed still balances, because hybrid's
+    ledger holds the stop's closing fill.
+4. **If 11-02 opens at or above 44747**, hybrid stays held under its stops.
+   Repeat step 3 whenever it is next flat (a stop or a signal exit).
+
+Log the fresh start as a row below; the soak epoch in `soak_epoch_hybrid.json`
+changes.
+
 **2026-10-27: hybrid registered for live, not yet started.** Its code is on
 `simtrade_0929` (`58eb8b5`, `5382486`, `5fd2d3d`, `fc27688`), and the live
 support for a second DAY+NIGHT deployment came from `main` (merges `8db3335`,
@@ -885,7 +925,6 @@ repeat step 5 only; the ledgers are already stamped.
 | 2026-10-03 09:21 | **warm-up VRAM fix on `main`**: priming at a fixed batch of 32 (`PRIME_BATCH_SIZE`) plus `empty_cache()` after it. Measured on the day bar cache, 900 boundaries: auto → batch 1024, 21.5 GiB held; 32 → 5.0 s, 4.61 GiB peak, 4.13 GiB after release; outputs equal to float noise. Not on `simtrade_0929` until `main` is merged into it |
 | 2026-10-03 09:26 | `main` merged into `simtrade_0929` (`7e57912`, no conflicts; `strategy/` and `live/config.py` untouched). Suite on the branch: 1501 passed, 11 skipped, 0 failed |
 | 2026-10-03 09:49–09:50 | **restart with the fix, `--resume`: passed.** Owner 09:49:34, then day 09:49:43, night 09:50:06, fullday 09:50:30. Soak epochs unchanged; all primed with 4 samples; all flat; no new `fatal.jsonl` entry. **VRAM: each deployment 4.8 GB dedicated / 5.0 GB committed, nothing paged out; 16.5 GB used, 15.7 GB free** (was 63 GB committed). Login-to-warm-up: day 17 s, night 18 s, fullday 15 s (fullday took 101 s before the fix) |
-
 | 2026-10-06 09:13–09:16 | **owner stopped on an in-flight fill; day and fullday halted.** Fullday's first order, BUY `14AD46` @49887 (intent 09:13:02), filled @49884 at 09:14:04.5. The owner's 30 s reconcile at ~09:14:07 read venue +1 against book 0, before the deal callback arrived, and the owner exited 6. Its logout (`shioaji.log`, pid 20596, 09:14:07.09) cut the deal stream, so the fill reached no ledger. Day and fullday halted at 09:16:02 on `owner silent for 115s`. Night idled and was stopped cleanly at 13:48 |
 | 2026-10-06 ~13:50–16:00 | restart attempts on uncommitted fixes (since discarded). Start-up refused `account mirror 0 != venue 1`. Two day restarts at 15:13 crashed on `PermissionError(13)`, file unrecorded. The row `2026-10-06 09:14:04.511207,BUY,49884.0,1,9.9768,soak_20260929_082029_100149` was added by hand to `fills_day_night.csv` at 14:45 |
 | 2026-10-07 | venue confirmed: one order, `14AD46` Buy 1 @49887, Filled dealt=1; account +1. Hand-added row kept. **Fix on `main`:** 120 s grace for fills in flight, freeze instead of exit, no wire replay on restart (owner and deployments), `owner_session.jsonl`, crash records name the file. `owner_ack_day_night.json` is a leftover of the discarded fix; no code reads it |
