@@ -76,6 +76,10 @@ appears in no file as such.
   arrived after the next order's bar.
 - **The open position is the fills' FIFO remainder.** `trades.csv` holds only
   closed round trips.
+- **Unrealised P&L is the open lot at the newest bar's price, before fees**
+  (since 2026-11-05). The entry fee is already in "Fees on all fills" and the
+  exit fee is not paid until the lot closes. The row names the price and bar
+  time it used; for a stopped deployment that bar is its last one, not now.
 - **Times are cut to the second as ISO text.** `fills.csv` writes nanoseconds
   after a space, which JavaScript's `Date` is not guaranteed to parse.
 
@@ -116,7 +120,7 @@ appears in no file as such.
 | `find_processes(procs)` | function | owner + one leaf process per `--strategy` |
 | `find_deployments(outputs)` | function | `Deployment`s, keyed by soak id |
 | `collect_run(dep, outputs, now)` | function | one deployment's sessions, ticks, decisions, positions, transactions, stability |
-| `collect_transactions(orders, fills, trades)` | function | orders with their matched outcome, closed trades, the open lot, totals |
+| `collect_transactions(orders, fills, trades, mark)` | function | orders with their matched outcome, closed trades, the open lot valued at `mark` (the newest bar), totals |
 | `parse_shioaji_log(path, pids, tz)` | function | logins, attempts and errors per PID |
 | `read_hardware(pids)` | function | VRAM/RAM per PID, GPU totals, commit charge. Each probe degrades to `None` on its own |
 | `findings(data)` | function | the rule-based key findings |

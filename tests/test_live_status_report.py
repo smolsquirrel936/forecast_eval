@@ -408,7 +408,24 @@ def test_a_fill_is_claimed_once_and_only_on_its_own_side():
 def test_no_orders_is_an_empty_record():
     t = sr.collect_transactions([], [], [])
     assert t == {"orders": [], "fills": 0, "trades": [], "open": [], "unfilled": 0,
-                 "unmatched_fills": 0, "net_points": 0.0, "fees_points": 0.0, "wins": 0}
+                 "unmatched_fills": 0, "net_points": 0.0, "unrealised_points": 0.0, "mark": None,
+                 "fees_points": 0.0, "wins": 0}
+
+
+def test_the_open_lot_is_marked_at_the_newest_bar():
+    """Night's held long (entry 47037) valued at a later bar, before fees."""
+    bar = {"timestamp": "2026-10-17T04:59:00", "price": 46200.0}
+    t = sr.collect_transactions(NIGHT_ORDERS, NIGHT_FILLS, NIGHT_TRADES, bar)
+    assert t["unrealised_points"] == -837.0
+    assert t["mark"] == {"ts": "2026-10-17T04:59:00", "price": 46200.0}
+    assert t["net_points"] == -381.0, "realised is unchanged by the mark"
+    short = sr.collect_transactions([], [_fill("2026-10-01 09:00:30", "SELL", 100)], [], {"price": 90})
+    assert short["unrealised_points"] == 10.0
+
+
+def test_a_held_lot_without_a_bar_has_no_unrealised_value():
+    t = sr.collect_transactions(NIGHT_ORDERS, NIGHT_FILLS, NIGHT_TRADES)
+    assert t["unrealised_points"] is None and t["mark"] is None
 
 
 def test_collect_carries_the_transactions_into_the_page(tmp_path, monkeypatch):

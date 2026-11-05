@@ -628,6 +628,12 @@ function renderTransactions() {
       ? ` <b style="color:var(--critical)">· ${r.transactions.unmatched_fills} match no order</b>` : ""))],
     ["Closed round trips (wins)", ...RUNS.map(r => `${r.transactions.trades.length} (${r.transactions.wins})`)],
     ["Realised net P&L", ...RUNS.map(r => pts(r.transactions.net_points, r))],
+    // Valued at the newest bar, before fees: the entry fee is in the row below, the exit fee is not paid yet.
+    ["Unrealised P&L (open lot)", ...RUNS.map(r => {
+      const t = r.transactions;
+      if (!t.open.length) return "— (flat)";
+      return pts(t.unrealised_points, r) + (t.mark ? `<br><span class="small">at ${fmt(t.mark.price)} (bar ${fhm(t.mark.ts)}), before fees</span>` : "");
+    })],
     ["Fees on all fills", ...RUNS.map(r => fmt(r.transactions.fees_points, 1) + " pts")],
   ], RUNS.map((_, i) => i + 1));
   $("tx-runs").innerHTML = RUNS.map((r, i) => {
