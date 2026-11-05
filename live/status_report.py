@@ -288,8 +288,12 @@ def _sec(ts: str) -> str:
 
 
 def collect_transactions(orders: List[Dict[str, str]], fills: List[Dict[str, str]],
-                         trades: List[Dict[str, str]]) -> Dict[str, Any]:
-    """One deployment's transaction record: orders with outcomes, closed trades, open lot."""
+                         trades: List[Dict[str, str]],
+                         mark: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """One deployment's transaction record: orders with outcomes, closed trades, open lot.
+
+    `mark` is the newest bar (`timestamp`, `price`); the open lot is valued at it.
+    """
     fl = sorted(({"ts": _sec(f.get("timestamp", "")), "side": f.get("side", ""),
                   "price": _num(f.get("fill_price")), "qty": int(_num(f.get("quantity")) or 0),
                   "fee": _num(f.get("fee"))} for f in fills), key=lambda f: f["ts"])
@@ -336,6 +340,21 @@ def collect_transactions(orders: List[Dict[str, str]], fills: List[Dict[str, str
     open_lots = [{"side": "LONG" if l["sign"] > 0 else "SHORT", "qty": l["qty"],
                   "entry": l["price"], "since": l["ts"]} for l in lots]
 
+    # Tech: the open lots valued at the newest bar's price, in points, before
+    #       fees; 0.0 when flat, None when a lot is held but no bar or entry
+    #       price is known.
+    # Why:  realised P&L alone hides a losing hold — on 2026-10-17 night's long
+    #       could not be closed and showed only as "LONG 1 @ 47037". The fees
+    #       stay out: the entry fee is already in "Fees on all fills", and the
+    #       exit fee is not paid until the lot closes.
+    mark_price = _num((mark or {}).get("price"))
+    if not lots:
+        unrealised: Optional[float] = 0.0
+    elif mark_price is None or any(l["price"] is None for l in lots):
+        unrealised = None
+    else:
+        unrealised = sum(l["sign"] * (mark_price - l["price"]) * l["qty"] for l in lots)
+
     tr = [{"entry_ts": _sec(t.get("entry_ts") or ""), "exit_ts": _sec(t.get("exit_ts") or ""), "side": t.get("side"),
            "entry": _num(t.get("entry_price")), "exit": _num(t.get("exit_price")),
            "points": _num(t.get("pnl_points")), "fees": _num(t.get("fees_points")),
@@ -350,7 +369,10 @@ def collect_transactions(orders: List[Dict[str, str]], fills: List[Dict[str, str
         #       window then misreads — each one a reason to read the files.
         "unmatched_fills": len(fl) - len(claimed),
         "net_points": sum(t["net"] or 0.0 for t in tr),
-        "fees_points": sum(f["fee"] or 0.0 for f in fl),
+        "unrealised_points": unrealised,
+        "mark": {"ts": _sec(str(mark.get("timestamp") or "")), "price": mark_price}
+                if mark_price is not None else None,
+        "fees_points":sum(f["fee"] or 0.0 for f in fl),
         "wins": sum((t["net"] or 0) > 0 for t in tr),
     }
 
@@ -574,7 +596,7 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
             "owner_values": {str(k): v for k, v in owner_pos.items()}, "owner_now": owner_last,
         },
         "performance": collect_performance(dep),
-        "transactions": collect_transactions(orders, fills, trades),
+        "transactions": collect_transactions(orders, fills, trades, bars[-1] if bars else None),
         "stability": {
             "relogins": [e.get("when") for e in relogins],
             "relogin_failed": [{"when": e.get("wall"), "backoff": e.get("backoff_seconds")} for e in failed],
