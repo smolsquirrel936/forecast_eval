@@ -711,8 +711,25 @@ that branch only.
 |---|---|---|
 | day | `day_split_iter02` (09-29) | band ±0.001, `min_prob` 0.65, stride 30, stop 0.10 |
 | night | `night_iter30` (10-05; launched as `night_iter10`) | band ±0.0004, `min_prob` 0.6, two-sided, stride 15, stop 0.05 |
-| fullday | `fullday_rev_iter34` (10-27; launched as `fullday_split_iter07`) | band ±0.001, `min_prob` 0.50 / entry 0.60, stride 10, stop 0.05, lock 0.03, cooldown 16 |
+| fullday | `fullday_rev_iter34` (10-27; launched as `fullday_split_iter07`) | band ±0.001, `min_prob` 0.50 / entry 0.60, stride 10, stop 0.05, lock 0.03, cooldown 16, stop cooldown 3 days (11-08) |
 | hybrid | `hybrid_split_iter22` (registered 10-27, **not yet started**) | day half ±0.0005 / 0.60, no opens 09:30–12:59; night half ±0.0007 / 0.50, closes only; stride 30, stop 0.05 day / 0.06 night (11-01) |
+
+**2026-11-08: fullday adds a 3-day cooldown after a stop (user decision).**
+After a stop-sized loss (at least 98 % of `stop_pct`), fullday skips opens on
+the stopped side for 3 days of clock time; the other side opens freely
+(`stop_cooldown_minutes` 4320, `strategy/README.md`). Day, night and hybrid
+are unchanged.
+
+- **It takes effect at fullday's next start.** `--resume` is fine, flat or
+  held: the knob changes only what happens after a future stop, so there is
+  nothing to adopt or restore.
+- **Restart gap:** the cooldown lives in memory. If fullday restarts within 3
+  days of a stop, the restarted process has forgotten it and can re-enter on
+  the stopped side. Until that is fixed, after a fullday stop, avoid
+  restarting fullday for 3 days. If a restart is unavoidable, watch for a
+  same-side open and close it by hand if it is unwanted.
+- **Evidence is weak** (`strategy/README.md`): most of the gain is in the
+  08-21 → 11-06 holdout that prompted the rule.
 
 **2026-11-01: hybrid's new stops — resume first, fresh-start once flat (user
 go, plan A).** Hybrid trades `day_stop_pct` 0.05 / `night_stop_pct` 0.06 from

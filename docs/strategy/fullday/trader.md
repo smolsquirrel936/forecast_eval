@@ -62,6 +62,13 @@ aggression and sizing, and the fill bookkeeping that feeds `ExitRule` queries.
 - The v1 invariants still hold here and the shared tests still cover them: no
   pyramiding, no flipping, and *every* signal (HOLD included) cancels any
   resting order first.
+- **`stop_cooldown_minutes` / `stop_cooldown_loss`** (strategy_test_1108 step 3,
+  adopted 2026-11-08; class defaults 0 / None): after a flatten that lost at
+  least `stop_cooldown_loss` of entry, an OPEN on the closed position's side is
+  skipped until that many minutes of clock time have passed since the fill.
+  The opposite side opens freely, and a roll's re-open bypasses it. It runs
+  after the signal-count cooldown, which keeps consuming counts as before. The
+  block is held in memory only, so a restart forgets it.
 - `on_fill` has **no average-entry branch**: anything above `max_position=1` is
   unsound rather than merely risky, which is why the live rails refuse it at
   start-up.

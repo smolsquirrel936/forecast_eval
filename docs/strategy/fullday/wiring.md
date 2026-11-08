@@ -81,6 +81,11 @@ factory. This is the file a search for this session edits first.
   opens freely). `0` — the inert control, the cooldown never arms, runs are
   byte-identical to the pre-knob package. `make_strategy` raises `ValueError`
   unless it is an int >= 0.
+- **`stop_cooldown_minutes` (strategy_test_1108 step 3; adopted at 4320 = 3
+  days on 2026-11-08)** is passed to the [Trader](trader.md) with
+  `stop_cooldown_loss = 0.98 * stop_pct`, so it arms on a stop-sized loss. With
+  `stop_pct` None it is passed as 0 (no stop, nothing to key on). 0 is the
+  control. Evidence and the live restart gap: [strategy/README.md](../../../strategy/README.md).
 
 > **This session is UNTUNED.** The values in `PARAMS` are DAY's, inherited so the
 > package is runnable and parity-checkable. They were not chosen for

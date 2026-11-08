@@ -113,6 +113,7 @@ places orders on.** `live/config.py` holds only the provenance record.
 | sides | long and short |
 | exits | `stop_pct` **0.05** + `lock_after_pct` **0.03**: once a trade is 3 % in profit, a return to its entry closes it (`strategy/fullday/exits.py`) |
 | `reentry_cooldown_signals` | **16**: after a close, an open on the same side is skipped for 16 signals (~2.7 h); the other side opens freely |
+| `stop_cooldown_minutes` | **4320** (since 2026-11-08): after a stop-sized loss (≥ 98 % of `stop_pct`), an open on the same side waits 3 days of clock time; the other side opens freely |
 
 - **Source:** `autoresearch_fullday_reversal_1026` →
   `candidate_fullday_iter34` (merged 2026-10-26). It is the loop's `iter34`;
@@ -131,6 +132,21 @@ places orders on.** `live/config.py` holds only the provenance record.
     roll's re-open through;
   - the roll's re-open keeps the original entry, so the stop and the lock keep
     measuring from it, as in the backtest.
+- **Stop cooldown, added 2026-11-08 (user decision):** built and measured on
+  branch `strategy_test_1108` (`9e31443`); only the fullday Trader/wiring part
+  is on this branch. Every forecast schedule was run over the whole tape
+  (`outputs/strategy_test_1108_stopcd/`). Median of 10:
+  - net +14 798 → **+18 623**, Calmar 1.24 → **2.17**;
+  - the new holdout from 2026-08-21: −6 316 → −3 182.
+
+  **Weak evidence.** The gain is mostly that holdout, which is what prompted
+  the rule. Train is mixed (median +8 595 → +8 440), and 6 of 10 schedules
+  lose a little on 2024-01 → 2026-08. It is a crash-risk control, not a
+  strategy improvement.
+
+  **Live gap:** the cooldown is held in memory only. A restart within 3 days
+  of a stop forgets it, and the restarted deployment may re-enter on the
+  stopped side.
 - **Replaced:** `fullday_split_iter07` + `stop_pct` 0.05, below. Its soak ran
   from 2026-09-29 to 2026-10-23.
 

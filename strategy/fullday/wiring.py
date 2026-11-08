@@ -139,6 +139,17 @@ PARAMS: Dict[str, Any] = {
     # CONTROL: the cooldown never arms, so runs are byte-identical to the
     # pre-knob package.
     "reentry_cooldown_signals": 16,
+    # stop cooldown (strategy_test_1108 step 3): after a stop-sized loss (at
+    # least 98% of stop_pct), skip same-side opens for this many minutes of
+    # clock time. 0 = control, never arms; inert when stop_pct is None.
+    # ADOPTED 4320 (3 days) on simtrade_0929, 2026-11-08, user decision.
+    # Why:  over every forecast schedule (strategy_test_1108 9e31443,
+    # outputs/strategy_test_1108_stopcd/, median of 10): net +14 798 ->
+    # +18 623, Calmar 1.24 -> 2.17, new holdout (from 08-21) -6 316 ->
+    # -3 182. Weak evidence: the gain is mostly the 08-21 holdout that
+    # prompted the rule; train is mixed (median +8 595 -> +8 440) and 6 of 10
+    # schedules lose a little on 2024-01..2026-08.
+    "stop_cooldown_minutes": 4320,
     # entry-probability gate — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param entry_min_prob=...``.
     # Why:  reversal loop decision 2. 0.50 is the CONTROL value: the floor it
@@ -268,6 +279,9 @@ def make_strategy(
             entry_min_prob=p["entry_min_prob"],
             full_confidence_prob=p["full_confidence_prob"],
             reentry_cooldown_signals=p["reentry_cooldown_signals"],
+            # the cooldown keys on a stop-sized loss, so without a stop it is off
+            stop_cooldown_minutes=(p["stop_cooldown_minutes"] if p["stop_pct"] is not None else 0),
+            stop_cooldown_loss=(0.98 * p["stop_pct"] if p["stop_pct"] is not None else None),
         )
         # Tech: bind the emitter to the trader this factory just built, so the
         #       exit band knows which side is the exit side.
