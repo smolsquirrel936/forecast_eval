@@ -82,6 +82,7 @@ from .exits import (
     GivebackTrail,
 )
 from .forecaster import make_forecaster
+from .reversal import ReversalForecaster
 from .trader import Trader
 
 # Tech: this session's default knobs — the twelve values `real_data.py`'s
@@ -168,6 +169,11 @@ PARAMS: Dict[str, Any] = {
     # placed leaves it working. Needed at stride 1, where every tick emits a
     # signal and a fired stop would otherwise never fill. False = control.
     "exit_survives_signal": False,
+    # signal source (strategy_test_1108, plan step 2): "toto2" is the control;
+    # "reversal" swaps in reversal.py's model-free "reverse the last
+    # reversal_bars bars" forecast under the same emitter and trader.
+    "signal_source": "toto2",
+    "reversal_bars": None,
 }
 
 # Tech: the knob's tuned value — 0.05, ADOPTED on simtrade_0929 (2026-10-18).
@@ -255,13 +261,31 @@ def make_strategy(
     #       matches `run.fee_sensitivity_sweep`'s `make_emitter`/`make_forecaster`
     #       convention, which exists because these objects are stateful and
     #       reusing one across runs silently produces wrong numbers.
-    forecaster = make_forecaster(
-        warmup_bars=warmup_bars,
-        stride_bars=p["stride_bars"],
-        horizon_bars=p["horizon_bars"],
-        context_length=p["context_length"],
-        checkpoint=p["checkpoint"],
-    )
+    # Tech: build Toto2 (the control) or the reversal forecaster, refusing an
+    #       unknown source and a reversal_bars that does not match the source.
+    # Why:  plan step 2 compares the two signal sources under an identical
+    #       emitter/trader stack; a stray reversal_bars on a Toto2 run, or a
+    #       reversal run without one, would be a silent mismatch.
+    if p["signal_source"] not in ("toto2", "reversal"):
+        raise ValueError(f"signal_source must be 'toto2' or 'reversal', got {p['signal_source']!r}")
+    if (p["signal_source"] == "reversal") != (p["reversal_bars"] is not None):
+        raise ValueError("reversal_bars is set exactly when signal_source='reversal', got "
+                         f"{p['signal_source']!r} / {p['reversal_bars']!r}")
+    if p["signal_source"] == "reversal":
+        forecaster = ReversalForecaster(
+            warmup_bars=warmup_bars,
+            forecast_stride_bars=p["stride_bars"],
+            forecast_horizon_bars=p["horizon_bars"],
+            lookback_bars=p["reversal_bars"],
+        )
+    else:
+        forecaster = make_forecaster(
+            warmup_bars=warmup_bars,
+            stride_bars=p["stride_bars"],
+            horizon_bars=p["horizon_bars"],
+            context_length=p["context_length"],
+            checkpoint=p["checkpoint"],
+        )
     emitter = ThresholdEmitter(
         buy_threshold=p["buy_threshold"],
         sell_threshold=p["sell_threshold"],

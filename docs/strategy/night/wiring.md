@@ -51,6 +51,10 @@ search started from `PINNED`'s old settings (`4282d33`, band ±0.00045 /
   control (unwrapped, byte-identical); setting only one raises.
 - `exit_survives_signal` (strategy_test_1108) is passed to the
   [Trader](trader.md); `False` is the control. Stride-1 runs need it on.
+- `signal_source` / `reversal_bars` (strategy_test_1108, plan step 2):
+  `'toto2'` is the control. `'reversal'` with an int `reversal_bars` builds
+  [`ReversalForecaster`](reversal.md) in place of Toto2. Setting either one
+  without the other, or an unknown source, raises.
 
 ## Related
 [strategy/night/wiring.md](wiring.md) · [strategy/wiring.py](../wiring.md) · [strategy/base.py](../base.md) · [STRATEGY_SPLIT_PLAN.md](../../../STRATEGY_SPLIT_PLAN.md)
