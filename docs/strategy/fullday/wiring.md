@@ -74,6 +74,14 @@ factory. This is the file a search for this session edits first.
   break of the last N in-position bars' extreme — model-free, no forecast
   lag. `None` — the inert control; the rule composes through the same any-of
   seam. Stateful (`adoptable=False`).
+- **`entry_session` (strategy_test_1108 step 4b)** is passed to the
+  [Trader](trader.md): `"DAY"` or `"NIGHT"` allows opens only in that session.
+  `"ANY"` (a string so `--param` can coerce it) is the control and passes None.
+  `make_strategy` raises `ValueError` on any other value.
+- **`max_hold_bars` (strategy_test_1108 step 4)** composes the shared
+  `exits.time_stop.TimeStop`: a position closes once it is N bars old, so a
+  backtest holds for the horizon a forecast screen scored. `None` — the inert
+  control. `make_strategy` raises `ValueError` unless it is None or an int >= 1.
 - **`reentry_cooldown_signals` (added `fullday_rev_iter33`, reversal decision
   12, phase I)** is a package-declared knob for the Trader's re-entry
   cooldown: after a fill that flattens a position, an OPEN on the closed

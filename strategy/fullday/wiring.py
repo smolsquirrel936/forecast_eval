@@ -81,6 +81,7 @@ from .exits import (
     EntryPercentStop,
     GivebackTrail,
 )
+from ...exits.time_stop import TimeStop
 from .forecaster import make_forecaster
 from .reversal import ReversalForecaster
 from .trader import Trader
@@ -178,6 +179,15 @@ PARAMS: Dict[str, Any] = {
     "stop_cooldown_minutes": 0,
     "signal_source": "toto2",
     "reversal_bars": None,
+    # fixed holding cap (strategy_test_1108 step 4): close a position once it
+    # is this many bars old (shared exits.time_stop.TimeStop, any-of with the
+    # other exits). Lets a backtest hold for the horizon a forecast screen
+    # scored. None = control, the rule is not composed in.
+    "max_hold_bars": None,
+    # entry session (strategy_test_1108 step 4b): "DAY" or "NIGHT" lets the
+    # Trader open only in that session; closes and exits run in both. "ANY" =
+    # control. A string, not None, so --param can coerce it.
+    "entry_session": "ANY",
 }
 
 # Tech: the knob's tuned value — 0.05, ADOPTED on simtrade_0929 (2026-10-18).
@@ -262,6 +272,15 @@ def make_strategy(
     #       width, and failing here beats failing inside the run's make_trader.
     if p["stop_cooldown_minutes"] and p["stop_pct"] is None:
         raise ValueError("stop_cooldown_minutes needs stop_pct to be set")
+    # Tech: the holding cap is None or an int >= 1.
+    # Why:  TimeStop rejects <= 0 itself but not a float or bool; a 1140.0
+    #       from a typo'd --param would otherwise compare silently.
+    if p["entry_session"] not in ("ANY", "DAY", "NIGHT"):
+        raise ValueError(f"entry_session must be 'ANY', 'DAY' or 'NIGHT', got {p['entry_session']!r}")
+    if p["max_hold_bars"] is not None and (not isinstance(p["max_hold_bars"], int)
+                                           or isinstance(p["max_hold_bars"], bool)
+                                           or p["max_hold_bars"] < 1):
+        raise ValueError(f"max_hold_bars must be None or an int >= 1, got {p['max_hold_bars']!r}")
 
     # Tech: build the forecaster and emitter now, but return the Trader as a
     #       *factory* over Execution rather than as an instance.
@@ -332,6 +351,7 @@ def make_strategy(
             exit_survives_signal=p["exit_survives_signal"],
             stop_cooldown_minutes=p["stop_cooldown_minutes"],
             stop_cooldown_loss=(0.98 * p["stop_pct"] if p["stop_pct"] is not None else None),
+            entry_session=(None if p["entry_session"] == "ANY" else p["entry_session"]),
         )
         # Tech: bind the emitter to the trader this factory just built, so the
         #       exit band knows which side is the exit side.
@@ -364,6 +384,8 @@ def make_strategy(
         exit_rules.append(GivebackTrail(giveback_frac=p["giveback_frac"]))
     if p["channel_exit_bars"] is not None:
         exit_rules.append(ChannelExit(channel_exit_bars=p["channel_exit_bars"]))
+    if p["max_hold_bars"] is not None:
+        exit_rules.append(TimeStop(max_bars=p["max_hold_bars"]))
     if not exit_rules:
         exit_rule = None
     elif len(exit_rules) == 1:

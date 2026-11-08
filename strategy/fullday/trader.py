@@ -56,6 +56,7 @@ class Trader:
         exit_survives_signal: bool = False,
         stop_cooldown_minutes: int = 0,
         stop_cooldown_loss: Optional[float] = None,
+        entry_session: Optional[str] = None,
     ):
         # Tech: hold the execution handle and order-placement parameters, and
         #       initialize position/entry tracking to flat.
@@ -138,6 +139,14 @@ class Trader:
         self.stop_cooldown_loss = stop_cooldown_loss
         self._stop_block_side: int = 0      # +1 blocked BUYs, -1 blocked SELLs
         self._stop_block_until: Optional[datetime] = None
+        # Tech: entry session -- with "DAY" or "NIGHT", an OPEN from flat is
+        #       skipped unless the tick is in that session; closes, exits and a
+        #       roll's re-open are untouched. None is the control.
+        # Why:  strategy_test_1108 step 4b: the fullday screen found TXF's own
+        #       1-day reversal pays on NIGHT decision points and is noise by DAY.
+        if entry_session not in (None, "DAY", "NIGHT"):
+            raise ValueError(f"entry_session must be None, 'DAY' or 'NIGHT', got {entry_session!r}")
+        self.entry_session = entry_session
         self.position = 0  # signed contracts; +long / -short
         self.entry_price: float = 0.0
         self.entry_bar_idx: int = -1
@@ -269,6 +278,12 @@ class Trader:
                     and market.timestamp < self._stop_block_until
                     and ((direction == "BUY" and self._stop_block_side > 0)
                          or (direction == "SELL" and self._stop_block_side < 0))):
+                return None
+            # Tech: entry session -- skip an OPEN outside the allowed session.
+            # Why:  see __init__. After both cooldowns, so their counts and
+            #       blocks behave exactly as without it.
+            if (not self._rolling and self.entry_session is not None
+                    and market.session != self.entry_session):
                 return None
             # Tech: entry-only conviction gate — a below-floor signal from flat
             #       submits nothing (the unconditional cancel above still ran, so
