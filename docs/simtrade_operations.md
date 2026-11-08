@@ -710,9 +710,25 @@ that branch only.
 | Deployment | Source (since) | Notable |
 |---|---|---|
 | day | `day_split_iter02` (09-29) | band ±0.001, `min_prob` 0.65, stride 30, stop 0.10 |
-| night | `night_iter30` (10-05; launched as `night_iter10`) | band ±0.0004, `min_prob` 0.6, two-sided, stride 15, stop 0.05 |
+| night | `night_iter30` (10-05; launched as `night_iter10`) + price ridge (11-09) | ridge forecaster (horizon 1140, history 3421 bars), band ±0.00044, `min_prob` 0.6 (inert), two-sided, stride 15, stop 0.05 |
 | fullday | `fullday_rev_iter34` (10-27; launched as `fullday_split_iter07`) | band ±0.001, `min_prob` 0.50 / entry 0.60, stride 10, stop 0.05, lock 0.03, cooldown 16, stop cooldown 3 days (11-08) |
 | hybrid | `hybrid_split_iter22` (registered 10-27, **not yet started**) | day half ±0.0005 / 0.60, no opens 09:30–12:59; night half ±0.0007 / 0.50, closes only; stride 30, stop 0.05 day / 0.06 night (11-01) |
+
+**2026-11-09: night's forecaster is the price ridge (user decision).** Toto2
+is replaced by `strategy/night/ridge.py` with frozen weights
+(`ridge_h1140.json`): horizon 1140, band ±0.00044, history window
+(`context_length`) 3421 bars. Emitter, trader and stop are unchanged; day,
+fullday and hybrid (including hybrid's night half) are untouched. Evidence is
+in `strategy/README.md`.
+
+- **It takes effect at night's next start.** Night was flat at its last fill
+  (2026-11-07 04:58), so there is no held lot to adopt.
+- **Backfill grows a little:** the warm-up target follows `context_length`
+  (3008 → 3421 bars plus the priming replay), about 18 calendar days.
+- **No GPU for night:** the ridge loads no model. The banner shows `ckpt=None
+  ctx=3421 … horizon=1140 band=±0.00044`; anything else means the old package.
+- **Rollback:** revert the adoption commit; it restores Toto2, band, horizon
+  and context together.
 
 **2026-11-08: fullday adds a 3-day cooldown after a stop (user decision).**
 After a stop-sized loss (at least 98 % of `stop_pct`), fullday skips opens on

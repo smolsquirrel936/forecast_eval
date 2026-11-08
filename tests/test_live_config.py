@@ -185,11 +185,11 @@ def test_thresholds_and_min_prob_match_the_recorded_command():
     assert _flag(cmd, "--min-prob") == pytest.approx(_params(PINNED)["min_prob"])
 
 
-def test_checkpoint_is_the_tuned_model_not_a_default():
-    """Every tuning run used the 1B checkpoint. `Toto2Forecaster` defaults to
-    2.5B and `real_data.py` to 313m — either would be a *different model*, not a
-    different setting, and neither would raise."""
-    assert _params(PINNED)["checkpoint"] == "Datadog/Toto-2.0-1B"
+def test_night_loads_no_model_since_the_ridge():
+    """Night's forecaster is the price ridge since 2026-11-09 (it was Toto2-1B):
+    frozen weights, no checkpoint. A checkpoint here would claim a model the
+    deployment never loads, on the banner and in the session artifacts."""
+    assert _params(PINNED)["checkpoint"] is None
 
 
 def test_session_is_night_matching_the_tuned_dataset():
@@ -206,9 +206,10 @@ def test_risk_shape_matches_the_backtest():
 
 
 def test_cadence_and_context_match_the_tuned_run():
-    assert _params(PINNED)["context_length"] == 3008
-    assert _params(PINNED)["stride_bars"] == 15   # night_iter13, kept by iter30
-    assert _params(PINNED)["horizon_bars"] == 30
+    # the ridge (2026-11-09): live history = its 3420-bar lookback + 1, horizon = its target
+    assert _params(PINNED)["context_length"] == 3421
+    assert _params(PINNED)["stride_bars"] == 15   # night_iter13, kept by iter30 and the ridge
+    assert _params(PINNED)["horizon_bars"] == 1140
 
 
 # ---- live and the backtest build the SAME objects --------------------------
@@ -341,7 +342,7 @@ def test_describe_carries_provenance_for_the_log_banner():
     else:
         # SIMTRADE_0929: an unprovenanced pin must say so, not print None.
         assert "UNTUNED" in text and "calmar=nan" in text
-    assert "Toto-2.0-1B" in text
+    assert "ckpt=None" in text   # the ridge loads no model (2026-11-09)
     assert "NIGHT" in text
 
 

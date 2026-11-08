@@ -120,12 +120,13 @@ def test_a_deployment_reads_its_band_from_its_own_package():
     day = wiring.params(PINNED_DAY.strategy_package)
     assert night["buy_threshold"] != day["buy_threshold"]
     assert night["min_prob"] != day["min_prob"]
-    # ...and the model itself was never re-tuned, so these must still agree.
-    # `stride_bars` is not among them: it is a cadence, and night_iter30 tuned
-    # night's to 15 (day stays 30).
-    assert night["checkpoint"] == day["checkpoint"]
-    assert night["context_length"] == day["context_length"]
-    assert night["horizon_bars"] == day["horizon_bars"]
+    # ...and since 2026-11-09 the forecasters differ too: day keeps Toto2-1B,
+    # night runs the price ridge (no checkpoint, a 3421-bar history window for
+    # its 3420-bar lookback, its 1140-bar target as the horizon).
+    assert day["checkpoint"] == "Datadog/Toto-2.0-1B"
+    assert (day["context_length"], day["horizon_bars"]) == (3008, 30)
+    assert night["checkpoint"] is None
+    assert (night["context_length"], night["horizon_bars"]) == (3421, 1140)
 
 
 def test_an_explicit_flag_beats_the_strategy_at_its_own_default_value():

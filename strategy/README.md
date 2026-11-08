@@ -51,17 +51,41 @@ places orders on.** `live/config.py` holds only the provenance record.
   and 5.1186 are the same strategy scored on different windows; neither is a
   forecast of the other.
 
-## Night — `night_iter30`
+## Night — `night_iter30` + price ridge (since 2026-11-09)
 
 | Knob | Value |
 |---|---|
-| band | buy +0.0004 / sell −0.0004 |
+| forecaster | **price ridge** (`ridge.py`, weights `ridge_h1140.json`) since 2026-11-09; Toto2-1B before |
+| `horizon_bars` / `context_length` | **1140** / **3421** (Toto2: 30 / 3008) |
+| band | buy **+0.00044** / sell **−0.00044** (Toto2: ±0.0004) |
 | `min_prob` | **0.6** |
 | `min_trend_ticks` | **10** — the emitter's class default in this package (shared default 3) |
 | `stride_bars` | **15** |
 | sides | long and short |
 | `stop_pct` | **0.05** (since 2026-10-18, `bb7a602`) |
 
+- **Price ridge, adopted 2026-11-09 (user decision).** Built and measured on
+  branch `strategy_test_1108_ridge` (`f0c74e9`); `ridge.py` is that branch's
+  file. It predicts the next 1140 night bars' log return from the tape's own
+  60/300/1140/3420-bar log returns and 1140-bar volatility, with weights fitted
+  on bars whose target ends by 2024-01-18 03:35 and frozen (no refit). Emitter,
+  trader and stop are `night_iter30`'s; with no `prob_up`, `min_prob` 0.6 is
+  inert. The band was chosen on schedule p00 by matching Toto2's Train trade
+  count (238 vs 246), not by P&L. Every forecast schedule was run over the whole
+  tape (`outputs/strategy_test_1108_ridge/`, `summary.md`). Median of 15:
+  - net **+25 713** (Toto2 +7 472), positive on **15 of 15** schedules (Toto2
+    13), worst schedule +21 993 (Toto2 −2 618): the schedule luck is gone;
+  - Train (ridge in sample) +5 689; 2024-01-18 → 2026-08-21 +11 512 (out of
+    sample for the ridge; Toto2's +12 374 there is in sample); after 2026-08-21
+    **+8 976 on 15 of 15** (Toto2 −6 471, 1 of 15; buy-and-hold −5 868);
+  - median max drawdown −13 256 (Toto2 −10 774), Calmar 1.94 (Toto2 0.87).
+
+  **Caveats:** the post-08-21 holdout is short (about 26 trades). It still
+  trails buy-and-hold over the whole tape (+28 905) and is long ~87 % of the
+  time, so part of the edge is TXF's drift. The stop was tuned with Toto2 and
+  not re-tuned. This branch's backtest (`--strategy night --warmup-bars 6000`,
+  no overrides) reproduces the test branch's p00 run trade for trade: 482
+  trades, net +28 427.3.
 - **Source:** `autoresearch_night_1004` @ `4cbc1e6`. `strategy/night/` is copied
   from that commit file for file; the branch forked from this branch at
   `887bc5d`. Replaced `night_iter10` (`autoresearch_night_0918` @ `6159a4c`,

@@ -1,5 +1,12 @@
 """NIGHT's strategy wiring — the ``PINNED`` configuration.
 
+**Forecaster: the price ridge since 2026-11-09 (user decision).** ``ridge.py``
+with the frozen weights in ``ridge_h1140.json`` replaced Toto2; the band is
+±0.00044 and ``horizon_bars`` 1140, everything else is ``night_iter30``'s.
+Measured on branch ``strategy_test_1108_ridge`` over every forecast schedule
+(``outputs/strategy_test_1108_ridge/``, ``strategy/README.md``). The
+provenance notes below describe the Toto2 configuration it replaced.
+
 Provenance of the knobs below: ``results.tsv`` commit ``4282d33``, re-measured
 on the rebuilt night tape (TAPE_REBUILD T5, 2026-09-01) over
 ``TXF_RPT_minute_night.csv`` at warmup 538 790 — the loop's own window — but at
@@ -19,12 +26,19 @@ live change.
 NOT a claim this beats the market: over the evaluated window it trails
 buy-and-hold by 9 205 points. The Calmar is earned by a small drawdown.
 """
+from pathlib import Path
 from typing import Any, Dict
 
 from ...exits.pct_stop import EntryPercentStop
 from .emitter import ThresholdEmitter
-from .forecaster import make_forecaster
+from .ridge import LOOKBACK_BARS, RidgeForecaster, load_coefficients
 from .trader import Trader
+
+# Tech: the ridge's frozen weights, fitted by ``ridge.fit_ridge`` on the night
+#       tape over bars whose 1140-bar target ends by 2024-01-18 03:35.
+# Why:  the exact file every ``strategy_test_1108_ridge`` backtest traded; a
+#       refit would have no out-of-sample test (user decision 2026-11-09).
+RIDGE_COEF = Path(__file__).with_name("ridge_h1140.json")
 
 # Tech: this session's default knobs — the twelve values `real_data.py`'s
 #       `--strategy` resolves against, keyed by the CLI destination name.
@@ -34,14 +48,18 @@ from .trader import Trader
 #       in the split rather than a strategy change. An explicit CLI flag still
 #       beats these; the run banner prints which knob came from where.
 PARAMS: Dict[str, Any] = {
-    # forecaster
-    "checkpoint": "Datadog/Toto-2.0-1B",
-    "context_length": 3008,
-    "horizon_bars": 30,
+    # forecaster -- the price ridge (2026-11-09). No model is loaded, so
+    # checkpoint is None. context_length is the live history window
+    # (live/runtime.py), which must hold the ridge's 3420-bar lookback plus
+    # the current bar; it was Toto2's 3008. horizon_bars is the ridge's target.
+    "checkpoint": None,
+    "context_length": LOOKBACK_BARS + 1,
+    "horizon_bars": 1140,
     "stride_bars": 15,
-    # emitter
-    "buy_threshold": 0.0004,
-    "sell_threshold": -0.0004,
+    # emitter -- band matched to Toto2's p00 Train trade count (2026-11-08):
+    # 238 trades against 246; it was ±0.0004 under Toto2.
+    "buy_threshold": 0.00044,
+    "sell_threshold": -0.00044,
     "min_prob": 0.6,
     "full_confidence_prob": 0.9,
     # trader
@@ -112,12 +130,23 @@ def make_strategy(
     #       matches `run.fee_sensitivity_sweep`'s `make_emitter`/`make_forecaster`
     #       convention, which exists because these objects are stateful and
     #       reusing one across runs silently produces wrong numbers.
-    forecaster = make_forecaster(
+    # Tech: build the ridge from the frozen weights, refusing a horizon_bars
+    #       other than the one they were fitted for and a context_length too
+    #       short for the ridge's lookback.
+    # Why:  params.json and the live banner record horizon_bars, so a mismatch
+    #       would describe a different forecast from the one traded. Live keeps
+    #       exactly context_length bars of history; shorter than the lookback,
+    #       the ridge would predict 0 at every bar and never trade.
+    coef = load_coefficients(str(RIDGE_COEF))
+    if p["horizon_bars"] != coef["target_bars"]:
+        raise ValueError(f"horizon_bars {p['horizon_bars']} != the ridge's target_bars {coef['target_bars']}")
+    if p["context_length"] < LOOKBACK_BARS + 1:
+        raise ValueError(f"context_length {p['context_length']} < {LOOKBACK_BARS + 1}, the ridge's lookback + 1; "
+                         "live would hold too little history to forecast")
+    forecaster = RidgeForecaster(
         warmup_bars=warmup_bars,
-        stride_bars=p["stride_bars"],
-        horizon_bars=p["horizon_bars"],
-        context_length=p["context_length"],
-        checkpoint=p["checkpoint"],
+        forecast_stride_bars=p["stride_bars"],
+        coefficients=coef,
     )
     emitter = ThresholdEmitter(
         buy_threshold=p["buy_threshold"],
