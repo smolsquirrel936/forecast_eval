@@ -112,6 +112,10 @@ factory. This is the file a search for this session edits first.
   `'toto2'` is the control. `'reversal'` with an int `reversal_bars` builds
   [`ReversalForecaster`](reversal.md) in place of Toto2. Setting either one
   without the other, or an unknown source, raises.
+- `ridge_coef` (strategy_test_1108_ridge): with `signal_source='ridge'`, the
+  path of the JSON that [`ridge.fit_ridge`](ridge.md) wrote; builds
+  [`RidgeForecaster`](ridge.md) in place of Toto2. Setting either without the
+  other raises, and so does a `horizon_bars` other than the file's `target_bars`.
 - `stop_cooldown_minutes` (strategy_test_1108 step 3) is passed to the
   [Trader](trader.md) with `stop_cooldown_loss = 0.98 * stop_pct`, so it arms on
   a stop-sized loss. 0 is the control; a nonzero value without `stop_pct` raises.

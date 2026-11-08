@@ -84,6 +84,7 @@ from .exits import (
 from ...exits.time_stop import TimeStop
 from .forecaster import make_forecaster
 from .reversal import ReversalForecaster
+from .ridge import RidgeForecaster, load_coefficients
 from .trader import Trader
 
 # Tech: this session's default knobs — the twelve values `real_data.py`'s
@@ -179,6 +180,10 @@ PARAMS: Dict[str, Any] = {
     "stop_cooldown_minutes": 0,
     "signal_source": "toto2",
     "reversal_bars": None,
+    # price ridge (strategy_test_1108_ridge): "ridge" swaps in ridge.py's
+    # frozen linear forecast from TXF's own past returns; ridge_coef is the
+    # JSON that ridge.fit_ridge wrote. "" = unset, the control.
+    "ridge_coef": "",
     # fixed holding cap (strategy_test_1108 step 4): close a position once it
     # is this many bars old (shared exits.time_stop.TimeStop, any-of with the
     # other exits). Lets a backtest hold for the horizon a forecast screen
@@ -289,17 +294,36 @@ def make_strategy(
     #       matches `run.fee_sensitivity_sweep`'s `make_emitter`/`make_forecaster`
     #       convention, which exists because these objects are stateful and
     #       reusing one across runs silently produces wrong numbers.
-    # Tech: build Toto2 (the control) or the reversal forecaster, refusing an
-    #       unknown source and a reversal_bars that does not match the source.
+    # Tech: build Toto2 (the control), the reversal or the ridge forecaster,
+    #       refusing an unknown source and a reversal_bars or ridge_coef that
+    #       does not match the source.
     # Why:  plan step 2 compares the two signal sources under an identical
     #       emitter/trader stack; a stray reversal_bars on a Toto2 run, or a
     #       reversal run without one, would be a silent mismatch.
-    if p["signal_source"] not in ("toto2", "reversal"):
-        raise ValueError(f"signal_source must be 'toto2' or 'reversal', got {p['signal_source']!r}")
+    if p["signal_source"] not in ("toto2", "reversal", "ridge"):
+        raise ValueError(f"signal_source must be 'toto2', 'reversal' or 'ridge', got {p['signal_source']!r}")
     if (p["signal_source"] == "reversal") != (p["reversal_bars"] is not None):
         raise ValueError("reversal_bars is set exactly when signal_source='reversal', got "
                          f"{p['signal_source']!r} / {p['reversal_bars']!r}")
-    if p["signal_source"] == "reversal":
+    if (p["signal_source"] == "ridge") != bool(p["ridge_coef"]):
+        raise ValueError("ridge_coef is set exactly when signal_source='ridge', got "
+                         f"{p['signal_source']!r} / {p['ridge_coef']!r}")
+    if p["signal_source"] == "ridge":
+        # Tech: load the frozen weights and refuse a horizon_bars that differs
+        #       from the target they were fitted for.
+        # Why:  the forecast's horizon is the ridge's target, and params.json
+        #       records horizon_bars; a mismatch would make the run's own record
+        #       describe a different forecast from the one it traded.
+        coef = load_coefficients(p["ridge_coef"])
+        if p["horizon_bars"] != coef["target_bars"]:
+            raise ValueError(f"horizon_bars {p['horizon_bars']} != the ridge's target_bars {coef['target_bars']}; "
+                             "pass --horizon-bars to match ridge_coef")
+        forecaster = RidgeForecaster(
+            warmup_bars=warmup_bars,
+            forecast_stride_bars=p["stride_bars"],
+            coefficients=coef,
+        )
+    elif p["signal_source"] == "reversal":
         forecaster = ReversalForecaster(
             warmup_bars=warmup_bars,
             forecast_stride_bars=p["stride_bars"],

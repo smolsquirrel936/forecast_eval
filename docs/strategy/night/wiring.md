@@ -55,6 +55,10 @@ search started from `PINNED`'s old settings (`4282d33`, band ±0.00045 /
   `'toto2'` is the control. `'reversal'` with an int `reversal_bars` builds
   [`ReversalForecaster`](reversal.md) in place of Toto2. Setting either one
   without the other, or an unknown source, raises.
+- `ridge_coef` (strategy_test_1108_ridge): with `signal_source='ridge'`, the
+  path of the JSON that [`ridge.fit_ridge`](ridge.md) wrote; builds
+  [`RidgeForecaster`](ridge.md) in place of Toto2. Setting either without the
+  other raises, and so does a `horizon_bars` other than the file's `target_bars`.
 
 ## Related
 [strategy/night/wiring.md](wiring.md) · [strategy/wiring.py](../wiring.md) · [strategy/base.py](../base.md) · [STRATEGY_SPLIT_PLAN.md](../../../STRATEGY_SPLIT_PLAN.md)
