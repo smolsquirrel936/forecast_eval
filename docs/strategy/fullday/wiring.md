@@ -104,6 +104,9 @@ factory. This is the file a search for this session edits first.
   `'toto2'` is the control. `'reversal'` with an int `reversal_bars` builds
   [`ReversalForecaster`](reversal.md) in place of Toto2. Setting either one
   without the other, or an unknown source, raises.
+- `stop_cooldown_minutes` (strategy_test_1108 step 3) is passed to the
+  [Trader](trader.md) with `stop_cooldown_loss = 0.98 * stop_pct`, so it arms on
+  a stop-sized loss. 0 is the control; a nonzero value without `stop_pct` raises.
 
 ## Related
 [strategy/fullday/wiring.md](wiring.md) · [strategy/wiring.py](../wiring.md) · [strategy/base.py](../base.md) · [STRATEGY_SPLIT_PLAN.md](../../../STRATEGY_SPLIT_PLAN.md)

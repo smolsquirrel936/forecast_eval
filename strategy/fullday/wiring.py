@@ -172,6 +172,10 @@ PARAMS: Dict[str, Any] = {
     # signal source (strategy_test_1108, plan step 2): "toto2" is the control;
     # "reversal" swaps in reversal.py's model-free "reverse the last
     # reversal_bars bars" forecast under the same emitter and trader.
+    # stop cooldown (strategy_test_1108 step 3): after a stop-sized loss (at
+    # least 98% of stop_pct), skip same-side opens for this many minutes of
+    # clock time. 0 = control, never arms. Needs stop_pct set.
+    "stop_cooldown_minutes": 0,
     "signal_source": "toto2",
     "reversal_bars": None,
 }
@@ -253,6 +257,11 @@ def make_strategy(
             f"reentry_cooldown_signals ({p['reentry_cooldown_signals']}) "
             f"must be an int >= 0"
         )
+    # Tech: the stop cooldown needs the stop it keys on.
+    # Why:  it arms on a loss of 98% of stop_pct; without a stop there is no
+    #       width, and failing here beats failing inside the run's make_trader.
+    if p["stop_cooldown_minutes"] and p["stop_pct"] is None:
+        raise ValueError("stop_cooldown_minutes needs stop_pct to be set")
 
     # Tech: build the forecaster and emitter now, but return the Trader as a
     #       *factory* over Execution rather than as an instance.
@@ -321,6 +330,8 @@ def make_strategy(
             full_confidence_prob=p["full_confidence_prob"],
             reentry_cooldown_signals=p["reentry_cooldown_signals"],
             exit_survives_signal=p["exit_survives_signal"],
+            stop_cooldown_minutes=p["stop_cooldown_minutes"],
+            stop_cooldown_loss=(0.98 * p["stop_pct"] if p["stop_pct"] is not None else None),
         )
         # Tech: bind the emitter to the trader this factory just built, so the
         #       exit band knows which side is the exit side.

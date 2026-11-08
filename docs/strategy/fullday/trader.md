@@ -69,6 +69,12 @@ aggression and sizing, and the fill bookkeeping that feeds `ExitRule` queries.
   emits, so without this a fired stop is cancelled and re-placed every minute
   and never fills. The skipped signal does not count toward the re-entry
   cooldown. `False` keeps the adopted behaviour.
+- **`stop_cooldown_minutes` / `stop_cooldown_loss`** (strategy_test_1108 step 3,
+  default 0 / None): after a flatten that lost at least `stop_cooldown_loss`
+  of entry, an OPEN on the closed position's side is skipped until that many
+  minutes of clock time have passed since the fill. The opposite side opens
+  freely, and a roll's re-open bypasses it. It runs after the signal-count
+  cooldown, which keeps consuming counts as before. 0 is the control.
 - `on_fill` has **no average-entry branch**: anything above `max_position=1` is
   unsound rather than merely risky, which is why the live rails refuse it at
   start-up.

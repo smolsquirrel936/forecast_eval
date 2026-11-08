@@ -31,7 +31,7 @@ backtest never enters the hook (its spliced tape has no rolls), so every
 recorded run is unchanged.
 """
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal, Optional
 
 from ...events import MarketEvent, OrderEvent
@@ -54,6 +54,8 @@ class Trader:
         full_confidence_prob: float = 0.9,
         reentry_cooldown_signals: int = 0,
         exit_survives_signal: bool = False,
+        stop_cooldown_minutes: int = 0,
+        stop_cooldown_loss: Optional[float] = None,
     ):
         # Tech: hold the execution handle and order-placement parameters, and
         #       initialize position/entry tracking to flat.
@@ -120,6 +122,22 @@ class Trader:
         #       filled. False is the control: the adopted behaviour, unchanged.
         self.exit_survives_signal = exit_survives_signal
         self._exit_placed_at: Optional[datetime] = None
+        # Tech: stop cooldown -- after a flatten that lost at least
+        #       stop_cooldown_loss of entry, an OPEN on the closed position's
+        #       side is skipped until stop_cooldown_minutes of clock time have
+        #       passed since that fill; the opposite side opens freely.
+        # Why:  strategy_test_1108 step 3. Before 2026-08-21, same-side
+        #       re-entries within a day of a stop lost money on every schedule's
+        #       pooled trades; the signal-count cooldown above lasts 160 minutes,
+        #       far less than a multi-day slide. 0 is the control (never arms).
+        if not isinstance(stop_cooldown_minutes, int) or isinstance(stop_cooldown_minutes, bool)                 or stop_cooldown_minutes < 0:
+            raise ValueError(f"stop_cooldown_minutes must be an int >= 0, got {stop_cooldown_minutes!r}")
+        if stop_cooldown_minutes > 0 and not (stop_cooldown_loss is not None and 0 < stop_cooldown_loss < 1):
+            raise ValueError(f"stop_cooldown_minutes > 0 needs a stop_cooldown_loss in (0, 1), got {stop_cooldown_loss!r}")
+        self.stop_cooldown_minutes = stop_cooldown_minutes
+        self.stop_cooldown_loss = stop_cooldown_loss
+        self._stop_block_side: int = 0      # +1 blocked BUYs, -1 blocked SELLs
+        self._stop_block_until: Optional[datetime] = None
         self.position = 0  # signed contracts; +long / -short
         self.entry_price: float = 0.0
         self.entry_bar_idx: int = -1
@@ -243,6 +261,15 @@ class Trader:
                     direction == "SELL" and self._cooldown_side < 0
                 ):
                     return None
+            # Tech: stop cooldown -- skip a same-side OPEN until the block from
+            #       the last stop-sized loss expires; a roll's re-open bypasses it.
+            # Why:  see __init__. It runs after the signal-count cooldown so that
+            #       one keeps consuming its counts exactly as before.
+            if (not self._rolling and self._stop_block_until is not None
+                    and market.timestamp < self._stop_block_until
+                    and ((direction == "BUY" and self._stop_block_side > 0)
+                         or (direction == "SELL" and self._stop_block_side < 0))):
+                return None
             # Tech: entry-only conviction gate — a below-floor signal from flat
             #       submits nothing (the unconditional cancel above still ran, so
             #       any resting order is gone per §4.4).
@@ -366,6 +393,14 @@ class Trader:
             self._roll_reopen = False
             self._closed_entry = None
         elif new == 0:
+            # Tech: arm the stop cooldown when this flatten lost at least
+            #       stop_cooldown_loss of the entry price.
+            # Why:  see __init__; measured from the fill, like the cooldown below.
+            if self.stop_cooldown_minutes > 0 and self.entry_price > 0:
+                side = 1 if prev > 0 else -1
+                if side * (fill_price / self.entry_price - 1.0) <= -self.stop_cooldown_loss:
+                    self._stop_block_side = side
+                    self._stop_block_until = timestamp + timedelta(minutes=self.stop_cooldown_minutes)
             # Tech: keep the closing position's entry before clearing it.
             # Why:  if this flatten is a roll's close, the re-open restores it
             #       (above). A strategy exit leaves it unused: only a roll's
