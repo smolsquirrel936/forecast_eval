@@ -73,7 +73,7 @@ ADOPTED into ``simtrade_0929`` on 2026-10-26 (user decision), trading from
 """
 from typing import Any, Dict
 
-from .emitter import ThresholdEmitter
+from .emitter import PersistenceEmitter, ThresholdEmitter
 from .exits import (
     AnyOf,
     BreakEvenLock,
@@ -156,6 +156,18 @@ PARAMS: Dict[str, Any] = {
     # a run at 0.001 must be byte-identical to one without the knob. min_prob,
     # the trend filter and the path check still gate the exit signal.
     "exit_threshold": 0.001,
+    # persistence gate — package-declared, beyond the twelve CLI knobs,
+    # reachable only through ``--param persist_window=... persist_min=...``.
+    # Why:  strategy_test_1108. Act on BUY/SELL only when it held on
+    # persist_min of the last persist_window forecasts. Both None is the
+    # CONTROL: the emitter is not wrapped, byte-identical to the adopted
+    # package. Meant for stride 1, where the window counts minutes.
+    "persist_window": None,
+    "persist_min": None,
+    # Trader knob (strategy_test_1108): a signal on the tick an exit order was
+    # placed leaves it working. Needed at stride 1, where every tick emits a
+    # signal and a fired stop would otherwise never fill. False = control.
+    "exit_survives_signal": False,
 }
 
 # Tech: the knob's tuned value — 0.05, ADOPTED on simtrade_0929 (2026-10-18).
@@ -258,6 +270,22 @@ def make_strategy(
         exit_threshold=p["exit_threshold"],
     )
 
+    # Tech: wrap the emitter in the persistence gate when both its knobs are
+    #       set; refuse exactly one of them.
+    # Why:  both None must stay the unwrapped adopted emitter (the control). A
+    #       lone knob has no meaning, and running unwrapped while the command
+    #       line named one would be a silent mismatch. make_trader below binds
+    #       the position through the wrapper, which forwards to the inner one.
+    if (p["persist_window"] is None) != (p["persist_min"] is None):
+        raise ValueError(
+            "persist_window and persist_min must be set together, got "
+            f"{p['persist_window']!r} / {p['persist_min']!r}"
+        )
+    if p["persist_window"] is not None:
+        emitter = PersistenceEmitter(
+            emitter, window=p["persist_window"], min_count=p["persist_min"]
+        )
+
     def make_trader(execution: Any) -> Trader:
         trader = Trader(
             execution=execution,
@@ -268,6 +296,7 @@ def make_strategy(
             entry_min_prob=p["entry_min_prob"],
             full_confidence_prob=p["full_confidence_prob"],
             reentry_cooldown_signals=p["reentry_cooldown_signals"],
+            exit_survives_signal=p["exit_survives_signal"],
         )
         # Tech: bind the emitter to the trader this factory just built, so the
         #       exit band knows which side is the exit side.

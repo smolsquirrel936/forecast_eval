@@ -62,6 +62,13 @@ aggression and sizing, and the fill bookkeeping that feeds `ExitRule` queries.
 - The v1 invariants still hold here and the shared tests still cover them: no
   pyramiding, no flipping, and *every* signal (HOLD included) cancels any
   resting order first.
+- **`exit_survives_signal`** (strategy_test_1108, default `False`): when set, a
+  signal arriving on the tick `submit_exit` placed an order is skipped while
+  that order is pending, so the exit fills at the next print. `run.py` places
+  exits in step 2 and emits in step 3 of the same tick; at stride 1 every tick
+  emits, so without this a fired stop is cancelled and re-placed every minute
+  and never fills. The skipped signal does not count toward the re-entry
+  cooldown. `False` keeps the adopted behaviour.
 - `on_fill` has **no average-entry branch**: anything above `max_position=1` is
   unsound rather than merely risky, which is why the live rails refuse it at
   start-up.

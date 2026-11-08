@@ -94,5 +94,12 @@ factory. This is the file a search for this session edits first.
 > 2026-09-14 after the fullday loop (iter00–05, archived at
 > `archive/fullday-toto2-iter05`).
 
+- `persist_window` / `persist_min` (strategy_test_1108) wrap the emitter in
+  [`PersistenceEmitter`](emitter.md) when both are set; `make_trader` binds the
+  position through the wrapper. Both `None` is the control (unwrapped,
+  byte-identical); setting only one raises.
+- `exit_survives_signal` (strategy_test_1108) is passed to the
+  [Trader](trader.md); `False` is the control. Stride-1 runs need it on.
+
 ## Related
 [strategy/fullday/wiring.md](wiring.md) · [strategy/wiring.py](../wiring.md) · [strategy/base.py](../base.md) · [STRATEGY_SPLIT_PLAN.md](../../../STRATEGY_SPLIT_PLAN.md)

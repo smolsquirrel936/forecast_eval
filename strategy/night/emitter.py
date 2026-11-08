@@ -210,3 +210,68 @@ class ThresholdEmitter(SignalEmitter):
         #       aggression (#1) and sizing (#7).
         direction, strength = self._decide(forecast)
         return Signal(direction=direction, strength=strength)
+
+
+class PersistenceEmitter(SignalEmitter):
+    """Act on a direction only once it has held across recent forecasts."""
+
+    def __init__(self, inner: SignalEmitter, *, window: int, min_count: int):
+        # Tech: validate 1 <= min_count <= window, then keep the wrapped emitter
+        #       and a rolling deque of its last `window` (direction, strength)
+        #       decisions.
+        # Why:  strategy_test_1108 measured the raw decision flickering: a median
+        #       BUY/SELL burst lasts one minute, so which minute a stride-15
+        #       schedule checks decided the trade (15 schedules spanned -9134 to
+        #       -823 over 10-12..11-06). Requiring the direction on min_count of
+        #       the last `window` forecasts makes the decision a property of the
+        #       forecast stream, not of the check time.
+        if not isinstance(window, int) or window < 1:
+            raise ValueError(f"window must be an int >= 1, got {window!r}")
+        if not isinstance(min_count, int) or not 1 <= min_count <= window:
+            raise ValueError(
+                f"min_count must be an int in [1, window={window}], got {min_count!r}"
+            )
+        self.inner = inner
+        self.window = window
+        self.min_count = min_count
+        self._recent: deque = deque(maxlen=window)
+
+    def __getattr__(self, name: str):
+        # Tech: forward any attribute this wrapper lacks to the wrapped emitter.
+        # Why:  callers reach into the emitter (thresholds, the trend deque live
+        #       priming inspects), and they must keep working when the wrapper is
+        #       on. `inner` itself is excluded so a half-built instance raises
+        #       instead of recursing.
+        if name == "inner":
+            raise AttributeError(name)
+        return getattr(self.inner, name)
+
+    def _decide(self, forecast: Optional[Forecast]) -> Tuple[Direction, float]:
+        # Tech: record the wrapped emitter's decision, then emit BUY/SELL when
+        #       that side holds at least min_count of the window and outnumbers
+        #       the other side; strength is the mean strength of those agreeing
+        #       decisions. Anything else is HOLD.
+        # Why:  the inner emitter still runs on every forecast so its own state
+        #       (the trend deque) advances exactly as it would unwrapped. Taking
+        #       the mean strength keeps the Trader's conviction scaling tied to
+        #       the decisions that actually formed the majority.
+        sig = self.inner.emit_signal(forecast)
+        self._recent.append((sig.direction, sig.strength))
+        buys = [s for d, s in self._recent if d == "BUY"]
+        sells = [s for d, s in self._recent if d == "SELL"]
+        if len(buys) >= self.min_count and len(buys) > len(sells):
+            return "BUY", sum(buys) / len(buys)
+        if len(sells) >= self.min_count and len(sells) > len(buys):
+            return "SELL", sum(sells) / len(sells)
+        return "HOLD", 0.0
+
+    def emit(self, forecast: Optional[Forecast]) -> Direction:
+        # Tech: direction-only view of the persistence decision.
+        # Why:  the SignalEmitter contract (attribution calls emit).
+        return self._decide(forecast)[0]
+
+    def emit_signal(self, forecast: Optional[Forecast]) -> Signal:
+        # Tech: the persistence decision as a Signal(direction, strength).
+        # Why:  what the run loop calls, so the Trader sees the persisted call.
+        direction, strength = self._decide(forecast)
+        return Signal(direction=direction, strength=strength)

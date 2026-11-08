@@ -15,8 +15,16 @@ probability `prob_up`, and derives the conviction `strength` the Trader sizes on
 | `ThresholdEmitter(...)` | class | the banded emitter — same constructor as the shared original |
 | `emit(forecast)` | method | BUY above the upper band, SELL below the lower, else HOLD |
 | `emit_signal(forecast)` | method | `Signal(direction, strength)` |
+| `PersistenceEmitter(inner, window=, min_count=)` | class | wraps an emitter; BUY/SELL only once that side held on `min_count` of the last `window` decisions |
 
 ## Key points / gotchas
+- **`PersistenceEmitter` (strategy_test_1108):** the wrapped emitter still runs
+  on every forecast, so its trend deque advances as it would unwrapped. The
+  wrapper emits a side when it holds at least `min_count` of the window and
+  outnumbers the other side, with the mean strength of those decisions; else
+  HOLD. Attributes it lacks forward to the inner emitter. Built by
+  [wiring.py](wiring.md) only when `persist_window`/`persist_min` are set; meant
+  for stride 1, where the window counts minutes.
 - **This is a per-session copy**, created verbatim from
   [strategy/threshold.py](../threshold.md) at the split (STRATEGY_SPLIT_PLAN S1)
   with only the relative-import depth changed. It is NIGHT's to edit; changes here

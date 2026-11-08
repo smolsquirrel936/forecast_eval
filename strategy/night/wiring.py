@@ -22,7 +22,7 @@ buy-and-hold by 9 205 points. The Calmar is earned by a small drawdown.
 from typing import Any, Dict
 
 from ...exits.pct_stop import EntryPercentStop
-from .emitter import ThresholdEmitter
+from .emitter import PersistenceEmitter, ThresholdEmitter
 from .forecaster import make_forecaster
 from .trader import Trader
 
@@ -52,6 +52,18 @@ PARAMS: Dict[str, Any] = {
     # percent-stop knob — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param stop_pct=...``.
     "stop_pct": 0.05,
+    # persistence gate — package-declared, beyond the twelve CLI knobs,
+    # reachable only through ``--param persist_window=... persist_min=...``.
+    # Why:  strategy_test_1108. Act on BUY/SELL only when it held on
+    # persist_min of the last persist_window forecasts. Both None is the
+    # CONTROL: the emitter is not wrapped, byte-identical to the adopted
+    # package. Meant for stride 1, where the window counts minutes.
+    "persist_window": None,
+    "persist_min": None,
+    # Trader knob (strategy_test_1108): a signal on the tick an exit order was
+    # placed leaves it working. Needed at stride 1, where every tick emits a
+    # signal and a fired stop would otherwise never fill. False = control.
+    "exit_survives_signal": False,
 }
 
 # Tech: the knob's tuned value — 0.05, ADOPTED on simtrade_0929 (2026-10-18).
@@ -126,6 +138,21 @@ def make_strategy(
         full_confidence_prob=p["full_confidence_prob"],
     )
 
+    # Tech: wrap the emitter in the persistence gate when both its knobs are
+    #       set; refuse exactly one of them.
+    # Why:  both None must stay the unwrapped adopted emitter (the control). A
+    #       lone knob has no meaning, and running unwrapped while the command
+    #       line named one would be a silent mismatch.
+    if (p["persist_window"] is None) != (p["persist_min"] is None):
+        raise ValueError(
+            "persist_window and persist_min must be set together, got "
+            f"{p['persist_window']!r} / {p['persist_min']!r}"
+        )
+    if p["persist_window"] is not None:
+        emitter = PersistenceEmitter(
+            emitter, window=p["persist_window"], min_count=p["persist_min"]
+        )
+
     def make_trader(execution: Any) -> Trader:
         return Trader(
             execution=execution,
@@ -133,6 +160,7 @@ def make_strategy(
             aggression_ticks=p["aggression_ticks"],
             max_position=p["max_position"],
             max_aggression_ticks=p["max_aggression_ticks"],
+            exit_survives_signal=p["exit_survives_signal"],
         )
 
     # Tech: build the percent stop only when its knob is set; None means no

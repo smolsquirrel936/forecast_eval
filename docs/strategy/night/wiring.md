@@ -46,6 +46,11 @@ search started from `PINNED`'s old settings (`4282d33`, band ±0.00045 /
   that file: `night_iter05` moved `min_trend_ticks` 3.0 → 10.0 there. Being out
   of `PARAMS`, `--param` cannot reach it and `params.json` does not record it;
   the live banner and `meta` header do (`describe()` reads the class default).
+- `persist_window` / `persist_min` (strategy_test_1108) wrap the emitter in
+  [`PersistenceEmitter`](emitter.md) when both are set. Both `None` is the
+  control (unwrapped, byte-identical); setting only one raises.
+- `exit_survives_signal` (strategy_test_1108) is passed to the
+  [Trader](trader.md); `False` is the control. Stride-1 runs need it on.
 
 ## Related
 [strategy/night/wiring.md](wiring.md) · [strategy/wiring.py](../wiring.md) · [strategy/base.py](../base.md) · [STRATEGY_SPLIT_PLAN.md](../../../STRATEGY_SPLIT_PLAN.md)

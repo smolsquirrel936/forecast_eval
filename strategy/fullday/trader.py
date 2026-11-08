@@ -53,6 +53,7 @@ class Trader:
         entry_min_prob: float = 0.5,
         full_confidence_prob: float = 0.9,
         reentry_cooldown_signals: int = 0,
+        exit_survives_signal: bool = False,
     ):
         # Tech: hold the execution handle and order-placement parameters, and
         #       initialize position/entry tracking to flat.
@@ -109,6 +110,16 @@ class Trader:
         self._rolling: bool = False         # inside rolling(): a roll leg
         self._roll_reopen: bool = False     # the resting OPEN is a roll's re-open
         self._closed_entry = None           # (side, price, bar_idx, ts) of the last flatten
+        # Tech: when set, a signal arriving on the tick an exit order was placed
+        #       leaves that order working (see on_signal); _exit_placed_at is the
+        #       timestamp submit_exit last placed one.
+        # Why:  strategy_test_1108. run.py places exit orders in step 2 and emits
+        #       signals in step 3 of the same tick, and every signal cancels the
+        #       pending order (§4.4). At stride 1 every tick is a forecast tick,
+        #       so a fired stop was cancelled and re-placed each minute and never
+        #       filled. False is the control: the adopted behaviour, unchanged.
+        self.exit_survives_signal = exit_survives_signal
+        self._exit_placed_at: Optional[datetime] = None
         self.position = 0  # signed contracts; +long / -short
         self.entry_price: float = 0.0
         self.entry_bar_idx: int = -1
@@ -162,6 +173,17 @@ class Trader:
     def on_signal(
         self, direction: Direction, market: MarketEvent, *, strength: float = 1.0
     ) -> Optional[OrderEvent]:
+        # Tech: with exit_survives_signal, skip this signal entirely while the
+        #       exit order submit_exit placed on this same tick is still pending.
+        # Why:  the exit fills at the next print (step 1 of the next tick), so
+        #       the position is already being closed; letting this signal cancel
+        #       it would only re-place it next tick (see __init__). The skipped
+        #       signal does not count toward the re-entry cooldown, which only
+        #       arms once that exit fills.
+        if (self.exit_survives_signal and self._exit_placed_at == market.timestamp
+                and self.execution.has_pending()):
+            return None
+
         # Tech: unconditionally cancel any resting order before acting.
         # Why:  §4.4 — a pending limit lives only until the next signal; cancelling
         #       first (even for HOLD) guarantees a stale forecast's order can never
@@ -297,6 +319,7 @@ class Trader:
                 market.timestamp, "BUY", cur + offset, "CLOSE", quantity=qty
             )
         self.execution.submit(order, current_price=cur)
+        self._exit_placed_at = market.timestamp
         return order
 
     # ---- fill bookkeeping ------------------------------------------------
