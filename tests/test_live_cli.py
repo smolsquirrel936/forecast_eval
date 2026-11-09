@@ -223,6 +223,30 @@ def test_vram_check_requires_a_gpu(monkeypatch):
         cli.check_vram()
 
 
+def _toto2():
+    from forecast_eval.forecaster.toto2 import Toto2Forecaster
+    return Toto2Forecaster(warmup_bars=0, forecast_stride_bars=5,
+                           forecast_horizon_bars=30)
+
+
+def test_toto2_forecaster_needs_the_gpu():
+    assert cli.forecaster_needs_gpu(_toto2()) is True
+
+
+def test_cpu_forecaster_skips_the_vram_check():
+    """A CPU forecaster (night's price ridge) must not be refused for VRAM the
+    Toto2 deployments hold."""
+    assert cli.forecaster_needs_gpu(_Cheap()) is False
+
+
+def test_router_needs_the_gpu_when_any_half_is_toto2():
+    class _Router:
+        def __init__(self, day, night):
+            self.halves = {"DAY": day, "NIGHT": night}
+    assert cli.forecaster_needs_gpu(_Router(_Cheap(), _toto2())) is True
+    assert cli.forecaster_needs_gpu(_Router(_Cheap(), _Cheap())) is False
+
+
 # ---- shutdown reporting -----------------------------------------------------
 
 class _Cheap:

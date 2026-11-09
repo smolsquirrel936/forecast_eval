@@ -139,6 +139,20 @@ def check_vram(min_free_gib: float = MIN_FREE_VRAM_GIB) -> float:
     return free_gib
 
 
+def forecaster_needs_gpu(forecaster: Any) -> bool:
+    # Tech: True when the forecaster, or any half behind a router (`.halves`),
+    #       is a Toto2Forecaster.
+    # Why:  `check_vram` imports torch and opens a CUDA context just to read
+    #       free memory, and refuses below its floor. A CPU forecaster (night's
+    #       price ridge, 2026-11-09) needs neither, and should not be kept from
+    #       starting because the Toto2 deployments hold the card. Importing the
+    #       class does not import torch (`forecaster/toto2.py` loads it lazily).
+    from forecast_eval.forecaster.toto2 import Toto2Forecaster
+    halves = getattr(forecaster, "halves", None)
+    parts = list(halves.values()) if isinstance(halves, dict) else [forecaster]
+    return any(isinstance(fc, Toto2Forecaster) for fc in parts)
+
+
 def _mask(value: Any) -> str:
     # Tech: keep the first and last two characters, star the middle.
     # Why:  enough to recognise your own account at a glance, not enough to
@@ -841,8 +855,20 @@ def main(argv=None) -> int:
     login_at = None
     exit_code = 0
     try:
-        free = check_vram()
-        print(f"VRAM free: {free:.1f} GiB")
+        # Tech: build the strategy once, throwaway, to see what its forecaster
+        #       runs on; `LiveRuntime` builds the one that trades.
+        # Why:  the check belongs before login (start-up order step 2), and the
+        #       runtime is built after it. Construction is cheap: Toto2 loads its
+        #       weights lazily, on the first forecast.
+        probe = strategy_wiring.make_strategy(
+            cfg.strategy_package, warmup_bars=0, tick_size=cfg.tick_size,
+            **strategy_overrides)
+        if forecaster_needs_gpu(probe["forecaster"]):
+            free = check_vram()
+            print(f"VRAM free: {free:.1f} GiB")
+        else:
+            print("VRAM check skipped: the forecaster runs on the CPU")
+        del probe
 
         api.login(api_key=api_key, secret_key=secret_key)
         # Tech: the moment the token was issued.
