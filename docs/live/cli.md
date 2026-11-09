@@ -107,7 +107,9 @@ artifacts. What no longer happens is a refusal.
    performs a backfill, so a crash loop becomes a login+query loop, and Shioaji
    answers that with a suspension that further logins extend.
 2. **VRAM floor** (5 GiB) — the model needs ~4.4 GiB, and a research run with
-   `--batch-size auto` sizes itself to fill whatever is free.
+   `--batch-size auto` sizes itself to fill whatever is free. Skipped, without
+   importing torch, when no part of the forecaster is a Toto2Forecaster
+   (`forecaster_needs_gpu`; a CPU forecaster such as night's ridge, 2026-11-09).
 3. **Login**, then `check_usage` — over quota, Shioaji returns *empty* history
    rather than erroring — and **read the traffic meter**, keeping the figure so
    the teardown can report what this run cost.

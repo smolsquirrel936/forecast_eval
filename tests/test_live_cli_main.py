@@ -150,11 +150,11 @@ def test_param_reaches_the_runtime_and_the_artifact(tmp_path, stub_venue):
     """D7. A typed knob has to survive into the object that trades AND into the
     record, or the run is unreproducible."""
     kwargs, params = _run(tmp_path, stub_venue,
-                          "--param", "min_prob=0.42",
+                          "--param", "min_prob=0.58",
                           "--param", "aggression_ticks=2")
 
-    assert kwargs["strategy_overrides"] == {"min_prob": 0.42, "aggression_ticks": 2}
-    assert params["min_prob"] == 0.42 and params["aggression_ticks"] == 2
+    assert kwargs["strategy_overrides"] == {"min_prob": 0.58, "aggression_ticks": 2}
+    assert params["min_prob"] == 0.58 and params["aggression_ticks"] == 2
     assert params["strategy_overridden"] is True
     assert params["strategy_origins"]["min_prob"] == "param"
     assert params["strategy_origins"]["buy_threshold"] == "fullday"
@@ -164,10 +164,10 @@ def test_an_overridden_run_says_so_on_the_console(tmp_path, stub_venue, capsys):
     """`describe()` renders the resolved values, so an overridden run's banner
     looks exactly like a tuned one. The extra line is what stops that from
     hiding the fact that the numbers were typed."""
-    _run(tmp_path, stub_venue, "--param", "min_prob=0.42")
+    _run(tmp_path, stub_venue, "--param", "min_prob=0.58")
 
     out = capsys.readouterr().out
-    assert "min_prob=0.42" in out, "the banner renders the RUN's knobs"
+    assert "min_prob=0.58" in out, "the banner renders the RUN's knobs"
     assert "--param OVERRIDES" in out
     assert "NOT comparable" in out
 
