@@ -702,7 +702,7 @@ answered.
 > one time. Update it in place, date every entry, and move anything that turns
 > out to be generally true up into §§1–10.
 
-**Run:** `simtrade_0929`, branch `simtrade_0929` (local, not pushed), launched
+**Run:** `simtrade_0929`, branch `simtrade_0929` (pushed to `origin` 2026-11-09), launched
 2026-09-29 08:20–08:25 into a fresh `outputs/` with `--fresh-start`. Settings
 are in `strategy/README.md` and decisions in `SIMTRADE_0929_PLAN.md`, both on
 that branch only.
@@ -982,6 +982,7 @@ repeat step 5 only; the ledgers are already stamped.
 | 2026-10-31 02:12–02:17 | **restart, `--resume`.** Owner seed day −1 @ 47025, night 0, day_night +1 @ 46616, hybrid +1 @ 47102, account 1. Hybrid's first start died with `OMP: Error #135: Cannot set thread affinity mask` (stub `live_hybrid_20261031_021358`); the retry at 02:15 adopted +1 @ 47102. Fullday ran with `--exit-state best_price=47376`, re-sent its stop (44245, 44236, 44215) and filled 02:16:09 @ **44215**, 69 points below the rejected 44284; `exit_state_day_night.json` deleted. Held after: day −1, hybrid +1 |
 | 2026-11-01 (nothing running) | **`place_order` raising is no longer a rejection.** `main` `55ea532`, merged here. The owner keeps the leg unconfirmed (`owner_place_unconfirmed`) and the deployment's order stays pending. The venue's `New` report, a deal, or `list_trades` (read every 5 s) claims it by side, size and price (`owner_claimed`), so the 10-30 deal would have reached `fills_night.csv` the ordinary way. Only a leg the trade list still lacks 120 s after the raise is answered `rejected`. It is kept as an orphan: cancelled if the venue reports it later, and a fill on it is booked (no freeze) with an anomaly naming the row to add by hand (§6.9). Untested live |
 | 2026-11-01 (nothing running) | **hybrid gets percent stops, user go:** `day_stop_pct` 0.05, `night_stop_pct` 0.06 (`HYBRID_PCTSTOP_REPORT.md`, `autoresearch_hybrid_pctstop_1101`; train Calmar 12.8738 → 12.2446, held-out 6.98 → 6.92). Takes effect at the next start. The held lot (+1 @ 47102) is adopted with the stops armed at that entry: day 44747, night 44276 |
+| 2026-11-09 08:39–08:42 | **restart; night, fullday and hybrid start fresh (user decision).** Owner 08:39:47, then day 08:40:05 `--resume` (adopted −1 @ 47025 from the venue), night 08:40:42, fullday 08:41:21 and hybrid 08:41:44, all `--fresh-start`. All three were flat: hybrid's day stop sold 11-03 08:46 @ 44292 (bought 47102), fullday stopped out 11-05 23:26 @ 40070 (bought 42183; its 3-day cooldown ended 11-08 23:26), night's last close was 11-07 04:58. New soak epochs: night `soak_20261109_084042_783368`, day_night `soak_20261109_084121_445490`, hybrid `soak_20261109_084144_994808`; day stays on `soak_20261012_084736_524245`. Night is the first run of the price ridge (banner `ckpt=None ctx=3421 stride=15 horizon=1140 band=±0.00044`) and of the CPU-forecaster VRAM-check skip (`0d98b6f`); hybrid is the first epoch on its 11-01 stops. Code: `simtrade_0929` @ `f9b87e1` |
 
 **Open questions:**
 
