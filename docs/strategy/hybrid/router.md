@@ -14,13 +14,21 @@ half whose session it is.
 |---|---|---|
 | `session_of(ts)` | function | `'DAY'` / `'NIGHT'`; raises for an off-hours timestamp |
 | `RoutedEmitter(day, night)` | class | `emit` / `emit_signal`: **both** halves see every forecast; the result is the half's of `forecast.timestamp`'s session |
-| `RoutedTrader(day, night)` | class | `on_signal` / `submit_exit` by `market.session`; `on_fill` to **both**; `position` / `position_state()` checked to agree; assigning `position` or `entry_price` / `entry_bar_idx` / `entry_timestamp` writes both halves (a live `--resume`); `rolling()` enters each half's own `rolling()` hook during a live contract roll |
+| `RoutedTrader(day, night)` | class | `on_signal` / `submit_exit` by `market.session`; `on_fill` to **both**; `position` / `position_state()` checked to agree; assigning `position` or `entry_price` / `entry_bar_idx` / `entry_timestamp` writes both halves (a live `--resume`); `rolling()` enters each half's own `rolling()` hook during a live contract roll, and the router carries the original entry across it |
 | `RoutedExitRule(day, night)` | class | `should_exit` by `market.session`; a half with no rule never fires; `adoptable` only if every present rule is |
 
 ## Key points / gotchas
 - **One position, two mirrors.** Both traders fold every fill, so a lot one half
   opened is managed — and can be closed — by the other after the session
   changes. `position` raises if the mirrors ever disagree.
+- **Roll carry lives in the router (2026-11-11).** A roll's re-open is submitted
+  inside `rolling()` to one half, but its fill reaches both. The router marks
+  the re-open, remembers the entry the roll's close flattened, and when the
+  re-open fills on that side writes the original entry (price, bar, time) to
+  **both** halves — so the stops and the position-level take-profit trail keep
+  measuring from it, as on the backtest's spliced tape, and the mirrors never
+  split. A later signal, or an exit on a held position, cancels the mark; the
+  carry is used once.
 - **The incoming half owns an inherited lot from its session's first tick**: its
   exit rule checks it on every tick, its emitter decides at its first boundary.
 - **One `Execution`.** Both traders share it, so either half's cancel-first
