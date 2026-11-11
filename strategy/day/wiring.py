@@ -73,11 +73,25 @@ PARAMS: Dict[str, Any] = {
     # the best price) — exactly one with an arm. tp_cooldown_signals: after a
     # profitable exit-rule close, skip same-side opens for K signals. All
     # None/0 is the CONTROL, byte-identical to the pre-knob package.
-    "tp_arm_pct": None,
+    "tp_arm_pct": 0.15,
     "tp_giveback_frac": None,
-    "tp_trail_pct": None,
+    "tp_trail_pct": 0.02,
     "tp_cooldown_signals": 0,
 }
+
+# Tech: the take-profit trail's tuned values — arm 0.15 / trail 0.02, ADOPTED
+#       on simtrade_0929 (2026-11-11, user decision), no cooldown.
+# Why:  autoresearch_day_tptrail_1111 (TPTRAIL_POSTMORTEM.md; report in
+#       outputs/day_tptrail_1111/). Arms below 0.10 churn and double the DD,
+#       and the cooldown hurt every cell. Over six forecast schedules (warmup
+#       6000-6025) this cell beats the 0.10-stop config on train 5/6,
+#       held-out 2021-12..2026-08 5/6 (mean +201 pts) and whole history 6/6
+#       (mean +2124); train Calmar 6.61 vs 5.37 at warmup 6000. Small, and
+#       few events: 5 take-profits in 10.8 train years. Known live gaps: the
+#       rule is not adoptable (a --resume into a held lot needs best_price),
+#       and this package's Trader does not carry the entry across a roll, so
+#       a roll restarts the trail. An explicit ``--param tp_arm_pct=none
+#       --param tp_trail_pct=none`` turns it off.
 
 # Tech: the knob's tuned value — 0.10, ADOPTED on simtrade_0929 (2026-10-12).
 # Why:  day_pctstop_iter05 (ledger `results_day.tsv`, commit 6aaa7bb on

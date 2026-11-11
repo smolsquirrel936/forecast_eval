@@ -52,8 +52,9 @@ def _percent_stop_within(rule):
     #       bare shared rule. The invariant these tests pin — the declared
     #       stop_pct builds THE shared EntryPercentStop at exactly that width —
     #       survives composition; this recovers the nested rule so the same
-    #       assertion holds. Day and night never compose, so only the fullday
-    #       parametrization calls this (see TestWiring).
+    #       assertion holds. Day composes too since its take-profit trail was
+    #       adopted (2026-11-11, TPTRAIL_POSTMORTEM.md); night never composes,
+    #       so only the fullday and day parametrizations call this (see TestWiring).
     if isinstance(rule, EntryPercentStop):
         return rule
     for inner in getattr(rule, "rules", ()):
@@ -147,9 +148,9 @@ class TestWiring:
             assert strat["exit_rule"] is None
         else:
             rule = strat["exit_rule"]
-            if session == "fullday":
-                # freeze-line exception: fullday composes (see
-                # _percent_stop_within); day/night keep the bare-rule shape.
+            if session in ("fullday", "day"):
+                # freeze-line exception: fullday and day compose (see
+                # _percent_stop_within); night keeps the bare-rule shape.
                 rule = _percent_stop_within(rule)
             assert isinstance(rule, EntryPercentStop)
             assert rule.stop_pct == declared
@@ -161,9 +162,9 @@ class TestWiring:
         w = _wiring(session)
         strat = w.make_strategy(warmup_bars=10, stop_pct=0.03)
         rule = strat["exit_rule"]
-        if session == "fullday":
-            # freeze-line exception: fullday composes its kept protection
-            # rules around the stop (see _percent_stop_within); the shared
+        if session in ("fullday", "day"):
+            # freeze-line exception: fullday and day compose their kept
+            # protection rules around the stop (see _percent_stop_within); the shared
             # rule is still built, at the declared width.
             rule = _percent_stop_within(rule)
         assert isinstance(rule, EntryPercentStop)

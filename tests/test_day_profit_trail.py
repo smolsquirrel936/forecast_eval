@@ -108,12 +108,23 @@ def test_anyof_with_stop_is_restorable_on_trail_state():
 # -------- wiring ---------------------------------------------------------------
 
 def test_wiring_control_is_the_bare_percent_stop():
-    s = make_strategy(warmup_bars=100)
+    s = make_strategy(warmup_bars=100, tp_arm_pct=None, tp_trail_pct=None)
     assert type(s["exit_rule"]) is EntryPercentStop
 
 
+def test_wiring_default_is_the_adopted_trail():
+    # adopted 2026-11-11: arm 0.15 / trail 0.02 around the 0.10 stop
+    s = make_strategy(warmup_bars=100)
+    assert isinstance(s["exit_rule"], AnyOf)
+    stop, trail = s["exit_rule"].rules
+    assert type(stop) is EntryPercentStop and stop.stop_pct == 0.10
+    assert isinstance(trail, ProfitTrail)
+    assert (trail.arm_pct, trail.trail_pct, trail.giveback_frac) == (0.15, 0.02, None)
+
+
 def test_wiring_composes_trail_with_stop():
-    s = make_strategy(warmup_bars=100, tp_arm_pct=0.05, tp_giveback_frac=0.5)
+    s = make_strategy(warmup_bars=100, tp_arm_pct=0.05, tp_giveback_frac=0.5,
+                      tp_trail_pct=None)
     assert isinstance(s["exit_rule"], AnyOf)
     s = make_strategy(warmup_bars=100, stop_pct=None, tp_arm_pct=0.05, tp_trail_pct=0.02)
     assert isinstance(s["exit_rule"], ProfitTrail)
@@ -121,7 +132,8 @@ def test_wiring_composes_trail_with_stop():
 
 def test_wiring_rejects_giveback_without_arm():
     with pytest.raises(ValueError):
-        make_strategy(warmup_bars=100, tp_giveback_frac=0.5)
+        make_strategy(warmup_bars=100, tp_arm_pct=None, tp_trail_pct=None,
+                      tp_giveback_frac=0.5)
 
 
 # -------- Trader take-profit cooldown -----------------------------------------
