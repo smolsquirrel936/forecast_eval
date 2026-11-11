@@ -35,6 +35,7 @@ from typing import Any, Dict
 from ...exits.pct_stop import EntryPercentStop
 from .emitter import ThresholdEmitter
 from .forecaster import make_forecaster
+from .profit_trail import AnyOf, ProfitTrail
 from .trader import Trader
 
 # Tech: this session's default knobs — the twelve values `real_data.py`'s
@@ -63,6 +64,19 @@ PARAMS: Dict[str, Any] = {
     # percent-stop knob — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param stop_pct=...``.
     "stop_pct": 0.1,
+    # take-profit trail knobs — package-declared, beyond the twelve CLI knobs
+    # (D6/D7), reachable only through ``--param tp_arm_pct=...`` etc.
+    # Why:  autoresearch_day_tptrail_1111. tp_arm_pct: the trail does nothing
+    # until the best price since entry is this fraction of the entry in the
+    # position's favour; then EITHER tp_giveback_frac (exit when the open
+    # gain falls to 1-f of its maximum) OR tp_trail_pct (exit y below/above
+    # the best price) — exactly one with an arm. tp_cooldown_signals: after a
+    # profitable exit-rule close, skip same-side opens for K signals. All
+    # None/0 is the CONTROL, byte-identical to the pre-knob package.
+    "tp_arm_pct": None,
+    "tp_giveback_frac": None,
+    "tp_trail_pct": None,
+    "tp_cooldown_signals": 0,
 }
 
 # Tech: the knob's tuned value — 0.10, ADOPTED on simtrade_0929 (2026-10-12).
@@ -142,6 +156,7 @@ def make_strategy(
             aggression_ticks=p["aggression_ticks"],
             max_position=p["max_position"],
             max_aggression_ticks=p["max_aggression_ticks"],
+            tp_cooldown_signals=p["tp_cooldown_signals"],
         )
 
     # Tech: build the percent stop only when its knob is set; None means no
@@ -150,11 +165,28 @@ def make_strategy(
     #       (run.py Step 2) and submits a closing limit on fire — the
     #       flatten-and-continue semantics the live deployment wants, so the
     #       backtest measures precisely what live would do.
-    exit_rule = (
-        EntryPercentStop(stop_pct=p["stop_pct"])
-        if p["stop_pct"] is not None
-        else None
-    )
+    # Tech: compose the take-profit trail with the stop through AnyOf only
+    #       when an arm is set; otherwise return the bare stop (or None).
+    # Why:  the control must be byte-identical to the pre-knob package, so
+    #       the composition wrapper appears only when the trail is on; a
+    #       give-back knob without an arm would be silently inert, so refuse it.
+    exit_rules = []
+    if p["stop_pct"] is not None:
+        exit_rules.append(EntryPercentStop(stop_pct=p["stop_pct"]))
+    if p["tp_arm_pct"] is not None:
+        exit_rules.append(ProfitTrail(
+            arm_pct=p["tp_arm_pct"],
+            giveback_frac=p["tp_giveback_frac"],
+            trail_pct=p["tp_trail_pct"],
+        ))
+    elif p["tp_giveback_frac"] is not None or p["tp_trail_pct"] is not None:
+        raise ValueError("tp_giveback_frac / tp_trail_pct need tp_arm_pct")
+    if not exit_rules:
+        exit_rule = None
+    elif len(exit_rules) == 1:
+        exit_rule = exit_rules[0]
+    else:
+        exit_rule = AnyOf(exit_rules)
 
     return {
         "forecaster": forecaster,

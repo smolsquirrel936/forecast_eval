@@ -9,6 +9,12 @@ PER-SESSION COPY (STRATEGY_SPLIT_PLAN S1). Verbatim copy of
 ``tests/test_strategy_isolation.py`` pins it), with only the relative-import depth
 changed. It is this package's to edit; the shared original is frozen and
 hash-guarded by ``tests/test_strategy_isolation.py``. Diverge freely here.
+
+DIVERGED (autoresearch_day_tptrail_1111): a take-profit re-entry cooldown --
+after an exit-rule close that flattens a position IN PROFIT, an OPEN on the
+closed position's side is skipped for ``tp_cooldown_signals`` signals (HOLDs
+count; the opposite side opens freely). At the default 0 it never arms, so
+runs are byte-identical to the pre-knob copy.
 """
 from datetime import datetime
 from typing import Literal, Optional
@@ -29,6 +35,7 @@ class Trader:
         aggression_ticks: int = 3,
         max_position: int = 1,
         max_aggression_ticks: Optional[int] = None,
+        tp_cooldown_signals: int = 0,
     ):
         # Tech: hold the execution handle and order-placement parameters, and
         #       initialize position/entry tracking to flat.
@@ -49,6 +56,22 @@ class Trader:
         self.aggression_ticks = aggression_ticks
         self.max_position = max_position
         self.max_aggression_ticks = max_aggression_ticks
+        # Tech: the take-profit re-entry cooldown — K signals during which an
+        #       OPEN on the side a profitable exit-rule close just left is
+        #       skipped; `_exit_close` marks a resting order as submit_exit's.
+        # Why:  a take-profit trail flattens a trade the model still favours,
+        #       so the next same-side signal re-buys the leg it just sold (the
+        #       churn that sank every early exit the day loops measured). Only
+        #       an exit-rule close in profit arms it: signal exits and the
+        #       percent stop keep their recorded behaviour. 0 is the control.
+        if not isinstance(tp_cooldown_signals, int) or tp_cooldown_signals < 0:
+            raise ValueError(
+                f"tp_cooldown_signals must be an int >= 0, got {tp_cooldown_signals}"
+            )
+        self.tp_cooldown_signals = tp_cooldown_signals
+        self._cooldown_side: int = 0        # +1 blocked BUYs, -1 blocked SELLs
+        self._cooldown_left: int = 0        # signals remaining in the cooldown
+        self._exit_close: bool = False      # the resting order is submit_exit's
         self.position = 0  # signed contracts; +long / -short
         self.entry_price: float = 0.0
         self.entry_bar_idx: int = -1
@@ -90,11 +113,16 @@ class Trader:
         #       first (even for HOLD) guarantees a stale forecast's order can never
         #       outlive the forecast that produced it.
         self.execution.cancel()
+        self._exit_close = False            # the cancel took any exit close with it
 
         # Tech: HOLD means "do nothing further" after the cancel above.
         # Why:  HOLD is a real decision (stand aside), not a no-op — its cancel is
         #       the whole point, so we return without submitting anything.
+        #       A HOLD still counts toward the take-profit cooldown: the budget
+        #       is signals seen, not orders placed.
         if direction == "HOLD":
+            if self._cooldown_left > 0:
+                self._cooldown_left -= 1
             return None
 
         # Tech: capture the reference price; entries use a confidence-scaled offset
@@ -115,6 +143,16 @@ class Trader:
         #       no-op and an opposing signal closes only.
         order: Optional[OrderEvent] = None
         if self.position == 0:
+            # Tech: take-profit cooldown — while armed, every signal seen flat
+            #       consumes one of the K, and a same-side OPEN is skipped.
+            # Why:  see __init__; the cancel above already ran, so a skipped
+            #       signal leaves nothing resting (§4.4).
+            if self._cooldown_left > 0:
+                self._cooldown_left -= 1
+                if (direction == "BUY" and self._cooldown_side > 0) or (
+                    direction == "SELL" and self._cooldown_side < 0
+                ):
+                    return None
             offset = self._entry_offset(strength)
             qty = self._entry_qty(strength)
             if direction == "BUY":
@@ -164,6 +202,7 @@ class Trader:
         #       a forced close; the close is offset by aggression so it's marketable
         #       and actually gets us flat by the boundary.
         self.execution.cancel()
+        self._exit_close = True
         cur = market.price
         offset = self.aggression_ticks * self.tick_size
         qty = abs(self.position)
@@ -207,6 +246,15 @@ class Trader:
             self.entry_bar_idx = bar_idx
             self.entry_timestamp = timestamp
         elif new == 0:
+            # Tech: arm the take-profit cooldown when this flatten is an exit-rule
+            #       close (submit_exit's order) that banked a gain.
+            # Why:  see __init__ — measured from the fill, the moment the
+            #       re-entry risk begins; read before the entry is cleared.
+            if (self.tp_cooldown_signals > 0 and self._exit_close
+                    and (1 if prev > 0 else -1) * (fill_price - self.entry_price) > 0):
+                self._cooldown_side = 1 if prev > 0 else -1
+                self._cooldown_left = self.tp_cooldown_signals
+            self._exit_close = False
             # Tech: returned to flat — clear all entry tracking to sentinels.
             # Why:  leaving stale entry data would make position_state() lie on the
             #       next trade and could trip an ExitRule against a closed position.
