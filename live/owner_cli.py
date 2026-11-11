@@ -11,11 +11,14 @@ deployment whose order it was.
 never spoken as "cannot see the book" and halts — deliberately, so a missing owner
 is never mistaken for a flat account (`broker/client.py`).
 
-**It seeds from the ledgers, not from the venue.** On a shared book
+**It seeds from its own record, not from the venue.** On a shared book
 `list_positions` gives the account total with no way to split it, so a restart
-reads each deployment's own `fills_<slug>.csv` (§16) and reconciles the sum of
-those against the venue on the first pass. If they disagree at start-up, that is
-a real desync and this refuses rather than adopting a number it cannot attribute.
+reads `owner_positions.json` — the book the last owner saved — and checks it
+against each deployment's own `fills_<slug>.csv` (§16). With no such file it
+seeds from the ledgers. It then reconciles the total against the venue on the
+first pass. A disagreement at start-up is a real desync, and this refuses
+rather than adopting a number it cannot attribute. Once running, a disagreement
+is alerted and trading goes on; a person corrects the file in place.
 
 **This process logs in; so do the deployments.** They still need the market feed
 to build bars — only *orders* are delegated. That is four sessions on one
@@ -47,11 +50,11 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from forecast_eval.live import telegram                           # noqa: E402
+from forecast_eval.live import owner_positions, telegram          # noqa: E402
 from forecast_eval.live.alerts import Alerter                     # noqa: E402
 from forecast_eval.live.artifacts import git_commit, git_dirty  # noqa: E402
 from forecast_eval.live.contracts import resolve_txf            # noqa: E402
@@ -124,6 +127,25 @@ def make_relogin(api: Any, cred: Any, account: Any, owner: Any):
             raise RuntimeError("subscribe_trade returned False after re-login")
         owner.attach()
     return _relogin
+
+
+def _positions_tick(owner: Any, alerter: Any = None) -> None:
+    # Tech: let the owner read a hand edit of its positions file, and print
+    #       and alert the outcome.
+    # Why:  the correction changes what the next Cover is sized on, so a person
+    #       must hear that it landed — or why it did not — on the phone as well
+    #       as the console. Waiting on orders in flight is printed only.
+    outcome = owner.check_positions_file()
+    if outcome is None:
+        return
+    kind, message = outcome
+    print(f"  {message}", file=sys.stderr if kind == "refused" else sys.stdout)
+    if alerter is None:
+        return
+    if kind == "applied":
+        alerter.warn("positions_corrected", message)
+    elif kind == "refused":
+        alerter.warn("positions_correction_refused", message)
 
 
 def _relogin_tick(relogin: Any, now: datetime, alerter: Any = None) -> None:
@@ -402,6 +424,39 @@ def seed_positions(out_parent: Any, slugs: List[str]) -> Dict[str, Dict[str, Any
     return seeds
 
 
+class SeedRefused(Exception):
+    """The start-up seed cannot be trusted; the message says why and what to fix."""
+
+
+def choose_seed(owner: Any, out_parent: Any,
+                slugs: List[str]) -> Tuple[Dict[str, Dict[str, Any]], str]:
+    """The start-up seed and where it came from: the positions file, else the ledgers."""
+    # Tech: read `owner_positions.json`; with no file, seed from the ledgers.
+    #       With one, refuse when it does not parse or when its lots differ
+    #       from the ledgers'.
+    # Why:  the file is the owner's own record and what a person corrects, but
+    #       the ledgers are each deployment's history, and `--resume` replays
+    #       them. A hand correction must reach both, and a start is the moment
+    #       to catch one that reached only one — before any order is sized on
+    #       it. No file is the ordinary first start after this shipped.
+    ledgers = seed_positions(out_parent, slugs)
+    try:
+        loaded = owner_positions.load(owner.positions_path, slugs)
+    except ValueError as exc:
+        raise SeedRefused(f"{exc}. Fix it by hand, or delete it to seed from "
+                          f"the ledgers.") from None
+    if loaded is None:
+        return ledgers, "the ledgers"
+    seed = owner_positions.as_seed(*loaded, slugs)
+    differences = owner.seed_differences(seed, ledgers)
+    if differences:
+        raise SeedRefused(
+            f"{owner_positions.POSITIONS_NAME} and the ledgers disagree: "
+            + "; ".join(differences)
+            + ". Correct whichever one is wrong.")
+    return seed, owner_positions.POSITIONS_NAME
+
+
 def _describe_seed(seeds: Dict[str, Dict[str, Any]]) -> Dict[str, str]:
     """`{slug: "+1 @ 49884.00 TXFK6"}` for the console; flat slugs read "0"."""
     return {slug: ", ".join(f"{held.signed_qty:+d} @ {held.avg_price:.2f}"
@@ -530,39 +585,53 @@ def _main(args: Any, out_parent: Path, alerter: Alerter) -> int:
         if skipped:
             print(f"intents already on disk, not replayed: {skipped}")
 
-        # Tech: seed from the ledgers, then check that sum against the venue
-        #       BEFORE serving anything.
+        # Tech: seed from the positions file (checked against the ledgers) or
+        #       the ledgers, then check that total against the venue BEFORE
+        #       serving anything.
         # Why:  the owner's whole authority rests on `account_net` being right —
         #       it is what `plan_legs` sizes every Cover against (§18.9). Starting
         #       to place orders on a seed the venue disagrees with would turn one
         #       stale ledger into a stream of wrongly-sized legs. Refusing here
         #       costs a restart; not refusing costs positions.
-        seeds = seed_positions(out_parent, args.slugs)
+        try:
+            seeds, source = choose_seed(owner, out_parent, args.slugs)
+        except SeedRefused as exc:
+            print(f"\n  *** REFUSING TO START: {exc} ***", file=sys.stderr)
+            alerter.fatal("startup_refused", str(exc), gate="positions")
+            return 6
         owner.seed_from(seeds)
-        print(f"seeded from ledgers: {_describe_seed(seeds)}  "
+        print(f"seeded from {source}: {_describe_seed(seeds)}  "
               f"account={owner.book.account_net:+d}")
-        recorder.record("owner_seeded", seeds=_describe_seed(seeds),
+        recorder.record("owner_seeded", source=source,
+                        seeds=_describe_seed(seeds),
                         account=owner.book.account_net)
 
         agreed = owner.reconcile()
         if agreed is False:
-            print("\n  *** REFUSING TO START: the ledgers and the venue "
-                  "disagree. ***", file=sys.stderr)
+            print("\n  *** REFUSING TO START: the owner's positions and the "
+                  "venue disagree. ***", file=sys.stderr)
             for line in owner.anomalies:
                 print(f"      {line}", file=sys.stderr)
-            print("  Reconcile them by hand — `python -m "
-                  "forecast_eval.live.flatten --out-parent <dir>` reports who "
-                  "holds what — then restart.", file=sys.stderr)
+            print(f"  Reconcile them by hand — `python -m "
+                  f"forecast_eval.live.flatten --out-parent <dir>` reports who "
+                  f"holds what — correct the ledger and "
+                  f"{owner_positions.POSITIONS_NAME}, then restart.",
+                  file=sys.stderr)
             alerter.fatal("startup_refused",
-                          "the ledgers and the venue disagree: "
+                          "the owner's positions and the venue disagree: "
                           + "; ".join(owner.anomalies), gate="reconcile")
             return 6
         if agreed is None:
             print("  WARNING: the venue would not answer; starting on the "
-                  "ledger seed alone.")
+                  "seed alone.")
             alerter.warn("venue_unanswered", "the venue would not answer the "
-                         "start-up reconcile; the owner started on the ledger "
-                         "seed alone")
+                         "start-up reconcile; the owner started on the seed "
+                         "alone")
+        # Tech: write the positions file from the accepted seed.
+        # Why:  from here on the file is the record a person corrects, so it
+        #       must exist and match the book before the first order. Only after
+        #       the venue check, so a refused start leaves the file as it was.
+        owner.save_positions(force=True)
 
         used, limit, remaining = usage_bytes(_usage(api))
         if used is not None:
@@ -654,13 +723,21 @@ def _serve(owner: OwnerProcess, args: Any, api: Any = None,
     #       to trade on a desynced ledger (caught 2026-10-14 by the cadence test
     #       on a 6-minute-old boot).
     last_reconcile: Optional[float] = None
-    agreed_since_freeze = False
+    # Tech: the disagreement last alerted on, `{code: (booked, venue)}`.
+    # Why:  the reconcile repeats every 30 s; the alert fires when the numbers
+    #       change, and a recovery when they agree again.
+    mismatch_alerted: Optional[Dict[str, Any]] = None
     # Tech: what the two repeating warnings last alerted on.
     # Why:  both reprint every 30 s on the console; the alert fires on a change
     #       only, so a night of thin traffic is one message, not 1 200.
     traffic_alerted = False
     stale_alerted: List[str] = []
     while not stopping["now"]:
+        # Tech: apply a hand edit of the positions file before acting on any
+        #       intent.
+        # Why:  a correction should size the very next leg, and `poll` then
+        #       tells the corrected deployment its new position.
+        _positions_tick(owner, alerter)
         owner.poll()
         if relogin is not None:
             _relogin_tick(relogin, datetime.now(), alerter)
@@ -671,41 +748,40 @@ def _serve(owner: OwnerProcess, args: Any, api: Any = None,
             agreed = owner.reconcile()
             if session_watch is not None:
                 session_watch.note(agreed, datetime.now())
-            if agreed is False and owner.frozen is None:
-                # Tech: a disagreement FREEZES the owner — no new orders — and
-                #       the loop keeps serving.
-                # Why:  the account net is what every subsequent leg is sized
-                #       against, so placing on a number the venue disputes is how
-                #       one desync becomes many; same rule as
-                #       `SafetyRails.on_reconcile`, which never auto-corrects.
-                #       Until 2026-10-07 this RETURNED, and the logout cut the deal
-                #       stream while a fill was still on its way (2026-10-06,
-                #       `DEFAULT_RECONCILE_GRACE`). Frozen, the owner still books
-                #       that fill and tells its deployment.
-                owner.freeze(owner.anomalies[-1])
-                print("\n  *** RECONCILIATION FAILED — OWNER FROZEN ***",
+            if agreed is False and owner.mismatch != mismatch_alerted:
+                # Tech: a disagreement is ALERTED, once per new set of numbers,
+                #       and the owner keeps placing orders.
+                # Why:  2026-10-30 — the owner froze on a fill it never heard,
+                #       rejected fullday's stop close, and every deployment had to
+                #       be stopped for the fix; after 05:00 the close would have
+                #       waited for Monday's open. The deployments' own positions
+                #       are not in dispute, and the total that sizes each Cover is
+                #       the owner's own record, which a person corrects in
+                #       `owner_positions.json` while it runs. Until 2026-10-07 a
+                #       failure RETURNED and the logout cut the deal stream while
+                #       a fill was still on its way (2026-10-06).
+                mismatch_alerted = owner.mismatch
+                print("\n  *** RECONCILIATION FAILED — STILL TRADING ***",
                       file=sys.stderr)
                 print(f"      {owner.anomalies[-1]}", file=sys.stderr)
-                print("      No new orders are placed; a deployment that submits "
-                      "is rejected and halts.\n      Deals are still booked and "
-                      "positions still published. Reconcile by hand, then\n"
-                      "      Ctrl-C the deployments and this owner, and restart.",
+                print(f"      Find the fill the book missed, add it to that "
+                      f"deployment's fills_<slug>.csv,\n      and correct "
+                      f"{owner_positions.POSITIONS_NAME}; the owner applies it "
+                      f"on its next pass (simtrade_operations §6.9).",
                       file=sys.stderr)
                 if alerter is not None:
-                    alerter.fatal("owner_frozen",
+                    alerter.fatal("owner_mismatch",
                                   f"reconciliation failed: {owner.anomalies[-1]}"
-                                  f" — no new orders; reconcile by hand")
-            elif agreed is True and owner.frozen is not None:
-                if not agreed_since_freeze:
-                    agreed_since_freeze = True
-                    print("  the venue and the book agree again — still frozen; "
-                          "restart the owner to trade.", file=sys.stderr)
-                    if alerter is not None:
-                        alerter.recovery("owner_agrees_again",
-                                         "the venue and the book match again; "
-                                         "the owner stays frozen until "
-                                         "restarted",
-                                         resolves=("owner_frozen",))
+                                  f" — still trading; correct the ledger and "
+                                  f"{owner_positions.POSITIONS_NAME} by hand")
+            elif (agreed is True and mismatch_alerted is not None
+                    and not owner.reconcile_note):
+                mismatch_alerted = None
+                print("  the venue and the book agree again.", file=sys.stderr)
+                if alerter is not None:
+                    alerter.recovery("owner_agrees_again",
+                                     "the venue and the book match again",
+                                     resolves=("owner_mismatch",))
             elif agreed is True and owner.reconcile_note:
                 print(f"  reconcile pending: {owner.reconcile_note}")
             # Tech: read the traffic meter on the same cadence as the venue
@@ -753,10 +829,7 @@ def _serve(owner: OwnerProcess, args: Any, api: Any = None,
         if args.once:
             break
         time.sleep(args.poll_seconds)
-    # Tech: a frozen owner exits 6 when it is finally stopped.
-    # Why:  6 already means "the book and the venue disagreed"; the code is how
-    #       a wrapper or a later reader tells a clean stop from a frozen one.
-    return 6 if owner.frozen is not None else 0
+    return 0
 
 
 if __name__ == "__main__":

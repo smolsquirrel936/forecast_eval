@@ -139,6 +139,7 @@ delivers deals per session but a position book to everyone.
 | [live/owner_cli.py](live/owner_cli.md) — `python -m forecast_eval.live.owner_cli` | the owner entry point | how the owner starts, seeds and refuses |
 | [live/owner.py](live/owner.md) | `OrderBook` / `plan_legs` | N working orders across the deployments, and why a `Cover` is never over-sized |
 | [live/owner_process.py](live/owner_process.md) | `OwnerProcess` | the venue-facing half: one callback, the place path, two different reconciliations |
+| [live/owner_positions.py](live/owner_positions.md) | `owner_positions.json` | the owner's own record of who holds what and the total each Cover is sized on; corrected by hand while the owner runs |
 | [live/intents.py](live/intents.md) | `JsonlStream` | the wire between the deployments and the owner, and the three rules that stop an order going missing |
 | [live/broker/client.py](live/broker/client.md) | `ClientBroker` | a deployment's end of that wire — and why a silent owner halts it |
 | [run.py](run.md) — `python -m forecast_eval.run` | Phase 1–4 synthetic demos | a no-model, seconds-long smoke run |

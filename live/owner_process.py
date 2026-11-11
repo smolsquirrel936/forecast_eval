@@ -23,6 +23,12 @@ an order it placed — §7.2 dissolves rather than needing a fix.
 could make it. With an owner it is made in the one process that can, in memory,
 which is also what retires §16's freshness race.
 
+**A disagreement with the venue is an alert, not a stop (2026-11-11).** The book
+is saved to `owner_positions.json` whenever it moves, and a person corrects a
+missed fill by editing that file while the owner runs (`check_positions_file`).
+Until then a failed reconcile froze the owner, which turned one deployment's
+missed fill into every deployment's rejected order.
+
 **`shioaji` is imported lazily and can be substituted**, so this module and its
 tests run with the package absent — the same arrangement `ShioajiBroker` uses.
 """
@@ -37,6 +43,7 @@ from typing import Any, Callable, Deque, Dict, Iterable, List, Optional, Tuple
 import pandas as pd
 
 from ..events import OrderEvent
+from . import owner_positions
 from .intents import JsonlStream, event_path, intent_path
 from .owner import COVER, Leg, OrderBook, plan_legs
 
@@ -163,10 +170,12 @@ class OwnerProcess:
         self.deployment_timeout = deployment_timeout
         # Tech: the reconcile's grace state — when the current in-flight
         #       difference was first seen, the deals booked recently, the line
-        #       the CLI prints while waiting, and the freeze reason.
-        # Why:  see `reconcile` and `freeze`. `_recent` is a deque because the
-        #       venue's callback thread appends while the main loop prunes and
-        #       reads; append/popleft are atomic, and a reader takes a snapshot.
+        #       the CLI prints while waiting — and the last failed comparison.
+        # Why:  see `reconcile`. `_recent` is a deque because the venue's
+        #       callback thread appends while the main loop prunes and reads;
+        #       append/popleft are atomic, and a reader takes a snapshot.
+        #       `mismatch` is `{code: (booked, venue)}` while the venue
+        #       disagrees, so the CLI alerts once per new disagreement.
         self.reconcile_grace = reconcile_grace
         self._clock = clock
         # Tech: when this owner started, on `clock`.
@@ -180,7 +189,22 @@ class OwnerProcess:
         self._mismatch_since: Optional[float] = None
         self._recent: Deque[Tuple[float, int, str]] = deque()
         self.reconcile_note: Optional[str] = None
-        self.frozen: Optional[str] = None
+        self.mismatch: Optional[Dict[str, Tuple[int, int]]] = None
+        # Tech: the owner's record on disk, the book state last written there,
+        #       the file's text as this process last wrote or read it, the text
+        #       of an edit waiting on orders in flight, and whether the last
+        #       write failed.
+        # Why:  `owner_positions.py`. The written state is what `save_positions`
+        #       compares against, so the file changes only when the book does.
+        #       The text is how `check_positions_file` tells a person's edit
+        #       from the owner's own write: by content, because Windows file
+        #       times can tick too coarsely to separate two quick writes, and
+        #       the file is a few hundred bytes.
+        self.positions_path = owner_positions.positions_path(directory)
+        self._positions_written: Optional[Tuple[Any, Any]] = None
+        self._positions_seen: Optional[str] = None
+        self._positions_waiting: Optional[str] = None
+        self._positions_write_failed = False
         # Tech: the deadline for an unconfirmed leg, and when the trade list
         #       was last read for one (None: not yet).
         # Why:  see DEFAULT_UNCONFIRMED_TIMEOUT and `resolve_unconfirmed`.
@@ -269,7 +293,23 @@ class OwnerProcess:
         #       (`owner_cli.seed_positions`), and the account is their sum by
         #       construction. Seeding rather than replaying fills is what keeps a
         #       restart from booking phantom trades into three Portfolios.
+        months, entries = self._reduce_seed(nets, record=True)
+        for slug in nets:
+            slug_net = sum(n for (s, _), n in months.items() if s == slug)
+            self.book.seed_slug_net(slug, slug_net)
+            self.book.seed_slug_entry(slug, entries.get(slug, 0.0)
+                                      if slug_net else 0.0)
+        self.book.seed_months(months)
+
+    def _reduce_seed(self, nets: Dict[str, Any], record: bool = False
+                     ) -> Tuple[Dict[Tuple[str, str], int], Dict[str, float]]:
+        # Tech: `{(slug, code): lots}` and `{slug: entry}` from a `seed_from`
+        #       mapping, with each month resolved and expired months dropped.
+        # Why:  split out of `seed_from` so the start-up check that compares
+        #       the positions file with the ledgers reduces both exactly as
+        #       seeding would (`seed_differences`).
         months: Dict[Tuple[str, str], int] = {}
+        entries: Dict[str, float] = {}
         for slug, held in nets.items():
             # Tech: a held value with no month, and a month of `''`, go to the
             #       start-up month.
@@ -278,7 +318,6 @@ class OwnerProcess:
             #       restart makes (simtrade_operations §6.5). A wrong one is
             #       refused by the start-up reconcile rather than traded on.
             by_code = held if isinstance(held, dict) else {"": held}
-            slug_net, entry = 0, 0.0
             for code, lot in by_code.items():
                 code = code or self.code
                 # Tech: accept a bare signed size or anything carrying
@@ -292,27 +331,153 @@ class OwnerProcess:
                     # Why:  the exchange settled it at expiry and no deal said
                     #       so, so a ledger whose deployment was not running to
                     #       write the settlement still holds it.
-                    if self.recorder is not None:
+                    if record and self.recorder is not None:
                         self.recorder.record("owner_seed_expired", slug=slug,
                                              code=code, net=net)
                     continue
                 if net:
-                    entry = float(getattr(lot, "avg_price", 0.0) or 0.0)
+                    entries[slug] = float(getattr(lot, "avg_price", 0.0) or 0.0)
                 months[(slug, code)] = months.get((slug, code), 0) + net
-                slug_net += net
-            self.book.seed_slug_net(slug, slug_net)
-            self.book.seed_slug_entry(slug, entry if slug_net else 0.0)
-        self.book.seed_months(months)
+        return months, entries
+
+    def seed_differences(self, ours: Dict[str, Any],
+                         theirs: Dict[str, Any]) -> List[str]:
+        """`"day TXFK6: file -1, ledgers +0"` for every lot two seeds disagree on."""
+        # Tech: reduce both seeds as `seed_from` would and compare the lots
+        #       per deployment and month; entry prices are not compared.
+        # Why:  the start-up check between `owner_positions.json` and the
+        #       ledgers. The ledgers reduce entries FIFO and the book averages
+        #       them, which agree at one lot but are not the same rule, so only
+        #       the sizes — what the venue and every Cover depend on — must match.
+        a = {k: n for k, n in self._reduce_seed(ours)[0].items() if n}
+        b = {k: n for k, n in self._reduce_seed(theirs)[0].items() if n}
+        return [f"{slug} {code}: file {a.get((slug, code), 0):+d}, "
+                f"ledgers {b.get((slug, code), 0):+d}"
+                for slug, code in sorted(set(a) | set(b))
+                if a.get((slug, code), 0) != b.get((slug, code), 0)]
+
+    # ---- the positions file ------------------------------------------------
+
+    def _positions_state(self) -> Tuple[Dict[Tuple[str, str], int], Dict[str, float]]:
+        # Tech: the book's lots and the entries of the deployments holding them.
+        # Why:  the same normal form `owner_positions.parse` returns, so the
+        #       book and a file compare with `==`.
+        holdings = self.book.holdings()
+        held = {slug for slug, _ in holdings}
+        return holdings, {s: e for s, e in self.book.entries().items() if s in held}
+
+    def _positions_file_text(self) -> Optional[str]:
+        # Tech: the file's text, None when it is missing; on any other read
+        #       error, the text last seen.
+        # Why:  an editor can hold the file locked for a moment while saving.
+        #       Reading that as "unchanged" just tries again next pass, where
+        #       reading it as "missing" would make `save_positions` overwrite it.
+        try:
+            return owner_positions.read_text(self.positions_path)
+        except OSError:
+            return self._positions_seen
+
+    def save_positions(self, force: bool = False) -> bool:
+        """Rewrite `owner_positions.json` when the book moved; True when written."""
+        # Tech: write when the book differs from the last write or the file is
+        #       gone. Unless `force`, skip while the file carries an edit this
+        #       process has not read yet.
+        # Why:  overwriting an unread edit would throw a correction away before
+        #       `check_positions_file` saw it. `force` is the start-up write,
+        #       made just after the file or the ledgers were read. A failed
+        #       write is reported once and retried each pass; the book in memory
+        #       is still right, so it must not stop the owner.
+        state = self._positions_state()
+        text = self._positions_file_text()
+        if not force and text is not None and (
+                text != self._positions_seen
+                or state == self._positions_written):
+            return False
+        doc = owner_positions.render(*state, self.slugs, self._wall_clock())
+        try:
+            written = owner_positions.write(self.positions_path, doc)
+        except OSError as exc:
+            if not self._positions_write_failed:
+                self._positions_write_failed = True
+                self._anomaly(f"could not write {self.positions_path.name}: {exc!r}")
+            return False
+        self._positions_write_failed = False
+        self._positions_written = state
+        self._positions_seen = written
+        if self.recorder is not None:
+            self.recorder.record("owner_positions_saved", total=doc["total"])
+        return True
+
+    def check_positions_file(self) -> Optional[Tuple[str, str]]:
+        """Apply a person's edit of `owner_positions.json`.
+
+        None when there is nothing new; otherwise `(outcome, message)` with
+        outcome `"applied"`, `"refused"` or `"waiting"`.
+        """
+        # Tech: act only when the file's text differs from this process's last
+        #       write or read, and only with no leg in flight.
+        # Why:  a deal booked between a person reading the numbers and the owner
+        #       applying them would be overwritten by the edit. With nothing in
+        #       flight the book can move only by the correction itself.
+        text = self._positions_file_text()
+        if text is None or text == self._positions_seen:
+            return None
+        if self.book.in_flight():
+            if text == self._positions_waiting:
+                return None
+            self._positions_waiting = text
+            return ("waiting", f"{self.positions_path.name} was edited; it is "
+                               f"applied once no order is in flight")
+        self._positions_seen = text
+        self._positions_waiting = None
+        try:
+            loaded = owner_positions.parse_text(text, self.slugs)
+        except ValueError as exc:
+            return self._positions_refused(f"{exc}. The book is unchanged.")
+        current = self._positions_state()
+        if loaded == current:
+            return None
+        # Tech: refuse an edit made against numbers the book has since left.
+        # Why:  `save_positions` holds off while an edit is unread, so the book
+        #       moving past the last write means a fill landed after the person
+        #       read the file. Applying the edit would erase that fill.
+        if current != self._positions_written:
+            self._positions_written = None
+            return self._positions_refused(
+                "a fill was booked after the file was last written, so the "
+                "edit was made against old numbers. The file now holds the "
+                "current book; make the correction again.")
+        before = owner_positions.describe(*current)
+        self.seed_from(owner_positions.as_seed(*loaded, self.slugs))
+        self._positions_written = self._positions_state()
+        after = owner_positions.describe(*self._positions_written)
+        # Tech: forget the reconcile's grace state.
+        # Why:  the difference it was timing was measured against the old book.
+        self._mismatch_since = None
+        self.reconcile_note = None
+        if self.recorder is not None:
+            self.recorder.record("owner_positions_corrected", before=before,
+                                 after=after)
+        return ("applied", f"hand correction applied: {before} -> {after}")
+
+    def _positions_refused(self, reason: str) -> Tuple[str, str]:
+        if self.recorder is not None:
+            self.recorder.record("owner_positions_refused", reason=reason)
+        return ("refused", f"hand correction refused: {reason}")
 
     # ---- the intent side ---------------------------------------------------
 
     def poll(self) -> None:
         """One pass: act on everything the deployments have said, then report."""
-        # Tech: drain each deployment's intent stream in turn, then publish.
+        # Tech: drain each deployment's intent stream in turn, publish, then
+        #       bring `owner_positions.json` up to date.
         # Why:  publishing after acting means a deployment's next bar sees the
         #       consequences of its own last intent rather than the state before
         #       it. Draining per slug rather than merging keeps one deployment's
-        #       malformed stream from stalling the others.
+        #       malformed stream from stalling the others. The file is saved
+        #       here, on the owner's own thread, rather than inside the deal
+        #       callback: a second later is soon enough for a record a person
+        #       reads, and it keeps disk writes off the venue's thread.
         for slug in self.slugs:
             try:
                 intents = self._in[slug].read_new()
@@ -323,6 +488,7 @@ class OwnerProcess:
                 self._act(slug, intent)
         self.resolve_unconfirmed()
         self.publish_positions()
+        self.save_positions()
 
     def _act(self, slug: str, intent: Dict[str, Any]) -> None:
         # Tech: dispatch one intent by kind.
@@ -348,13 +514,6 @@ class OwnerProcess:
         #       against the intent rather than against the leg it became.
         if self.recorder is not None:
             self.recorder.record("owner_intent", slug=slug, intent=intent)
-        # Tech: a frozen owner answers every submit with `rejected`.
-        # Why:  see `freeze`. The rejection is what halts the asking deployment
-        #       (`ClientBroker`), so a deployment stops when it next tries to
-        #       trade — not before, while it is merely holding.
-        if self.frozen is not None:
-            self._emit(slug, "rejected", reason=f"owner frozen: {self.frozen}")
-            return
         try:
             order = OrderEvent(
                 timestamp=pd.Timestamp(intent["timestamp"]),
@@ -606,8 +765,8 @@ class OwnerProcess:
         #       The deployment settles its own mirror at that moment
         #       (`LiveRuntime.settle_rolled_leg`) and says so here, in the same
         #       stream as its next submit, so the re-open that follows is sized
-        #       on a book that already agrees. Allowed while frozen: it places
-        #       nothing. Not refused for a month the calendar still calls live —
+        #       on a book that already agrees. Not refused for a month the
+        #       calendar still calls live —
         #       the calendar has no holidays (`roll.roll_at`), the alias does.
         if self.recorder is not None:
             self.recorder.record("owner_intent", slug=slug, intent=intent)
@@ -782,9 +941,9 @@ class OwnerProcess:
             return
         slug, fill = booked
         # Tech: a fill on an orphan is booked and forwarded, and reported.
-        # Why:  the book now agrees with the venue, so the owner need not
-        #       freeze; but the deployment was told `rejected` and has halted,
-        #       so its ledger lacks this fill until a person adds it (§6.9).
+        # Why:  the book now agrees with the venue; but the deployment was
+        #       told `rejected` and has halted, so its ledger lacks this fill
+        #       until a person adds it (§6.9).
         if leg is not None and leg.orphaned:
             self._anomaly(
                 f"{slug}: fill on an order it was told was rejected — "
@@ -874,8 +1033,9 @@ class OwnerProcess:
             # Why:  the exchange settles it with no deal, so the book holds its
             #       lots until the deployment's `settle` intent arrives, and
             #       when the venue stops reporting them is unmeasured. Either
-            #       side of that gap would freeze an owner for a settlement that
-            #       is going exactly as planned; no order can touch the month.
+            #       side of that gap would raise a mismatch for a settlement
+            #       that is going exactly as planned; no order can touch the
+            #       month.
             if self._expired(code):
                 if (venue or booked) and self.recorder is not None:
                     self.recorder.record("owner_reconcile_expired", contract=code,
@@ -896,6 +1056,7 @@ class OwnerProcess:
                                      net=self.book.account_net)
             self._mismatch_since = None
             self.reconcile_note = None
+            self.mismatch = None
             return True
 
         # Tech: a difference that orders in flight can explain is "pending" until
@@ -922,17 +1083,20 @@ class OwnerProcess:
                                              booked=booked, venue=venue,
                                              contract=code, waited=waited,
                                              per_deployment=split)
+                self.mismatch = None
                 return True
             for code, (booked, venue) in off.items():
                 self._anomaly(
                     f"account mirror {booked} != venue {venue}{_where(code)} "
                     f"for {waited:.0f}s, past the {self.reconcile_grace:.0f}s "
                     f"grace for fills in flight (per deployment: {split})")
+            self.mismatch = off
             return False
         for code, (booked, venue) in off.items():
             self._anomaly(
                 f"account mirror {booked} != venue {venue}{_where(code)} "
                 f"(per deployment: {split})")
+        self.mismatch = off
         return False
 
     def _in_flight_explains(self, diff: int, now: float,
@@ -956,22 +1120,6 @@ class OwnerProcess:
         lagging = sum(abs(s) for _, s, c in list(self._recent)
                       if (1 if s > 0 else -1) == -sign and c == code)
         return abs(diff) <= in_flight + lagging
-
-    def freeze(self, reason: str) -> None:
-        """Stop placing orders; keep hearing deals and publishing positions."""
-        # Tech: latch the first reason; every later submit is answered with
-        #       `rejected` (`_submit`). Cancels still reach the venue.
-        # Why:  2026-10-06 — the owner EXITED on a failed reconcile, which
-        #       logged out the only session that could hear the fill it was
-        #       arguing about. Freezing keeps the old rule (no order is sized
-        #       against a disputed net) without dropping the deal stream. Cancels
-        #       pass because they can only reduce what is working. Never
-        #       unfrozen in-process: like `SafetyRails`, a dispute is resolved by
-        #       a person and a restart, not by the next agreeing sample.
-        if self.frozen is None:
-            self.frozen = reason
-            if self.recorder is not None:
-                self.recorder.record("owner_frozen", reason=reason)
 
     def stale_deployments(self) -> List[str]:
         # Tech: deployments that have not written an intent within the timeout.

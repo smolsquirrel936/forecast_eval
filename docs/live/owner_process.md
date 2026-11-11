@@ -2,7 +2,7 @@
 
 **Role:** the venue-facing half of the owner — one session, one callback, every deployment's orders.
 **Pipeline:** `intents_<slug>.jsonl` → `poll()` → `plan_legs` → `place_order`; venue deal → `_on_event` → [OrderBook](owner.md) → `events_<slug>.jsonl`.
-**Depends on:** [live/owner.py](owner.md), [live/intents.py](intents.md), [live/flatten.py](flatten.md), [live/contracts.py](contracts.md)   **Used by:** the owner entry point (S9b, in progress)
+**Depends on:** [live/owner.py](owner.md), [live/owner_positions.py](owner_positions.md), [live/intents.py](intents.md), [live/flatten.py](flatten.md), [live/contracts.py](contracts.md)   **Used by:** the owner entry point (S9b, in progress)
 
 ## The split with `owner.py`
 
@@ -71,15 +71,60 @@ neither of those can explain fails at once, as before. A fresh owner has nothing
 in flight, so the **start-up check is unchanged**. `clock` is injectable for
 the tests.
 
-### `freeze()` — stop placing, keep listening
+### A failed reconcile is an alert, not a freeze (2026-11-11)
 
-On a failed reconcile the CLI calls `freeze(reason)`. From then on every submit
-is answered with `rejected`, which halts the deployment that asked. Cancels
-still reach the venue, because they can only reduce what is working. Deals are
-still booked and forwarded, and positions are still published. That is the
-difference from the old exit: the fill being disputed still lands. The first
-reason is latched, and nothing unfreezes in-process; as with
-[state.py](state.md)'s rails, a dispute is settled by a person and a restart.
+`reconcile()` leaves the disagreement in `mismatch`, `{code: (booked, venue)}`,
+and `None` once they agree or orders in flight explain the gap. The CLI alerts
+on it ([owner_cli.md](owner_cli.md)), and **the owner keeps placing orders**.
+
+Until 2026-11-11 the CLI called `freeze(reason)` instead, and every later
+submit was rejected. On 2026-10-30 that turned night's unheard fill into
+fullday's rejected stop close, and the fix needed every process stopped. The
+deployments' own positions were never in dispute, and the total that sizes a
+Cover is the owner's own record, which a person can now correct while it runs
+(below). `freeze` and `frozen` are gone, and so are the owner's rejections for
+that reason.
+
+## The positions file (2026-11-11)
+
+The book is saved to `owner_positions.json` in `--out`
+([owner_positions.md](owner_positions.md)): each deployment's lots by month and
+its entry, plus the total.
+
+**`save_positions(force=False)`** runs at the end of every `poll`, on the
+owner's own thread, not in the deal callback. It writes only when the book
+differs from the last write, or the file is gone, atomically. Unless `force`,
+it skips while the file holds an edit not yet read, so an unread correction is
+never overwritten. A failed write is an anomaly once, then retried each pass;
+the book in memory is still right. `force` is the start-up write.
+
+**`check_positions_file()`** is called by the CLI before each `poll`. It tells
+a person's edit from the owner's own write **by content**: Windows file times
+can tick too coarsely to separate two quick writes, and the file is a few
+hundred bytes. It returns `None`, or `(outcome, message)`:
+
+| outcome | when | effect |
+|---|---|---|
+| `waiting` | the file changed while a leg is in flight (said once per edit) | nothing yet; checked again each pass |
+| `refused` | the file does not parse, or `parse` refuses it | book unchanged; said once per edit |
+| `refused` | the book moved after the file was last written | a fill landed after the person read the numbers, so applying would erase it. The file is rewritten with the current book on the next pass |
+| `applied` | otherwise, and the content differs from the book | `seed_from(as_seed(...))`, the reconcile's grace state cleared; `poll` then publishes each deployment's new position |
+
+**Waiting on legs in flight** is what keeps a correction from erasing a deal:
+with nothing working, the book can move only by the correction itself.
+
+**A corrected deployment that is still running halts** on its next bar: its
+`Trader.position` no longer matches what the owner publishes for it
+([state.py](state.md) `on_reconcile`). That is the deployment whose fill went
+missing, which on 2026-10-30 had already halted; restart it with `--resume` and
+it adopts the corrected position. Every other deployment keeps trading.
+
+**`seed_differences(ours, theirs)`** reduces two seeds exactly as `seed_from`
+would (month resolution, expired months dropped) and lists the lots they
+disagree on, as `day TXFK6: file -1, ledgers +0`. Entry prices are not
+compared: the ledgers reduce FIFO and the book averages, which agree at one lot
+but are not the same rule. [owner_cli.md](owner_cli.md) uses it to check the
+file against the ledgers at start-up.
 
 ## Each order goes to the month its intent names (2026-10-20)
 
@@ -121,17 +166,16 @@ reconcile flagged a desync that needed a person.
 - **The `settle` intent.** [ClientBroker](broker/client.md)`.settle` names the
   month and size. `_settle` takes that deployment's lots off that month
   (`OrderBook.settle`) and answers `settled` with the size it took. A size
-  that differs from the deployment's is an anomaly. It places nothing, so a
-  frozen owner still does it. It is not refused for a month the calendar still
-  calls live: the calendar has no holidays, and the alias moving is what the
+  that differs from the deployment's is an anomaly. It places nothing. It is
+  not refused for a month the calendar still calls live: the calendar has no holidays, and the alias moving is what the
   deployment acted on (`owner_settle_unexpired` records the case).
 - **The re-open follows in the same stream**, so it is sized on a book that
   already agrees: a `New` on the new month.
 - **Reconcile skips an expired month** (`roll.month_expired` on
   `contracts.code_month`, read from the `wall_clock` argument). Between the
   expiry and the deployment's `settle` the book still holds the lot, and when
-  the venue stops reporting it is unmeasured. Either way that gap would freeze
-  the owner over a settlement going as planned. A non-zero side is recorded as
+  the venue stops reporting it is unmeasured. Either way that gap would raise
+  a mismatch over a settlement going as planned. A non-zero side is recorded as
   `owner_reconcile_expired`, which is how that timing gets measured.
 - **Not covered:** a deployment that is not running at expiry sends no
   `settle`, so a running owner keeps its lot on the expired month (not
@@ -173,7 +217,7 @@ A raise says the answer was lost, not that the order was. So now:
 - **The leg is kept as an orphan** (`owner_orphaned`), because the venue can
   still take it late. If the venue reports it `New`, the owner cancels it,
   since nobody is managing it. If it fills anyway, the deal is booked and
-  forwarded, so the book agrees with the venue and the owner does not freeze.
+  forwarded, so the book agrees with the venue and no mismatch is raised.
   An anomaly then gives the fill to add to that deployment's ledger by hand
   (§6.9), because the halted deployment did not write it.
 - **The reconcile counts an unconfirmed leg, or an orphan, as in flight**
@@ -195,7 +239,8 @@ reported as the same anomaly `poll` raises. The deployment side does the same
 
 With a `recorder`, the owner writes `owner_intent`, `owner_placed` (slug, side,
 price, octype, `order_id`, `ordno`), `owner_order_event`, `owner_deal` (from
-the book), `owner_reconcile_pending` / `_settled`, `owner_frozen`,
+the book), `owner_reconcile_pending` / `_settled`, `owner_positions_saved` /
+`_corrected` / `_refused` (`owner_frozen` until 2026-11-11),
 `owner_intents_skipped`, the unconfirmed-placement records
 (`owner_place_unconfirmed`, `owner_claimed`, `owner_cancel_deferred`,
 `owner_lookup_failed`, `owner_orphaned`) and every anomaly. `owner_placed` is the record that

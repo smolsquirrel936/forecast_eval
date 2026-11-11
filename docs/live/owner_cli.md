@@ -1,8 +1,8 @@
 # [live/owner_cli.py](../../live/owner_cli.py)
 
 **Role:** the entry point for the owning process — the one process that places orders.
-**Pipeline:** login → seed from the ledgers → reconcile → serve (`poll` / re-login / `reconcile`) until stopped.
-**Depends on:** [live/owner_process.py](owner_process.md), [live/ledger.py](ledger.md), [live/contracts.py](contracts.md), [live/credentials.py](credentials.md), [live/relogin.py](relogin.md)   **Used by:** the operator
+**Pipeline:** login → seed from `owner_positions.json` (checked against the ledgers) or the ledgers → reconcile → save the file → serve (apply a hand edit / `poll` / re-login / `reconcile`) until stopped.
+**Depends on:** [live/owner_process.py](owner_process.md), [live/owner_positions.py](owner_positions.md), [live/ledger.py](ledger.md), [live/contracts.py](contracts.md), [live/credentials.py](credentials.md), [live/relogin.py](relogin.md)   **Used by:** the operator
 
 ```bash
 # 1. the owner FIRST
@@ -21,7 +21,21 @@ A [ClientBroker](broker/client.md) treats a stream that has never spoken as
 mistaken for a flat account. A deployment started first will refuse until the
 owner publishes its opening `position` event.
 
-## It seeds from the ledgers, then checks that against the venue
+## It seeds from its own record, then checks that against the venue
+
+**Since 2026-11-11 the seed is `owner_positions.json`** when it exists
+([owner_positions.md](owner_positions.md)): the book the last owner saved, or
+a person corrected. `choose_seed` checks its lots against what the ledgers
+below say (`OwnerProcess.seed_differences`) and **refuses with exit 6**
+(`startup_refused`, `gate=positions`) when they differ, naming each lot as
+`night TXFK6: file +0, ledgers +1`. A correction has to reach both: the file
+seeds the owner, and the ledger is what that deployment's `--resume`
+replays. A file that does not parse refuses the same way; deleting it seeds
+from the ledgers. With no file, the ledgers seed the owner as before. Once
+the venue check passes, the file is written from the accepted seed
+(`save_positions(force=True)`), so it exists before the first order.
+
+### The ledgers
 
 On a shared book `list_positions` gives the account **total** with no way to
 split it, so a restart cannot ask the venue who holds what. It reads each
@@ -44,13 +58,17 @@ supplies the month for rows that carry none. Before, the whole seed went to
 the old month, so a restart on the default was refused. The console line reads
 `night: +1 @ 46581.00 TXFK6`.
 
-**Then it reconciles the sum against the venue before serving anything, and
-refuses on a disagreement.** The owner's whole authority rests on `account_net`
+### The venue check
+
+**Then it reconciles the seed's total against the venue before serving
+anything, and refuses on a disagreement.** The owner's whole authority rests on `account_net`
 being right: it is what `plan_legs` sizes every `Cover` against
 ([§18.9](../../STRATEGY_SPLIT_PLAN.md)). Starting to place orders on a seed the
 venue disputes turns one stale ledger into a stream of wrongly-sized legs.
 Refusing costs a restart; not refusing costs positions. A venue that will not
-answer is a warning, not a refusal — *cannot compare* is not *disagrees*.
+answer is a warning, not a refusal — *cannot compare* is not *disagrees*. The
+refusal (`gate=reconcile`) tells you to correct the ledger and
+`owner_positions.json`, then restart.
 
 ## `subscribe_trade` is explicit, and checked (§18.14)
 
@@ -120,15 +138,28 @@ verify: the owner holds no quote feed.
 | `--poll-seconds` (1.0) | drain intents, place, cancel, republish positions |
 | `--reconcile-seconds` (30.0) | the venue call, on a slower cadence because it costs one |
 
-**A failed reconciliation freezes the owner** instead of logging and
-continuing. That is the same rule [state.py](state.md)'s `on_reconcile` follows,
-and for the same reason it never auto-corrects: "close the position" is
-undefined when the size is in dispute. Here it is sharper still, because the
-disputed number is what sizes every subsequent leg. Frozen, it places nothing
-and rejects every submit, which halts the deployment that asked. It keeps
-booking deals and publishing positions until Ctrl-C, then exits **6**. It prints
-the banner once, and once more if the venue and the book come to agree; that
-does not unfreeze it.
+**A failed reconciliation is alerted, and the owner keeps trading (since
+2026-11-11).** It prints `RECONCILIATION FAILED — STILL TRADING` and sends FATAL
+`owner_mismatch` once per new set of numbers (`OwnerProcess.mismatch`), not
+every 30 s. When the venue and the book agree again it prints that once and
+sends `owner_agrees_again`; a gap that orders in flight explain is not
+agreement. Nothing is auto-corrected: a person finds the missed fill, adds it
+to the ledger and corrects `owner_positions.json`, and the owner applies the
+file on its next pass ([owner_process.md](owner_process.md), "The positions
+file").
+
+**Until 2026-11-11 a failure froze the owner**: it placed nothing more,
+rejected every submit and exited 6 when stopped. On 2026-10-30 night's close
+filled unheard, the owner froze, and fullday's stop close was rejected; the fix
+needed every process stopped, and a restart after 05:00 would have left the
+close for Monday's open. The deployments' positions were never in dispute, and
+the total that sizes each Cover is the owner's own record, so a disagreement
+now waits for a person without stopping the others.
+
+**A hand edit of `owner_positions.json` is read before each `poll`**
+(`_positions_tick`): `applied` sends WARN `positions_corrected`, `refused` sends
+WARN `positions_correction_refused`, and `waiting` (an order in flight) is
+printed only.
 
 **Until 2026-10-07 it returned instead**, and the logout cut the deal stream.
 On 2026-10-06 that stranded fullday's fill: the reconcile ran 2.5 s after the
@@ -137,7 +168,7 @@ now *pending* for up to 120 s, printed as `reconcile pending: …`
 ([owner_process.md](owner_process.md), "A fill in flight is not a desync").
 
 **The start-up check still refuses** (exit 6): a fresh owner has nothing in
-flight. It also reports `intents already on disk, not replayed: {…}` when the
+flight, and no order has been sized on its seed yet. It also reports `intents already on disk, not replayed: {…}` when the
 streams hold history, which it no longer places.
 
 **The owner keeps a trail**: `owner_session.jsonl` in `--out`, appended across
@@ -184,12 +215,13 @@ alerts are additions beside them.
 
 | Level | Kind | Raised when |
 |---|---|---|
-| FATAL | `owner_frozen` | a running reconcile disagreed and the owner froze |
-| FATAL | `startup_refused` | exit 7 (`gate=subscribe_trade`) or exit 6 (`gate=reconcile`) |
+| FATAL | `owner_mismatch` | a running reconcile disagreed; the owner keeps trading. Once per new set of numbers |
+| FATAL | `startup_refused` | exit 7 (`gate=subscribe_trade`), exit 6 (`gate=reconcile`: the venue disagrees; `gate=positions`: `owner_positions.json` unreadable or contradicting the ledgers) |
 | FATAL | `no_credentials`, `crashed`, `session_unverified` | as in [cli.py](cli.md); `crashed` re-raises unchanged |
 | WARN | `deployment_silent`, `traffic_low` | **on a change only**: the console still repeats them every 30 s |
 | WARN | `venue_unanswered`, `relogin_failed`, `relogin_abandoned` | start-up reconcile got no answer; a re-login went wrong |
-| WARN | `owner_agrees_again` | the venue matches again while frozen — a recovery of `owner_frozen`, so WARN ([alerts.md](alerts.md)) |
+| WARN | `owner_agrees_again` | the venue matches the book again — a recovery of `owner_mismatch`, so WARN ([alerts.md](alerts.md)) |
+| WARN | `positions_corrected`, `positions_correction_refused` | a hand edit of `owner_positions.json` was applied, or refused with the reason |
 | INFO | `relogin` | a fresh token; WARN when it follows a `relogin_failed` / `relogin_abandoned` |
 
 Before this, a freeze reached only the owner's console, and the phone heard
