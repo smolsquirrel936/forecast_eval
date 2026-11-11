@@ -80,9 +80,14 @@ appears in no file as such.
 - **"Now" is the fill ledger, and a disagreement with the last bar is a WARN**
   (since 2026-11-11). A flatten run with the deployments stopped (§6.2 of the
   runbook) or a row added by hand (§6.9) reaches `fills_<slug>.csv` and no bar,
-  so the last bar would still show the lot. The finding names both numbers;
-  section 6's open lots and P&L still come from the newest run folder, which
-  does not have that fill. First seen after the 2026-11-11 flatten.
+  so the last bar would still show the lot. The finding names both numbers.
+  First seen after the 2026-11-11 flatten.
+- **Section 6 adds the soak's ledger-only fills.** `fills_<slug>.csv` rows of the
+  run's `soak_id` dated after the newest folder's last fill are passed to
+  `collect_transactions(..., ledger_fills=...)`: they close lots by FIFO like any
+  fill, a round trip they close is added to the trades with both fills' fees
+  (marked *from the ledger*), and they are counted apart from `fills.csv`
+  ("+ N from the ledger"), never as fills that match no order.
 - **Unrealised P&L is the open lot at the newest bar's price, before fees**
   (since 2026-11-05). The entry fee is already in "Fees on all fills" and the
   exit fee is not paid until the lot closes. The row names the price and bar
