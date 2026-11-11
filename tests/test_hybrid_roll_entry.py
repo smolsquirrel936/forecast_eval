@@ -136,8 +136,11 @@ def test_the_packaged_trader_carries_the_live_roll():
 
 
 def test_the_position_trail_stays_armed_across_the_roll():
+    # the per-session trail (adopted on simtrade_0929) is off: the two are exclusive
     s = wiring.make_strategy(warmup_bars=0, tp_arm_pct=0.15, tp_trail_pct=0.02,
-                             tp_giveback_frac=None)
+                             tp_giveback_frac=None,
+                             day_tp_arm_pct=None, day_tp_trail_pct=None,
+                             night_tp_arm_pct=None, night_tp_trail_pct=None)
     tr, rule = s["make_trader"](Execution(fee_rate=0.0)), s["exit_rule"]
     tr.on_fill("BUY", 1, fill_price=17000.0, bar_idx=10, timestamp=T0)
     assert not rule.should_exit(tr.position_state(), _market(19700.0), bar_idx=20)

@@ -222,6 +222,7 @@ half manages it (`strategy/hybrid/router.py`).
 | `min_prob` | 0.60 | 0.50 |
 | opens | **none 09:30–12:59** (`day_open_block_start` 9.5 / `_end` 13) | **never** (`night_allow_open` False): closes only |
 | `stop_pct` | **0.05** (since 2026-11-01) | **0.06** (since 2026-11-01) |
+| take-profit trail (`*_tp_arm_pct` / `*_tp_trail_pct`) | **arm 0.10 / trail 0.03** (since 2026-11-12) | **arm 0.12 / trail 0.02** (since 2026-11-12) |
 | shared | stride 30, Toto2-1B (one copy, both halves), context 3008 | |
 
 - **Source:** `autoresearch_split_0.7_hybrid` @ `9c0741f` (`iter22`), placed on
@@ -236,11 +237,22 @@ half manages it (`strategy/hybrid/router.py`).
   None/None. With them: train Calmar 12.2446, MDD −1157 (was −1129); held-out
   6.92, MDD −2342 unchanged. The night stop never fired with the day stop on;
   it caps a carried lot overnight, where only the night rule is checked.
+- **Take-profit trail (2026-11-12):** per session, over one best price since
+  entry (`router.SessionTrail`): on a day print, once the lot is +10 % in
+  favour, exit 3 % off the best price; on a night print, +12 % and 2 %. From
+  `HYBRID_TPTRAIL_POSTMORTEM.md` (`autoresearch_hybrid_tptrail_1111`, report in
+  `outputs/hybrid_tptrail_1111/`), a user decision. The only one of 288
+  day × night cells that beats the stops-only config on held-out in all six
+  forecast schedules (mean +1239 pts, worst +115). Train is neutral: Calmar
+  11.9828 (was 12.2446), 88 trades, MDD −1157 unchanged; held-out net +20 333
+  (was +16 429), MDD −2342 unchanged. Thin: 5 take-profits in 8.8 years, none
+  since 2026-08-21 (no lot reached +1.98 %). Not adoptable: a `--resume` into a
+  held lot needs `best_price`.
 - **Live:** slug `hybrid` (its own ledger, bar cache and wire; never fullday's
   `day_night`). Registered by `4b82111` and the five commits before it on
   `main` (`autoresearch_trading_plan_hybrid_split07.md`, "Going live").
 - **Live source record:** `PINNED_HYBRID` stays `None`/`None`; its note names
-  iter22 (`fc27688`).
+  iter22 (`fc27688`), the stops and the take-profit trail (2026-11-12).
 
 ## Cautions
 

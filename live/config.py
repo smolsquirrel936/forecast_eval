@@ -453,7 +453,9 @@ PINNED_FULLDAY = LiveConfig(
 #       slug `day_night`: that is fullday's ledger, bar cache and wire. On
 #       `main` the package is Step 0 (the reset day and night settings,
 #       `eaaad1d`), untuned; a live branch that adopts a loop result restates
-#       `source_note`, as it does for the others.
+#       `source_note`, as it does for the others. On simtrade_0929 the note
+#       names iter22 plus the two later adoptions, the stops (11-01) and the
+#       take-profit trail (11-12).
 PINNED_HYBRID = LiveConfig(
     source_commit=None,
     source_calmar=None,
@@ -464,7 +466,14 @@ PINNED_HYBRID = LiveConfig(
         "train-70% Calmar 12.8738, 86 trades; held-out approx Calmar 6.9773 "
         "vs baseline 5.7634 (day solo 0.371). day half band 0.0005, min_prob "
         "0.60, no opens 09:30-13:00; night half band 0.0007, closes only "
-        "(night_allow_open False); stride 30, Toto2-1B. results_hybrid.tsv"
+        "(night_allow_open False); stride 30, Toto2-1B. results_hybrid.tsv. "
+        "Since 2026-11-01: stop_pct day 0.05 / night 0.06 "
+        "(HYBRID_PCTSTOP_REPORT, autoresearch_hybrid_pctstop_1101; train Calmar "
+        "12.2446). Since 2026-11-12: per-session take-profit trail day arm "
+        "0.10 / trail 0.03, night arm 0.12 / trail 0.02 "
+        "(HYBRID_TPTRAIL_POSTMORTEM, autoresearch_hybrid_tptrail_1111, iter219): "
+        "train Calmar 11.9828, 88 trades, MDD -1157; held-out net +20333 vs "
+        "+16429, MDD -2342 unchanged; 6/6 forecast schedules on held-out"
     ),
     policy=SessionPolicy.both(slug="hybrid"),
     package="hybrid",

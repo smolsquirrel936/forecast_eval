@@ -15,9 +15,18 @@ from forecast_eval.exits.any_of import AnyOf, any_of
 from forecast_eval.exits.base import PositionState
 from forecast_eval.exits.pct_stop import EntryPercentStop
 from forecast_eval.exits.profit_trail import ProfitTrail, profit_trail_from_knobs
+from forecast_eval.strategy.hybrid.router import RoutedExitRule, SessionTrail
 
 T0 = pd.Timestamp("2024-01-02 09:00:00")
 PACKAGES = ("day", "night", "fullday", "hybrid")
+# hybrid's per-session trail, adopted on simtrade_0929 (2026-11-12): off, for the
+# cases that exercise the position-level tp_* trail it excludes
+SESSION_OFF = dict(day_tp_arm_pct=None, day_tp_trail_pct=None,
+                   night_tp_arm_pct=None, night_tp_trail_pct=None)
+
+
+def _session_off(pkg):
+    return SESSION_OFF if pkg == "hybrid" else {}
 
 
 def _mkt(price, minutes=0, session="DAY"):
@@ -163,7 +172,7 @@ def test_package_declares_the_three_knobs(pkg):
 def test_knobs_off_build_no_trail(pkg):
     w = _wiring(pkg)
     off = dict(tp_arm_pct=None, tp_trail_pct=None, tp_giveback_frac=None)
-    rule = w.make_strategy(warmup_bars=10, **off)["exit_rule"]
+    rule = w.make_strategy(warmup_bars=10, **off, **_session_off(pkg))["exit_rule"]
     members = getattr(rule, "rules", [rule])
     assert not any(isinstance(r, ProfitTrail) for r in members)
 
@@ -172,7 +181,7 @@ def test_knobs_off_build_no_trail(pkg):
 def test_knobs_on_compose_a_restorable_trail(pkg):
     w = _wiring(pkg)
     rule = w.make_strategy(warmup_bars=10, tp_arm_pct=0.15, tp_trail_pct=0.02,
-                           tp_giveback_frac=None)["exit_rule"]
+                           tp_giveback_frac=None, **_session_off(pkg))["exit_rule"]
     members = getattr(rule, "rules", [rule])
     trails = [r for r in members if isinstance(r, ProfitTrail)]
     assert len(trails) == 1
@@ -192,13 +201,28 @@ def test_hybrid_trail_sees_both_sessions():
     # the best price that a day print then gives back from
     w = _wiring("hybrid")
     rule = w.make_strategy(warmup_bars=10, tp_arm_pct=0.05, tp_trail_pct=0.02,
-                           tp_giveback_frac=None, day_stop_pct=0.10)["exit_rule"]
+                           tp_giveback_frac=None, day_stop_pct=0.10, **SESSION_OFF)["exit_rule"]
     pos = _pos()
     assert rule.should_exit(pos, _mkt(110.0, session="NIGHT"), bar_idx=11) is False
     assert rule.should_exit(pos, _mkt(107.7, minutes=1, session="DAY"), bar_idx=12) is True
 
 
 # -------- hybrid per-session trail (router.SessionTrail) -----------------------
+
+def test_hybrid_default_is_the_adopted_session_trail():
+    # adopted 2026-11-12: day arm 0.10 / trail 0.03, night arm 0.12 / trail 0.02,
+    # beside the routed 0.05 / 0.06 stops; the position-level trail stays off
+    w = _wiring("hybrid")
+    assert (w.PARAMS["tp_arm_pct"], w.PARAMS["tp_trail_pct"], w.PARAMS["tp_giveback_frac"]) == (None,) * 3
+    rule = w.make_strategy(warmup_bars=10)["exit_rule"]
+    assert isinstance(rule, AnyOf)
+    routed, trail = rule.rules
+    assert isinstance(routed, RoutedExitRule) and isinstance(trail, SessionTrail)
+    day, night = trail.halves["DAY"], trail.halves["NIGHT"]
+    assert (day.arm_pct, day.trail_pct, day.giveback_frac) == (0.10, 0.03, None)
+    assert (night.arm_pct, night.trail_pct, night.giveback_frac) == (0.12, 0.02, None)
+    assert rule.restorable is True and rule.state_keys == ("best_price",)
+
 
 def test_hybrid_session_trail_uses_the_session_width_over_one_best_price():
     # night trail 5% / day trail 2%, both armed at 5%: the best price 110 is set
@@ -228,7 +252,7 @@ def test_hybrid_session_trail_equal_widths_match_the_position_trail():
     w = _wiring("hybrid")
     prices = [(100, "DAY"), (112, "NIGHT"), (111, "DAY"), (109.9, "NIGHT"),
               (109.7, "DAY"), (115, "DAY"), (112.6, "NIGHT")]
-    one = w.make_strategy(warmup_bars=10, tp_arm_pct=0.1, tp_trail_pct=0.02)["exit_rule"]
+    one = w.make_strategy(warmup_bars=10, tp_arm_pct=0.1, tp_trail_pct=0.02, **SESSION_OFF)["exit_rule"]
     two = w.make_strategy(warmup_bars=10, day_tp_arm_pct=0.1, day_tp_trail_pct=0.02,
                           night_tp_arm_pct=0.1, night_tp_trail_pct=0.02)["exit_rule"]
 
@@ -259,4 +283,5 @@ def test_hybrid_position_and_session_trails_are_exclusive():
 
 def test_hybrid_session_shape_without_arm_is_refused():
     with pytest.raises(ValueError, match="need tp_arm_pct"):
-        _wiring("hybrid").make_strategy(warmup_bars=10, night_tp_trail_pct=0.03)
+        _wiring("hybrid").make_strategy(warmup_bars=10, night_tp_arm_pct=None,
+                                        night_tp_trail_pct=0.03)

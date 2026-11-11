@@ -1,4 +1,4 @@
-"""HYBRID's strategy wiring — hybrid_split_iter22 plus the 2026-11-01 percent stops.
+"""HYBRID's strategy wiring — hybrid_split_iter22, percent stops, per-session take-profit trail.
 
 **The DAY half trades the DAY session and the NIGHT half the NIGHT session**, and
 a lot may carry across a session change (``forced_close`` False), as in
@@ -17,6 +17,11 @@ opening. Train Calmar 12.8738, held-out 6.9773.
 ``autoresearch_hybrid_pctstop_1101``): day ``stop_pct`` 0.05, night 0.06, a user
 decision against that report's None/None — see ``PARAMS``. With them the package
 no longer reproduces the iter22 row: train Calmar 12.2446, held-out 6.92.
+
+**The take-profit trail was added after that** (2026-11-12, HYBRID_TPTRAIL_POSTMORTEM.md
+on ``autoresearch_hybrid_tptrail_1111``): per session, day arm 0.10 / trail 0.03,
+night arm 0.12 / trail 0.02, over one best price since entry — a user decision;
+see the block under ``PARAMS``. Train Calmar 11.9828, held-out net +20 333.
 
 **The twelve CLI knobs.** ``real_data.py`` resolves twelve unprefixed knobs for
 every package. Four mean the same here as anywhere: ``stride_bars`` and
@@ -70,13 +75,13 @@ PARAMS: Dict[str, Any] = {
     # the same three knobs per session, over the same one best price since entry —
     # only the arm and give-back that a print is tested against follow its session.
     # A session left all None never fires the trail. Exclusive with the tp_* trail
-    # above; all None is off.
-    "day_tp_arm_pct": None,
+    # above; all None is off. Adopted 2026-11-12 — see the block below PARAMS.
+    "day_tp_arm_pct": 0.10,
     "day_tp_giveback_frac": None,
-    "day_tp_trail_pct": None,
-    "night_tp_arm_pct": None,
+    "day_tp_trail_pct": 0.03,
+    "night_tp_arm_pct": 0.12,
     "night_tp_giveback_frac": None,
-    "night_tp_trail_pct": None,
+    "night_tp_trail_pct": 0.02,
     # unprefixed CLI knobs with no meaning here — must stay None
     "checkpoint": None,
     "buy_threshold": None,
@@ -130,6 +135,21 @@ PARAMS: Dict[str, Any] = {
     # restores the copied behavior
     "night_allow_open": False,
 }
+
+# Tech: the per-session take-profit trail's tuned values — day arm 0.10 / trail
+#       0.03, night arm 0.12 / trail 0.02, ADOPTED on simtrade_0929 (2026-11-12,
+#       user decision); the position-level tp_* trail stays off.
+# Why:  autoresearch_hybrid_tptrail_1111 (HYBRID_TPTRAIL_POSTMORTEM.md; report in
+#       outputs/hybrid_tptrail_1111/). Of the 288 day x night cells (arm 8-15 % x
+#       trail 1-4 % or off, per session) it is the only one that beats the
+#       stops-only config on held-out 2024-01..2026-08 in all six forecast
+#       schedules (warmup 5000-5025; mean +1239 pts, worst +115); train is
+#       neutral (Calmar 11.98 vs 12.24 at warmup 5000, 3 wins / 2 losses over
+#       the schedules) and the drawdown is unchanged. Few events: 5 take-profits
+#       in 8.8 years. It is inert since 2026-08-21 (no lot reached +1.98 %). The
+#       rule is not adoptable: a --resume into a held lot needs best_price. An
+#       explicit --param day_tp_arm_pct=none day_tp_trail_pct=none
+#       night_tp_arm_pct=none night_tp_trail_pct=none turns it off.
 
 # Tech: the unprefixed knobs that must be None.
 # Why:  see the module docstring — each half has its own, so a value here could

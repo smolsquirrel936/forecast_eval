@@ -683,7 +683,11 @@ def test_hybrid_describe_renders_each_half():
 def test_a_hybrid_resume_adopts_its_own_lot_through_the_owner(tmp_path):
     """End to end with hybrid's real stack: the owner holds -1 for `hybrid`, and
     a restart must adopt it into the router's two halves (it used to raise:
-    the router's `position` had no setter). Toto2 loads nothing here."""
+    the router's `position` had no setter). Toto2 loads nothing here.
+
+    Since 2026-11-12 the package's exit rule carries the per-session take-profit
+    trail, which is not adoptable: the resume needs its `best_price`, given
+    here as `--exit-state` would give it, and refuses without one."""
     from datetime import datetime
 
     from forecast_eval.live.broker.client import ClientBroker
@@ -699,7 +703,11 @@ def test_a_hybrid_resume_adopts_its_own_lot_through_the_owner(tmp_path):
     owner.publish_positions()
 
     rt = LiveRuntime(config_named("hybrid"), broker=ClientBroker(tmp_path, "hybrid"))
-    adopted = rt.adopt_position(timestamp=now)
+    with pytest.raises(ValueError, match="without its saved state"):
+        rt.adopt_position(timestamp=now)
+    rt = LiveRuntime(config_named("hybrid"), broker=ClientBroker(tmp_path, "hybrid"))
+    adopted = rt.adopt_position(timestamp=now, exit_state_injected={"best_price": 17000.0})
     assert adopted is not None and adopted["position"] == -1
+    assert adopted["exit_state"] == {"best_price": 17000.0}
     assert rt.trader.position == -1
     assert [h.position for h in rt.trader.halves.values()] == [-1, -1]

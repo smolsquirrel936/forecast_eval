@@ -227,20 +227,29 @@ def test_only_the_half_with_a_stop_can_exit():
     assert rule.adoptable is True
 
 
+TRAIL_OFF = dict(day_tp_arm_pct=None, day_tp_trail_pct=None,
+                 night_tp_arm_pct=None, night_tp_trail_pct=None)
+
+
 def test_the_exit_rule_is_none_until_a_half_sets_a_stop():
     assert wiring.make_strategy(warmup_bars=0, day_stop_pct=None,
-                                night_stop_pct=None)["exit_rule"] is None
+                                night_stop_pct=None, **TRAIL_OFF)["exit_rule"] is None
     rule = wiring.make_strategy(warmup_bars=0, day_stop_pct=None,
-                                night_stop_pct=0.05)["exit_rule"]
+                                night_stop_pct=0.05, **TRAIL_OFF)["exit_rule"]
     assert rule.halves["DAY"] is None and rule.halves["NIGHT"].stop_pct == 0.05
 
 
 def test_the_package_default_carries_the_adopted_stops():
-    """Adopted 2026-11-01 from HYBRID_PCTSTOP_REPORT.md: day 0.05 / night 0.06."""
+    """Adopted 2026-11-01 from HYBRID_PCTSTOP_REPORT.md: day 0.05 / night 0.06.
+    Since 2026-11-12 they sit in an AnyOf beside the per-session take-profit
+    trail, which makes the composed rule restorable rather than adoptable."""
     rule = wiring.make_strategy(warmup_bars=0)["exit_rule"]
-    assert rule.halves["DAY"].stop_pct == 0.05
-    assert rule.halves["NIGHT"].stop_pct == 0.06
-    assert rule.adoptable is True
+    routed = next(r for r in rule.rules if isinstance(r, RoutedExitRule))
+    assert routed.halves["DAY"].stop_pct == 0.05
+    assert routed.halves["NIGHT"].stop_pct == 0.06
+    assert routed.adoptable is True
+    assert rule.adoptable is False and rule.restorable is True
+    assert wiring.make_strategy(warmup_bars=0, **TRAIL_OFF)["exit_rule"].adoptable is True
 
 
 # ---- R3/R4/R5: forecaster ---------------------------------------------------

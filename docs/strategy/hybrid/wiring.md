@@ -31,7 +31,7 @@ half's Forecaster, SignalEmitter, Trader and optional percent stop from its
 | `day_tp_*` / `night_tp_*` | the same three knobs per session, built into a `router.SessionTrail` over the same one best price; a session left None never fires the trail. **Exclusive** with the `tp_*` trail (`make_strategy` refuses both) |
 
 ## Key points / gotchas
-- **Tuned: `hybrid_split_iter22` plus percent stops.** The code of both halves
+- **Tuned: `hybrid_split_iter22` plus percent stops and a take-profit trail.** The code of both halves
   is `main`'s reset session packages (DAYNIGHT_TOTO2_RESET_PLAN, `20767bb`),
   Toto2-1B, context 3008; the values come from the joint search
   `autoresearch_trading_plan_hybrid_split07.md` (repo root), final iter22
@@ -44,6 +44,18 @@ half's Forecaster, SignalEmitter, Trader and optional percent stop from its
   −1157 (was −1129); held-out 6.92, MDD −2342 unchanged. The night stop never
   fired with the day stop on; it caps a carried lot overnight.
   `--param day_stop_pct=none night_stop_pct=none` restores the iter22 run.
+- **Per-session take-profit trail since 2026-11-12:** `day_tp_arm_pct` 0.10 /
+  `day_tp_trail_pct` 0.03, `night_tp_arm_pct` 0.12 / `night_tp_trail_pct` 0.02,
+  from `HYBRID_TPTRAIL_POSTMORTEM.md` (`autoresearch_hybrid_tptrail_1111`), a
+  user decision. The only one of 288 day × night cells that beats the
+  stops-only config on held-out (2024-01 → 2026-08) in all six forecast
+  schedules: mean +1239 pts, worst +115. Train is neutral (Calmar 11.9828 vs
+  12.2446, 88 trades, MDD −1157 unchanged); held-out net +20 333 vs +16 429,
+  MDD −2342 unchanged. 5 take-profits in 8.8 years; none since 2026-08-21.
+  **Not adoptable:** a `--resume` into a held lot needs `best_price`
+  (`exit_state_hybrid.json` or `--exit-state`). `--param day_tp_arm_pct=none
+  day_tp_trail_pct=none night_tp_arm_pct=none night_tp_trail_pct=none` restores
+  the stops-only run.
 - **Registered for live** (2026-10-27) as `PINNED_HYBRID` in `live/config.py`:
   named package `hybrid`, file slug `hybrid` (never fullday's `day_night`). Live
   builds from this same `make_strategy`.
