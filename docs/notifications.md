@@ -201,8 +201,8 @@ What each alert means and what to do. "Ops" links point into
 | `halt` | deployment | the safety rails latched. The message is the reason; `action=stop` or `action=flatten`. Reasons include `no market data for …s`, `position mirror X != venue Y`, `order rejected op_code=…`, `order rate … exceeds cap …`, `daily loss … >= limit …`, `kill file present: …`, and under the owner `client broker: owner silent for …s` | read the reason against Ops §6.7. Sent **once** per halt, not once per bar |
 | `flatten_incomplete` | deployment | a FLATTEN halt's close did not fill; the process exited (code 4) **holding a position with nothing watching it** | the most serious alert there is. Close the position in the broker's front end, now |
 | `crashed` | both | an unhandled exception ended the process. Deployments add `error_type` and `where` (file:line); the owner adds `error_type` | read the console traceback; positions are left as they were, unmanaged |
-| `startup_refused` | both | a start was refused before trading. `gate=` says which: `preflight` (flags), `RestartGuard` (backoff, backfill cap, quota), `adopt_position` (cannot adopt the held lot, e.g. an exit rule is declared), `subscribe_trade` (owner exit 7), `reconcile` (owner exit 6: ledgers and venue disagree); also a non-flat `--fresh-start` | the message names the fix; Ops §5, §6.2, §6.9 |
-| `owner_frozen` | owner | a running reconcile disagreed; the owner places nothing more, and each deployment halts when it next submits | reconcile by hand (Ops §6.7, §6.9), then restart everything |
+| `startup_refused` | both | a start was refused before trading. `gate=` says which: `preflight` (flags), `RestartGuard` (backoff, backfill cap, quota), `adopt_position` (cannot adopt the held lot, e.g. an exit rule is declared), `subscribe_trade` (owner exit 7), `reconcile` (owner exit 6: its positions and the venue disagree), `positions` (owner exit 6: `owner_positions.json` unreadable or contradicting the ledgers); also a non-flat `--fresh-start` | the message names the fix; Ops §5, §6.2, §6.9 |
+| `owner_mismatch` | owner | a running reconcile disagreed: the owner's book and the venue differ. **The owner keeps trading** (until 2026-11-11 it froze as `owner_frozen`). Sent once per new set of numbers | find the missed fill, add it to the ledger and correct `owner_positions.json`; the owner applies it on its next pass (Ops §6.9) |
 | `owner_session_lost` | owner | the owner's venue calls kept failing through 4 re-logins: its session is dead, so **no deployment can place or hear an order** | restart the owner, then check the deployments |
 | `session_unverified` | both | the pre-open check failed and recovery failed: the token or feed is dead as the session opens. From the owner it means **no deployment can place an order** | restart the process (owner first if it is the owner) |
 | `no_credentials`, `bad_credentials` | deployment; owner `no_credentials` | no usable Shioaji key for this process | fix `config/secrets.toml` |
@@ -227,7 +227,9 @@ What each alert means and what to do. "Ops" links point into
 | `roll_exposure_resumed` | deployment | re-opening the position on the new contract after the roll |
 | `deployment_silent` | owner | no intents from a deployment for the timeout; its positions are still open and counted. Sent when the set of silent deployments changes; the console repeats it every 30 s |
 | `traffic_low` | owner | the daily data allowance is below the floor; the next start-up will be refused. Sent once until the headroom recovers |
-| `venue_unanswered` | owner | the venue did not answer the start-up reconcile; the owner started on the ledgers alone |
+| `venue_unanswered` | owner | the venue did not answer the start-up reconcile; the owner started on its seed alone |
+| `positions_corrected` | owner | a hand edit of `owner_positions.json` was applied: before -> after. Restart the corrected deployment with `--resume` if it was running |
+| `positions_correction_refused` | owner | a hand edit was refused, with the reason (a total that does not add up, a lot with no entry, bad JSON, or a fill booked since the file was written). The book is unchanged |
 | `telegram_disabled` | both | the `[telegram]` section is incomplete. Console only — Telegram is, by definition, not attached |
 
 ### 6.3 TRADE — position changes
@@ -260,7 +262,7 @@ news is never "act now". The resolved kinds are appended as
 | `relogin` | both | `relogin_failed`, `relogin_abandoned`. The routine twice-daily re-login stays INFO |
 | `session_relogin` | both | `session_relogin_failed` |
 | `roll_started` | deployment | `roll_deferred` |
-| `owner_agrees_again` | owner | `owner_frozen`. In practice always WARN; the owner stays frozen until restarted |
+| `owner_agrees_again` | owner | `owner_mismatch`. In practice always WARN |
 
 `session_down`, `deployment_silent`, `traffic_low` and `owner_session_lost`
 have no recovery alert. For `session_down`, `feed_recovered` is the evidence

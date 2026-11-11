@@ -230,6 +230,19 @@ class OrderBook:
         with self._lock:
             return self._slug_entry.get(slug, 0.0)
 
+    def holdings(self) -> Dict[Tuple[str, str], int]:
+        """Every deployment's non-zero lots, keyed `(slug, code)`."""
+        # Tech: a copy of the per-deployment, per-month nets, zeros dropped.
+        # Why:  what `owner_positions.json` records; a copy so the writer never
+        #       iterates a dict the venue's thread is changing.
+        with self._lock:
+            return {key: n for key, n in self._slug_code_net.items() if n}
+
+    def entries(self) -> Dict[str, float]:
+        """Every deployment's entry price, flat ones included."""
+        with self._lock:
+            return dict(self._slug_entry)
+
     def seed_slug_entry(self, slug: str, price: float) -> None:
         with self._lock:
             self._slug_entry[slug] = float(price)

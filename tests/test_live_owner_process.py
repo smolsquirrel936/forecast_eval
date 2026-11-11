@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from forecast_eval.events import MarketEvent, OrderEvent
+from forecast_eval.live.broker.base import HeldPosition as _Held
 from forecast_eval.live.broker.client import ClientBroker
 from forecast_eval.live.intents import JsonlStream, event_path
 from forecast_eval.live.owner import COVER, NEW, OrderBook
@@ -768,57 +769,250 @@ def test_start_up_has_no_grace(tmp_path):
     assert owner.reconcile() is False
 
 
-# ---- freezing --------------------------------------------------------------
+# ---- a disagreement does not stop trading (2026-11-11) ---------------------
 
-def test_a_frozen_owner_rejects_new_submits(tmp_path):
-    owner, api = _owner(tmp_path)
-    owner.freeze("account mirror 0 != venue 1")
-    day = ClientBroker(tmp_path, "day")
-    day.submit(OrderEvent(timestamp=TS, side="BUY", limit_price=100.0,
-                          intent="OPEN", quantity=1), current_price=100.0)
+def test_a_mismatch_is_recorded_per_month_and_cleared_on_agreement(tmp_path):
+    api = _FakeAPI(positions=[_Row(1, "Buy")])
+    owner, _ = _owner(tmp_path, api=api)
+    owner.seed_from({"day": 0, "night": 0})
+    assert owner.reconcile() is False
+    assert owner.mismatch == {"TXFI6": (0, 1)}
+    api.positions = []
+    assert owner.reconcile() is True
+    assert owner.mismatch is None
+
+
+def test_an_owner_whose_venue_disagrees_still_places_orders(tmp_path):
+    """2026-10-30: a fill the owner never heard froze it, and fullday's stop
+    close was rejected. The deployments' positions were never in dispute."""
+    owner, api = _owner(tmp_path, api=_FakeAPI(positions=[_Row(1, "Buy")]))
+    owner.seed_from({"day": 0, "night": 0})
+    assert owner.reconcile() is False
+    ClientBroker(tmp_path, "day").submit(
+        OrderEvent(timestamp=TS, side="BUY", limit_price=100.0, intent="OPEN",
+                   quantity=1), current_price=100.0)
     owner.poll()
-    assert api.placed == []
+    assert len(api.placed) == 1
     events = [e["kind"] for e in JsonlStream(event_path(tmp_path, "day"))._read_all()]
-    assert "rejected" in events
-    day.poll_fills(MarketEvent(timestamp=TS, price=100.0, volume=1,
-                               session="DAY"))
-    assert day.has_pending() is False, "the rejection reaches the deployment"
+    assert "rejected" not in events
 
 
-def test_a_frozen_owner_still_books_a_deal_and_tells_its_deployment(tmp_path):
-    """The point of freezing instead of exiting: the fill in flight lands."""
-    owner, api = _owner(tmp_path)
-    day = ClientBroker(tmp_path, "day")
-    day.submit(OrderEvent(timestamp=TS, side="BUY", limit_price=100.0,
-                          intent="OPEN", quantity=1), current_price=100.0)
-    owner.poll()
-    owner.freeze("account mirror 0 != venue 1")
-    _deal(owner, "NO1", side="Buy", qty=1)
-    owner.publish_positions()
-    (fill,) = day.poll_fills(MarketEvent(timestamp=TS, price=100.0, volume=1,
-                                         session="DAY"))
-    assert fill.quantity == 1
-    assert day.broker_position() == 1
+def test_the_owner_has_no_freeze_left():
+    assert not hasattr(OwnerProcess, "freeze")
 
 
-def test_a_frozen_owner_still_cancels(tmp_path):
-    """A cancel can only reduce what is working."""
-    owner, api = _owner(tmp_path)
-    day = ClientBroker(tmp_path, "day")
-    day.submit(OrderEvent(timestamp=TS, side="BUY", limit_price=100.0,
-                          intent="OPEN", quantity=1), current_price=100.0)
-    owner.poll()
-    owner.freeze("x")
-    day.cancel()
-    owner.poll()
-    assert len(api.cancelled) == 1
+# ---- owner_positions.json: the book on disk, corrected by hand --------------
+
+def _positions(tmp_path):
+    import json
+    return json.loads((tmp_path / "owner_positions.json").read_text(encoding="utf-8"))
 
 
-def test_the_first_freeze_reason_is_kept(tmp_path):
+def _hand_edit(tmp_path, deployments, total):
+    import json
+    (tmp_path / "owner_positions.json").write_text(json.dumps(
+        {"updated_at": "by hand", "total": total, "deployments": deployments}),
+        encoding="utf-8")
+
+
+def test_poll_saves_the_book_with_each_deployment_and_the_total(tmp_path):
     owner, _ = _owner(tmp_path)
-    owner.freeze("first")
-    owner.freeze("second")
-    assert owner.frozen == "first"
+    owner.seed_from({"day": {"TXFI6": _Held(-1, 47025.0)}, "night": 0})
+    owner.poll()
+    doc = _positions(tmp_path)
+    assert doc["total"] == {"TXFI6": -1}
+    assert doc["deployments"] == {
+        "day": {"lots": {"TXFI6": -1}, "entry": 47025.0},
+        "night": {"lots": {}, "entry": 0.0}}
+
+
+def test_a_booked_deal_reaches_the_file_on_the_next_poll(tmp_path):
+    owner, _ = _owner(tmp_path)
+    owner.poll()
+    assert _positions(tmp_path)["total"] == {}
+    ClientBroker(tmp_path, "night").submit(
+        OrderEvent(timestamp=TS, side="SELL", limit_price=100.0, intent="OPEN",
+                   quantity=1), current_price=100.0)
+    owner.poll()
+    _deal(owner, "NO1", side="Sell", price=100.0)
+    owner.poll()
+    doc = _positions(tmp_path)
+    assert doc["total"] == {"TXFI6": -1}
+    assert doc["deployments"]["night"] == {"lots": {"TXFI6": -1}, "entry": 100.0}
+
+
+def test_the_file_is_rewritten_only_when_the_book_moves(tmp_path):
+    owner, _ = _owner(tmp_path)
+    assert owner.save_positions() is True
+    assert owner.save_positions() is False
+    owner.poll()
+    assert owner.save_positions() is False
+
+
+def test_a_deleted_file_is_written_again(tmp_path):
+    owner, _ = _owner(tmp_path)
+    owner.save_positions()
+    (tmp_path / "owner_positions.json").unlink()
+    owner.poll()
+    assert (tmp_path / "owner_positions.json").exists()
+
+
+def test_a_hand_correction_is_applied_without_a_restart(tmp_path):
+    """The 2026-10-30 fix, live: night's close filled unheard, so the book says
+    night +1 while the venue says flat. Correct the file; the next pass applies
+    it, sizes the next Cover on it, and tells night its new position."""
+    api = _FakeAPI(positions=[_Row(1, "Buy")])
+    owner, _ = _owner(tmp_path, api=api)
+    owner.seed_from({"day": {"TXFI6": _Held(1, 100.0)},
+                     "night": {"TXFI6": _Held(1, 47263.0)}})
+    owner.poll()
+    assert owner.reconcile() is False
+    _hand_edit(tmp_path, {"day": {"lots": {"TXFI6": 1}, "entry": 100.0},
+                          "night": {"lots": {}, "entry": 0}},
+               total={"TXFI6": 1})
+    kind, message = owner.check_positions_file()
+    assert kind == "applied"
+    assert "night TXFI6 +1 @ 47263" in message
+    assert owner.book.net_for("night") == 0
+    assert owner.book.account_net == 1
+    assert owner.book.net_in("TXFI6") == 1
+    assert owner.reconcile() is True
+    owner.poll()
+    assert ClientBroker(tmp_path, "night").broker_position() == 0
+    assert owner.check_positions_file() is None, "applied once"
+
+
+def test_a_hand_correction_sizes_the_next_leg(tmp_path):
+    """Cover or New is chosen from the corrected total."""
+    owner, api = _owner(tmp_path)
+    owner.seed_from({"day": {"TXFI6": _Held(1, 100.0)}, "night": 0})
+    owner.poll()
+    _hand_edit(tmp_path, {"day": {"lots": {}, "entry": 0}, "night": {"lots": {}}},
+               total={})
+    assert owner.check_positions_file()[0] == "applied"
+    ClientBroker(tmp_path, "night").submit(
+        OrderEvent(timestamp=TS, side="SELL", limit_price=100.0, intent="OPEN",
+                   quantity=1), current_price=100.0)
+    owner.poll()
+    (placed, _oid), = api.placed
+    assert placed.octype == "New", "a Cover against the old +1 would clamp at flat"
+
+
+@pytest.mark.parametrize("deployments,total,reason", [
+    ({"day": {"lots": {"TXFI6": 1}, "entry": 100.0}}, {"TXFI6": 2},
+     "total TXFI6 is +2 but the deployments add up to +1"),
+    ({"day": {"lots": {"TXFI6": 1}, "entry": 0}}, {"TXFI6": 1},
+     "day holds {'TXFI6': 1} with no entry price"),
+    ({"day": {"lots": {"TXFI6": 1.0}, "entry": 100.0}}, {"TXFI6": 1},
+     "is not a whole number of lots"),
+    ({"hybrid": {"lots": {"TXFI6": 1}, "entry": 100.0}}, {"TXFI6": 1},
+     "this owner does not serve hybrid"),
+])
+def test_a_hand_correction_that_does_not_add_up_is_refused(tmp_path, deployments,
+                                                          total, reason):
+    owner, _ = _owner(tmp_path)
+    owner.poll()
+    _hand_edit(tmp_path, deployments, total)
+    kind, message = owner.check_positions_file()
+    assert kind == "refused"
+    assert reason in message
+    assert owner.book.holdings() == {}
+    assert owner.check_positions_file() is None, "refused once, not every pass"
+
+
+def test_a_torn_or_non_json_edit_is_refused(tmp_path):
+    owner, _ = _owner(tmp_path)
+    owner.poll()
+    (tmp_path / "owner_positions.json").write_text("{\"total\": ", encoding="utf-8")
+    kind, message = owner.check_positions_file()
+    assert kind == "refused" and "not valid JSON" in message
+
+
+def test_a_notepad_bom_is_accepted(tmp_path):
+    owner, _ = _owner(tmp_path)
+    owner.poll()
+    (tmp_path / "owner_positions.json").write_text(
+        '{"total": {"TXFI6": 1}, "deployments": '
+        '{"day": {"lots": {"TXFI6": 1}, "entry": 100.0}}}', encoding="utf-8-sig")
+    assert owner.check_positions_file()[0] == "applied"
+    assert owner.book.net_for("day") == 1
+
+
+def test_an_edit_waits_while_an_order_is_in_flight(tmp_path):
+    """A deal landing between reading the numbers and applying them would be
+    erased by the edit, so the edit waits until nothing can fill."""
+    owner, _ = _owner(tmp_path)
+    ClientBroker(tmp_path, "day").submit(
+        OrderEvent(timestamp=TS, side="BUY", limit_price=100.0, intent="OPEN",
+                   quantity=1), current_price=100.0)
+    owner.poll()
+    _hand_edit(tmp_path, {"night": {"lots": {"TXFI6": -1}, "entry": 100.0}},
+               total={"TXFI6": -1})
+    assert owner.check_positions_file()[0] == "waiting"
+    assert owner.check_positions_file() is None, "said once"
+    owner.poll()
+    assert _positions(tmp_path)["deployments"]["night"]["lots"] == {
+        "TXFI6": -1}, "the unread edit is not overwritten"
+    for leg in owner.book.in_flight():
+        owner.book.finish(leg)
+    assert owner.check_positions_file()[0] == "applied"
+    assert owner.book.net_for("night") == -1
+
+
+def test_an_edit_made_before_a_fill_landed_is_refused(tmp_path):
+    """The deal arrived after the person read the file: applying the edit would
+    erase that fill, so the file is rewritten with the current book instead."""
+    owner, _ = _owner(tmp_path)
+    ClientBroker(tmp_path, "day").submit(
+        OrderEvent(timestamp=TS, side="BUY", limit_price=100.0, intent="OPEN",
+                   quantity=1), current_price=100.0)
+    owner.poll()
+    _hand_edit(tmp_path, {"night": {"lots": {"TXFI6": -1}, "entry": 100.0}},
+               total={"TXFI6": -1})
+    _deal(owner, "NO1", side="Buy")
+    kind, message = owner.check_positions_file()
+    assert kind == "refused" and "make the correction again" in message
+    assert owner.book.net_for("night") == 0
+    owner.poll()
+    assert _positions(tmp_path)["deployments"]["day"]["lots"] == {"TXFI6": 1}
+
+
+def test_the_owners_own_write_is_not_mistaken_for_an_edit(tmp_path):
+    owner, _ = _owner(tmp_path)
+    owner.seed_from({"day": {"TXFI6": _Held(1, 100.0)}, "night": 0})
+    owner.poll()
+    assert owner.check_positions_file() is None
+
+
+def test_seed_differences_compares_lots_not_entries(tmp_path):
+    owner, _ = _owner(tmp_path)
+    same = owner.seed_differences({"day": {"TXFI6": _Held(1, 100.0)}},
+                                  {"day": {"TXFI6": _Held(1, 101.0)}, "night": {}})
+    assert same == []
+    assert owner.seed_differences({"day": {"TXFI6": _Held(1, 100.0)}},
+                                  {"day": {}}) == ["day TXFI6: file +1, ledgers +0"]
+
+
+def test_the_file_round_trips_through_render_and_parse():
+    from forecast_eval.live import owner_positions
+    holdings = {("day", "TXFK6"): -1, ("night", "TXFJ6"): 1, ("night", "TXFK6"): -1}
+    entries = {"day": 47025.0, "night": 42571.0}
+    doc = owner_positions.render(holdings, entries, ["day", "night", "hybrid"])
+    assert doc["total"] == {"TXFJ6": 1, "TXFK6": -2}
+    assert doc["deployments"]["hybrid"] == {"lots": {}, "entry": 0.0}
+    assert owner_positions.parse(doc, ["day", "night", "hybrid"]) == (
+        holdings, entries)
+
+
+def test_seed_from_is_unchanged_by_the_split(tmp_path):
+    owner, _ = _owner(tmp_path)
+    owner.seed_from({"day": {"TXFI6": _Held(1, 100.0), "TXFJ6": _Held(-1, 90.0)},
+                     "night": 2})
+    assert owner.book.net_for("day") == 0
+    assert owner.book.held_in("day", "TXFJ6") == -1
+    assert owner.book.entry_for("day") == 0.0, "a deployment netting flat"
+    assert owner.book.net_for("night") == 2
+    assert owner.book.account_net == 2
 
 
 # ---- restarts do not replay the wire ---------------------------------------
@@ -1216,16 +1410,6 @@ def test_a_settle_that_disagrees_with_the_book_is_an_anomaly(tmp_path):
     assert any("settled +0 in TXFI6" in a for a in owner.anomalies)
     events = JsonlStream(event_path(tmp_path, "day")).read_new()
     assert any(e["kind"] == "settled" and e["signed_qty"] == 0 for e in events)
-
-
-def test_a_frozen_owner_still_settles(tmp_path):
-    owner, _ = _owner(tmp_path, wall_clock=(wall := _Wall()))
-    owner.seed_from({"day": {"TXFI6": 1}, "night": 0})
-    wall.expire()
-    owner.freeze("test")
-    _settle(tmp_path, "day", 1)
-    owner.poll()
-    assert owner.book.net_for("day") == 0
 
 
 def test_the_re_open_after_a_settle_is_a_new_lot_on_the_new_month(tmp_path):

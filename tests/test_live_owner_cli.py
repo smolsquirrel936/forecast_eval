@@ -110,26 +110,34 @@ class _FakeOwner:
 
     deployment_timeout = 180.0
 
-    def __init__(self, reconcile=(True,), stale=(), note=None):
+    def __init__(self, reconcile=(True,), stale=(), note=None, mismatches=None,
+                 corrections=()):
         self.polls = 0
         self.reconciles = 0
         self._reconcile = list(reconcile)
         self._stale = list(stale)
+        self._mismatches = list(mismatches or [])
+        self._corrections = list(corrections)
         self.anomalies = ["mirror 1 != venue 2"]
-        self.frozen = None
+        self.mismatch = None
         self.reconcile_note = note
 
-    def freeze(self, reason):
-        if self.frozen is None:
-            self.frozen = reason
+    def check_positions_file(self):
+        return self._corrections.pop(0) if self._corrections else None
 
     def poll(self):
         self.polls += 1
 
     def reconcile(self):
         self.reconciles += 1
-        return self._reconcile[min(self.reconciles - 1,
-                                   len(self._reconcile) - 1)]
+        agreed = self._reconcile[min(self.reconciles - 1,
+                                     len(self._reconcile) - 1)]
+        if agreed is False:
+            self.mismatch = (self._mismatches.pop(0) if self._mismatches
+                             else {"TXFK6": (1, 2)})
+        elif agreed is True:
+            self.mismatch = None
+        return agreed
 
     def stale_deployments(self):
         return self._stale
@@ -150,14 +158,16 @@ def test_serve_polls_before_it_reconciles():
     assert owner.reconciles == 1
 
 
-def test_a_failed_reconciliation_freezes_the_owner(capsys):
-    """The account net sizes every subsequent leg; placing on it multiplies a desync."""
+def test_a_failed_reconciliation_is_reported_and_the_owner_keeps_trading(capsys):
+    """2026-10-30: a freeze turned one missed fill into every deployment's
+    rejected order. The owner's own record sizes each Cover, and a person
+    corrects it in owner_positions.json while it runs."""
     owner = _FakeOwner(reconcile=(False,))
-    assert _serve(owner, _Args()) == 6, "a frozen owner still exits 6 when stopped"
-    assert owner.frozen == "mirror 1 != venue 2"
+    assert _serve(owner, _Args()) == 0
     err = capsys.readouterr().err
-    assert "RECONCILIATION FAILED — OWNER FROZEN" in err
+    assert "RECONCILIATION FAILED — STILL TRADING" in err
     assert "mirror 1 != venue 2" in err
+    assert "owner_positions.json" in err
 
 
 def _serve_passes(owner, passes, **kw):
@@ -174,28 +184,26 @@ def _serve_passes(owner, passes, **kw):
         _serve(owner, _Args(once=False, **kw))
 
 
-def test_a_frozen_owner_keeps_serving():
+def test_an_owner_whose_venue_disagrees_keeps_serving():
     """2026-10-06: the owner RETURNED on a failed reconcile, and the logout cut
-    the deal stream while the fill it was disputing was still on its way.
-    Frozen, it keeps polling — booking deals and publishing positions."""
+    the deal stream while the fill it was disputing was still on its way."""
     owner = _FakeOwner(reconcile=(False, False, False))
     _serve_passes(owner, 3)
     assert owner.polls == 4, "the loop went on past the failure"
     assert owner.reconciles == 3
 
 
-def test_the_freeze_banner_prints_once_and_keeps_the_first_reason(capsys):
-    owner = _FakeOwner(reconcile=(False, False))
-    _serve_passes(owner, 2)
-    assert capsys.readouterr().err.count("OWNER FROZEN") == 1
-    assert owner.frozen == "mirror 1 != venue 2"
+def test_the_banner_prints_once_per_new_disagreement(capsys):
+    owner = _FakeOwner(reconcile=(False, False, False),
+                       mismatches=[{"TXFK6": (1, 2)}, {"TXFK6": (1, 2)},
+                                   {"TXFK6": (1, 3)}])
+    _serve_passes(owner, 3)
+    assert capsys.readouterr().err.count("STILL TRADING") == 2
 
 
-def test_agreement_after_a_freeze_is_reported_and_does_not_unfreeze(capsys):
-    """Like SafetyRails: a dispute is settled by a person and a restart."""
+def test_agreement_after_a_disagreement_is_reported_once(capsys):
     owner = _FakeOwner(reconcile=(False, True, True))
     _serve_passes(owner, 3)
-    assert owner.frozen is not None
     assert capsys.readouterr().err.count("agree again") == 1
 
 
@@ -482,14 +490,36 @@ def _serve_n(owner, n, api=None, alerter=None, **kw):
         _serve(owner, _Args(once=False, **kw), api, None, alerter)
 
 
-def test_a_freeze_alerts_once_as_fatal():
-    """Until 2026-10-12 a freeze reached only the owner's console; the phone
-    heard about it two minutes later as three `owner silent` halts."""
+def test_a_disagreement_alerts_once_as_fatal_and_recovers():
     a, seen = _collecting_alerter()
     _serve_n(_FakeOwner(reconcile=(False, False, True, True)), 4, alerter=a)
     assert [(x.severity.value, x.kind) for x in seen] == [
-        ("fatal", "owner_frozen"), ("warn", "owner_agrees_again")]
+        ("fatal", "owner_mismatch"), ("warn", "owner_agrees_again")]
     assert "mirror 1 != venue 2" in seen[0].message
+    assert "still trading" in seen[0].message
+
+
+def test_a_pending_reconcile_is_not_called_agreement():
+    """A difference orders in flight explain still returns True; it must not
+    send the recovery while the numbers still differ."""
+    a, seen = _collecting_alerter()
+    owner = _FakeOwner(reconcile=(False, True), note="explained by orders in flight")
+    _serve_n(owner, 2, alerter=a)
+    assert [x.kind for x in seen] == ["owner_mismatch"]
+
+
+@pytest.mark.parametrize("outcome,expected", [
+    (("applied", "hand correction applied: a -> b"), [("warn", "positions_corrected")]),
+    (("refused", "hand correction refused: x"),
+     [("warn", "positions_correction_refused")]),
+    (("waiting", "applied once no order is in flight"), []),
+])
+def test_a_hand_correction_is_alerted(outcome, expected, capsys):
+    a, seen = _collecting_alerter()
+    assert _serve(_FakeOwner(corrections=[outcome]), _Args(), None, None, a) == 0
+    assert [(x.severity.value, x.kind) for x in seen] == expected
+    captured = capsys.readouterr()
+    assert outcome[1] in captured.out + captured.err
 
 
 def test_repeating_warnings_alert_on_a_change_only():
@@ -746,3 +776,66 @@ def test_a_restart_between_roll_and_expiry_needs_no_dated_contract(tmp_path):
     assert owner.book.net_in("TXFJ6") == 0
     assert owner.reconcile() is True
     assert owner.anomalies == []
+
+# ---- the start-up seed: owner_positions.json, checked against the ledgers ----
+#
+# 2026-11-11: the owner saves its book to owner_positions.json and a person
+# corrects that file by hand. At start-up it seeds from the file, which must
+# still agree with the ledgers `--resume` replays.
+
+def _file_owner(tmp_path, slugs=("day", "night")):
+    # Ledger rows written by `_ledger` carry no month, so they seed on the
+    # owner's start-up month: TXFK6 here, live on 2026-11-11.
+    from forecast_eval.live.owner_process import OwnerProcess
+
+    class _November:
+        code, target_code = "TXFK6", "TXFK6"
+
+    return OwnerProcess(None, _November(), directory=tmp_path,
+                        slugs=list(slugs), account="ACC",
+                        wall_clock=lambda: datetime(2026, 11, 11, 14, 0))
+
+
+def _positions_file(tmp_path, deployments, total):
+    import json
+    (tmp_path / "owner_positions.json").write_text(json.dumps(
+        {"updated_at": "x", "total": total, "deployments": deployments}),
+        encoding="utf-8")
+
+
+def test_with_no_positions_file_the_ledgers_seed_the_owner(tmp_path):
+    from forecast_eval.live.owner_cli import choose_seed
+    _ledger(tmp_path, "day", [("SELL", 1)])
+    seeds, source = choose_seed(_file_owner(tmp_path), tmp_path, ["day", "night"])
+    assert source == "the ledgers"
+    assert _signed(seeds) == {"day": -1, "night": 0}
+
+
+def test_a_positions_file_that_agrees_with_the_ledgers_seeds_the_owner(tmp_path):
+    from forecast_eval.live.owner_cli import choose_seed
+    _ledger(tmp_path, "day", [("SELL", 1)])
+    _positions_file(tmp_path, {"day": {"lots": {"TXFK6": -1}, "entry": 46010.0},
+                               "night": {"lots": {}, "entry": 0}},
+                    total={"TXFK6": -1})
+    owner = _file_owner(tmp_path)
+    seeds, source = choose_seed(owner, tmp_path, ["day", "night"])
+    assert source == "owner_positions.json"
+    assert seeds["day"]["TXFK6"].avg_price == 46010.0, "the file's entry wins"
+
+
+def test_a_positions_file_the_ledgers_contradict_refuses_the_start(tmp_path):
+    """A correction made in one place only: the file was fixed and the ledger
+    was not, so `--resume` would replay a different position."""
+    from forecast_eval.live.owner_cli import SeedRefused, choose_seed
+    _ledger(tmp_path, "night", [("BUY", 1)])
+    _positions_file(tmp_path, {"night": {"lots": {}, "entry": 0}}, total={})
+    owner = _file_owner(tmp_path)
+    with pytest.raises(SeedRefused, match=r"night TXFK6: file \+0, ledgers \+1"):
+        choose_seed(owner, tmp_path, ["day", "night"])
+
+
+def test_an_unreadable_positions_file_refuses_the_start(tmp_path):
+    from forecast_eval.live.owner_cli import SeedRefused, choose_seed
+    (tmp_path / "owner_positions.json").write_text("{", encoding="utf-8")
+    with pytest.raises(SeedRefused, match="delete it to seed from the ledgers"):
+        choose_seed(_file_owner(tmp_path), tmp_path, ["day", "night"])

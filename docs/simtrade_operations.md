@@ -55,7 +55,8 @@ production account.
 | `live_<slug>_<timestamp>/` | one run's artifacts: `orders`, `fills`, `trades`, `signals`, `forecasts`, `ticks`, `params.json`, `session.jsonl` | review |
 | `fatal.jsonl` | every fatal alert, all deployments in one file, **with no deployment field**; the owner's alerts go to `owner_session.jsonl` instead | review |
 | `telegram_level.json` | the Telegram alert level chosen with `/settings`, shared by every process (§9); absent = the `[telegram]` default | every alert |
-| `owner_session.jsonl` | the owner's trail, appended across runs: placements with their `ordno` and slug, deals, order events, pending/failed reconciles, freezes, anomalies (since 2026-10-07) | review |
+| `owner_positions.json` | the owner's own record of who holds what: each deployment's lots by month and entry, plus the total every Cover is sized against ([owner_positions](live/owner_positions.md)). Rewritten when the book moves; **edit it by hand to correct a missed fill while the owner runs** (§6.9). Since 2026-11-11 | owner start-up seed, the running owner |
+| `owner_session.jsonl` | the owner's trail, appended across runs: placements with their `ordno` and slug, deals, order events, pending/failed reconciles, hand corrections, anomalies (since 2026-10-07; freezes until 2026-11-11) | review |
 
 **Never move, clean or rename `outputs/` while a soak continues.** `--resume`
 and the owner's start-up reconciliation both depend on the files above.
@@ -186,10 +187,13 @@ while `position` is non-zero.
 Every restart writes a **new** `live_<slug>_<timestamp>/` folder, so one soak's
 artifacts are split across folders; the soak epoch is what ties them together.
 
-**At start-up the owner seeds** each deployment's position from its
-`fills_<slug>.csv`, summed across **all** soak epochs. It then checks the total
-against the venue and **refuses (exit 6) on a disagreement**. Where the venue
-won't answer, it warns and starts on the ledgers alone.
+**At start-up the owner seeds** each deployment's position from
+`owner_positions.json`, and checks it against each `fills_<slug>.csv`, summed
+across **all** soak epochs; it **refuses (exit 6) when they differ**. With no
+file (the first start after 2026-11-11) the ledgers seed it. It then checks the
+total against the venue and **refuses (exit 6) on a disagreement**. Where the
+venue won't answer, it warns and starts on the seed alone. Either refusal sends
+`startup_refused` to Telegram.
 
 **Neither side replays the wire** (since 2026-10-07). A restarted owner skips
 the intents already in `intents_<slug>.jsonl` and prints how many. A restarted
@@ -233,7 +237,8 @@ Pick one.
 > owner's start-up reconciliation
 > ([owner_cli.py](../live/owner_cli.py) `main`, after `seed_positions`) should refuse
 > with exit 6. `--fresh-start` on the deployments doesn't change the owner's
-> seed, because it counts every epoch. `strategy/README.md`'s "flatten, then
+> seed, because it counts every epoch. `owner_positions.json` would still
+> claim the lots too, so correct it with the ledgers. `strategy/README.md`'s "flatten, then
 > `--fresh-start`" predates the owner for this purpose. Until this path has been
 > run, expect to reconcile the ledgers by hand after a flatten.
 
@@ -327,13 +332,14 @@ print `HALTED: <reason>`:
 | 3 | deployment | RestartGuard refused: backoff, 10 backfills per trading day, or quota under 50 MB | wait; the cap resets at 08:00 |
 | 4 | deployment | **a FLATTEN halt's close did not fill**: a position is open with nothing watching it | the most serious state; act at once |
 | 5 | either | refused before the first bar: flags, a non-flat `--fresh-start`, an unadoptable position | read the message |
-| 6 | owner | ledgers and venue disagreed: refused at start-up, or a running owner **froze** and was then stopped | reconcile by hand (§6.2, §6.9) |
+| 6 | owner | refused at start-up: `owner_positions.json` is unreadable or disagrees with the ledgers, or the owner's positions disagree with the venue. (Until 2026-11-11 also a running owner that **froze** and was stopped) | the message names the lots; reconcile by hand (§6.2, §6.9) |
 | 7 | owner | `subscribe_trade` refused, so it cannot hear fills | don't start the deployments; retry the owner |
 
-A **running** owner whose 30 s reconciliation fails **freezes**
-(`RECONCILIATION FAILED — OWNER FROZEN`). It places nothing and rejects every
-submit, so each deployment halts when it next tries to trade. It keeps booking
-deals and publishing positions until you Ctrl-C it. A difference that orders
+A **running** owner whose 30 s reconciliation fails **keeps trading** and
+alerts (`RECONCILIATION FAILED — STILL TRADING`, FATAL `owner_mismatch`, once
+per new set of numbers). Correct it while it runs (§6.9). Until 2026-11-11 it
+froze instead: it placed nothing and rejected every submit, so each deployment
+halted when it next tried to trade. A difference that orders
 in flight explain is not a failure for up to 120 s; it prints
 `reconcile pending: …`.
 
@@ -390,29 +396,46 @@ nvidia-smi --query-gpu=memory.used,memory.free --format=csv
 The instance name carries the PID. Ignore `dwm`: its counter includes other
 processes' shared surfaces and can read above the card's total.
 
-### 6.9 A fill the ledgers never got (owner refuses with exit 6)
+### 6.9 A fill the book never got (owner alerts `owner_mismatch`)
 
-The 2026-10-06 shape: an order filled at the venue, but the fill never reached
-its deployment's `fills_<slug>.csv`. The start-up then refuses with
-`account mirror N != venue M`.
+The 2026-10-06 and 2026-10-30 shape: an order filled at the venue, but the
+owner never booked the deal. Its book and the deployment's `fills_<slug>.csv`
+both miss the fill, and the reconcile reports `account mirror N != venue M`.
+**Since 2026-11-11 the owner keeps trading** and sends FATAL `owner_mismatch`;
+nothing else needs to stop.
 
-1. **Stop everything** (§4). Run
-   `flatten --dry-run --show-orders --out-parent outputs` (read-only). It lists
-   this session's orders with `ordno`, side, price and `dealt`, plus the
-   account's position.
-2. **Find whose order it was.** On code from 2026-10-07 on, read `owner_placed`
-   in `owner_session.jsonl` (it carries `ordno` and `slug`). Before that, the
-   only record is the deployment whose `intents_<slug>.jsonl` holds a matching
-   submit.
+1. **Find the order** in `owner_session.jsonl`: the anomaly names its `ordno`
+   (`deal for an unknown order: ordno=…`, or an orphan's fill with the row to
+   add), and `owner_placed` for that `ordno` gives the slug, side and price.
+   `flatten --dry-run --show-orders --out-parent outputs` (read-only) lists the
+   venue's orders with `dealt`, but it logs in as one more session: with the
+   owner and four deployments already on the credential that passes the cap of
+   5 (§2.8b), so run it only with one of them stopped.
+2. **Decide the fill price.** The venue's price if you have it, else the
+   order's limit, as on 2026-10-30.
 3. **Add the row by hand** to that deployment's `fills_<slug>.csv`, with that
-   deployment's current `soak_id`
-   (`timestamp,side,fill_price,quantity,fee,soak_id`; fee = price × 0.0002 ×
-   qty). Keep a copy of the file first.
-4. Restart as in §5 with `--resume`. The owner's seed now matches the venue,
-   and the deployment adopts the lot from its ledger.
+   deployment's current `soak_id` and month
+   (`timestamp,side,fill_price,quantity,fee,soak_id,contract`; fee = price ×
+   0.0002 × qty). Keep a copy of the file first.
+4. **Correct `owner_positions.json`** in the same way: that deployment's
+   `lots` (and its `entry` if it is still holding) **and** the `total`, which
+   must equal the sum of the lots. Save it. Within a second the owner prints
+   and sends `positions_corrected: <before> -> <after>`, and the next reconcile
+   sends `owner_agrees_again`. A `positions_correction_refused` says why
+   (a total that does not add up, a held lot with no entry, bad JSON) and
+   changes nothing; fix the file and save again. If an order is in flight it
+   waits, and says so.
+5. **Restart that one deployment** with `--resume` if it is still running: its
+   own position no longer matches what the owner now says, so it halts on its
+   next bar (`position mirror X != venue Y`). On 2026-10-30 it had already
+   halted. The others never stop.
 
-Or flatten instead (§6.2) and leave the ledgers alone. Expect §6.2's known
-gap: the ledgers still claim lots the venue no longer holds.
+With the owner stopped, do steps 3 and 4 and start as in §5. The owner refuses
+(exit 6) if `owner_positions.json` and the ledgers still disagree, naming the
+lots, so a correction made in only one of them is caught before any order.
+
+Or flatten instead (§6.2) and correct both files to match. Expect §6.2's known
+gap.
 
 ### 6.10 A paper candidate beside the live deployments
 
@@ -639,8 +662,8 @@ off for one process.
 
 | Level | From the deployments | From the owner |
 |---|---|---|
-| FATAL | any rails halt, `flatten_incomplete`, a refused start, `crashed`, no credentials, `session_unverified`, an unsettled roll | `owner_frozen`, a refused start (exit 6 or 7), `crashed`, no credentials, `session_unverified` |
-| WARN | `feed_missed` / `feed_unreachable`, `session_down`, `relogin_failed` / `relogin_abandoned`, `session_relogin_failed`, `account_changed`, `contract_rolled`, roll trouble | `deployment_silent`, `traffic_low`, `venue_unanswered`, `relogin_failed` / `relogin_abandoned` |
+| FATAL | any rails halt, `flatten_incomplete`, a refused start, `crashed`, no credentials, `session_unverified`, an unsettled roll | `owner_mismatch`, a refused start (exit 6 or 7), `crashed`, no credentials, `session_unverified` |
+| WARN | `feed_missed` / `feed_unreachable`, `session_down`, `relogin_failed` / `relogin_abandoned`, `session_relogin_failed`, `account_changed`, `contract_rolled`, roll trouble | `deployment_silent`, `traffic_low`, `venue_unanswered`, `relogin_failed` / `relogin_abandoned`, `positions_corrected` / `positions_correction_refused` |
 | TRADE | `position_opened`, `position_closed` with this trade's PnL | |
 | INFO | `resumed`, `relogin`, `session_relogin`, `roll_started` | `relogin` |
 | recovery | `feed_recovered`; `relogin`, `session_relogin`, `roll_started` after a failure | `owner_agrees_again`; `relogin`, `session_relogin` after a failure |
