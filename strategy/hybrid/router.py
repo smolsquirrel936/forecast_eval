@@ -8,6 +8,7 @@ to the half whose session it is (``environment.classify_session``):
     half's of ``forecast.timestamp``'s session;
   * ``RoutedTrader``    — ``on_signal`` / ``submit_exit`` by ``market.session``;
     ``on_fill`` to **both**, so the halves always agree on the one position;
+    a live roll's re-open restores the original entry in both (2026-11-11);
   * ``RoutedExitRule``  — by ``market.session``; a half with no rule never exits.
 
 The forecaster's router is in ``forecaster.py``, beside the construction site
@@ -82,6 +83,9 @@ class RoutedTrader:
     #       the one resting order (SPEC §4.4) exactly as a single Trader would.
     def __init__(self, day: Any, night: Any):
         self.halves: Dict[str, Any] = {"DAY": day, "NIGHT": night}
+        self._rolling: bool = False         # inside rolling(): a roll leg
+        self._roll_reopen: bool = False     # the resting OPEN is a roll's re-open
+        self._closed_entry = None           # (side, price, bar_idx, ts) of the last flatten
 
     @property
     def position(self) -> int:
@@ -129,26 +133,66 @@ class RoutedTrader:
         #       filters entries must see the roll's re-open marked as one, or a
         #       filter (e.g. a time-of-day open block) refuses the re-open and
         #       the roll leaves the account flat.
+        # Tech: also mark the router itself as inside a roll leg.
+        # Why:  the roll's re-open is submitted here (on_signal below), and the
+        #       router, not a half, carries the entry across the roll (on_fill).
         with ExitStack() as stack:
             for half in self.halves.values():
                 hook = getattr(half, "rolling", None)
                 if hook is not None:
                     stack.enter_context(hook())
-            yield
+            self._rolling = True
+            try:
+                yield
+            finally:
+                self._rolling = False
 
     def on_signal(
         self, direction: Direction, market: MarketEvent, *, strength: float = 1.0
     ) -> Optional[OrderEvent]:
-        return self.halves[market.session].on_signal(direction, market, strength=strength)
+        # Tech: route the decision; then mark a resting OPEN placed inside
+        #       rolling() as the roll's re-open.
+        # Why:  every signal cancels the one resting order first (§4.4), so any
+        #       earlier mark is void; the re-open's fill arrives later, through
+        #       the run loop and outside rolling(), so on_fill needs the mark.
+        self._roll_reopen = False
+        order = self.halves[market.session].on_signal(direction, market, strength=strength)
+        self._roll_reopen = (self._rolling and order is not None
+                             and order.intent == "OPEN")
+        return order
 
     def submit_exit(self, market: MarketEvent) -> Optional[OrderEvent]:
+        # Tech: an exit on a held position cancels any roll mark.
+        # Why:  submit_exit cancels the resting order only when there is a
+        #       position to close; when flat it does nothing, so neither do we.
+        if self.position != 0:
+            self._roll_reopen = False
         return self.halves[market.session].submit_exit(market)
 
     def on_fill(self, side: str, quantity: int, **kw: Any) -> None:
-        # Tech: fold the fill into both halves' position mirrors.
-        # Why:  see the class comment — one position, two mirrors kept in lockstep.
+        # Tech: fold the fill into both halves' position mirrors; remember the
+        #       entry a flatten closed, and when a roll's re-open fills on that
+        #       side, write the closed entry (price, bar, time) back to both.
+        # Why:  see the class comment — one position, two mirrors kept in
+        #       lockstep. The carry lives here, not in a half: only the half
+        #       that placed the re-open could tell it was a roll's, and carrying
+        #       in one mirror would split them. The backtest's spliced tape never
+        #       closes a position at a roll, so its stops and trail keep the
+        #       original entry; this makes live do the same. Used once.
+        prev = self.position
+        before = (self.entry_price, self.entry_bar_idx, self.entry_timestamp)
         for half in self.halves.values():
             half.on_fill(side, quantity, **kw)
+        new = self.position
+        if prev != 0 and new == 0:
+            self._closed_entry = (1 if prev > 0 else -1, *before)
+        elif prev == 0 and new != 0:
+            carried = self._closed_entry
+            if (self._roll_reopen and carried is not None
+                    and carried[0] == (1 if new > 0 else -1)):
+                _side, self.entry_price, self.entry_bar_idx, self.entry_timestamp = carried
+            self._roll_reopen = False
+            self._closed_entry = None
 
     def position_state(self) -> Optional[PositionState]:
         # Tech: the open position's snapshot, from the day half.
