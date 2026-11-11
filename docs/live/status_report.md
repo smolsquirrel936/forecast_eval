@@ -32,6 +32,7 @@ snapshot by nature.
 | Transactions (§6) | every folder's `orders.csv`, with the newest folder's `fills.csv` and `trades.csv` (`collect_transactions`) |
 | Heartbeat, failures | `live_restart_<slug>.json` |
 | Owner's position view | `events_<slug>.jsonl` |
+| Position "now" | the fill ledger `fills_<slug>.csv`, net of every row (what the owner seeds from); the last bar's position when there is no ledger |
 | Successful logins, SDK errors | `shioaji.log` (“Stored new token” per PID, UTC converted to local time) |
 | VRAM / RAM per process | Windows `GPU Process Memory` counters + `Get-Process` (nvidia-smi shows N/A per process on WDDM) |
 | Knobs missing from `params.json` (`long_only`, a routed package's `day_`/`night_` band and gate) | the package's `PARAMS` literal, parsed with `ast` |
@@ -76,6 +77,12 @@ appears in no file as such.
   arrived after the next order's bar.
 - **The open position is the fills' FIFO remainder.** `trades.csv` holds only
   closed round trips.
+- **"Now" is the fill ledger, and a disagreement with the last bar is a WARN**
+  (since 2026-11-11). A flatten run with the deployments stopped (§6.2 of the
+  runbook) or a row added by hand (§6.9) reaches `fills_<slug>.csv` and no bar,
+  so the last bar would still show the lot. The finding names both numbers;
+  section 6's open lots and P&L still come from the newest run folder, which
+  does not have that fill. First seen after the 2026-11-11 flatten.
 - **Unrealised P&L is the open lot at the newest bar's price, before fees**
   (since 2026-11-05). The entry fee is already in "Fees on all fills" and the
   exit fee is not paid until the lot closes. The row names the price and bar
