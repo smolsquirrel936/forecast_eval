@@ -5,12 +5,19 @@ the router sees a roll's re-open AND its fill, and writing the carried entry to
 both halves keeps their mirrors in lockstep. The roll's close and re-open are
 the calls `live/runtime.py` makes inside `rolling()`; the re-open's fill
 arrives later, outside it.
+
+Most cases build the router from default half-Traders, so they test the carry
+itself on any branch; the last ones use the packaged trader at the real roll
+instant (12:45, DAY session), whatever its tuned entry filters are.
 """
 import pandas as pd
 
 from forecast_eval.events import MarketEvent
 from forecast_eval.execution import Execution
 from forecast_eval.strategy.hybrid import wiring
+from forecast_eval.strategy.hybrid.day_half.trader import Trader as DayHalfTrader
+from forecast_eval.strategy.hybrid.night_half.trader import Trader as NightHalfTrader
+from forecast_eval.strategy.hybrid.router import RoutedTrader
 
 T0 = pd.Timestamp("2026-09-10 09:00:00")
 T_ROLL = pd.Timestamp("2026-09-16 12:45:00")       # a DAY-session instant
@@ -22,6 +29,13 @@ def _market(price, ts=T_ROLL, session="DAY"):
 
 
 def _trader():
+    # default halves over one Execution: no entry filters on either branch
+    ex = Execution(fee_rate=0.0)
+    return RoutedTrader(DayHalfTrader(ex, aggression_ticks=0),
+                        NightHalfTrader(ex, aggression_ticks=0))
+
+
+def _packaged_trader():
     return wiring.make_strategy(warmup_bars=0)["make_trader"](Execution(fee_rate=0.0))
 
 
@@ -107,6 +121,18 @@ def test_the_carry_is_used_once():
     tr.on_signal("BUY", _market(17700.0), strength=1.0)
     tr.on_fill("BUY", 1, fill_price=17710.0, bar_idx=700, timestamp=T_ROLL)
     assert set(_entries(tr).values()) == {(17710.0, 700, T_ROLL)}
+
+
+def test_the_packaged_trader_carries_the_live_roll():
+    # the deployed trader at hybrid's real roll instant (12:45, DAY session):
+    # its own entry filters must let the roll's re-open through, and the
+    # entry must come back in both halves
+    tr = _packaged_trader()
+    _long_then_rolled_close(tr)
+    with tr.rolling():
+        assert tr.on_signal("BUY", _market(17640.0), strength=1.0) is not None
+    tr.on_fill("BUY", 1, fill_price=17650.0, bar_idx=500, timestamp=T_ROLL)
+    assert set(_entries(tr).values()) == {(17000.0, 10, T0)}
 
 
 def test_the_position_trail_stays_armed_across_the_roll():
