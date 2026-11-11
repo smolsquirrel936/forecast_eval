@@ -9,7 +9,15 @@ PER-SESSION COPY (STRATEGY_SPLIT_PLAN S1). Verbatim copy of
 ``tests/test_strategy_isolation.py`` pins it), with only the relative-import depth
 changed. It is this package's to edit; the shared original is frozen and
 hash-guarded by ``tests/test_strategy_isolation.py``. Diverge freely here.
+
+DIVERGED (2026-11-11): the Trader defines ``rolling()``, the optional hook
+``live/runtime.py`` enters around every call it makes on a roll's behalf, and a
+roll's re-open restores the closed position's entry (price, bar, time) instead
+of stamping a fresh one — the carry ``strategy/fullday/trader.py`` added for
+the same reason. The backtest never enters the hook (its spliced tape has no
+rolls), so every recorded run is unchanged.
 """
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Literal, Optional
 
@@ -53,6 +61,25 @@ class Trader:
         self.entry_price: float = 0.0
         self.entry_bar_idx: int = -1
         self.entry_timestamp: Optional[datetime] = None
+        self._rolling: bool = False         # inside rolling(): a roll leg
+        self._roll_reopen: bool = False     # the resting OPEN is a roll's re-open
+        self._closed_entry = None           # (side, price, bar_idx, ts) of the last flatten
+
+    # ---- roll legs ---------------------------------------------------------
+
+    @contextmanager
+    def rolling(self):
+        # Tech: mark every call made inside this context as a roll leg; the
+        #       flag is cleared on exit, even if the call raises.
+        # Why:  `live/runtime.py` (`_trader_roll_leg`) enters this around the
+        #       roll's close, its settlement fill and both re-opens; on_signal
+        #       reads the flag to mark the re-open, whose fill arrives later,
+        #       outside the context (see on_fill).
+        self._rolling = True
+        try:
+            yield
+        finally:
+            self._rolling = False
 
     # ---- confidence-scaled placement helpers -----------------------------
 
@@ -90,6 +117,7 @@ class Trader:
         #       first (even for HOLD) guarantees a stale forecast's order can never
         #       outlive the forecast that produced it.
         self.execution.cancel()
+        self._roll_reopen = False           # the cancel took any roll re-open with it
 
         # Tech: HOLD means "do nothing further" after the cancel above.
         # Why:  HOLD is a real decision (stand aside), not a no-op — its cancel is
@@ -143,6 +171,11 @@ class Trader:
         #       (§4.5); returning the order lets the run loop log it.
         if order is not None:
             self.execution.submit(order, current_price=cur)
+            # Tech: remember that this resting OPEN is a roll's re-open.
+            # Why:  its fill arrives later, through LiveLoop and outside
+            #       rolling(); on_fill needs the mark to carry the original
+            #       entry across the roll (see on_fill).
+            self._roll_reopen = self._rolling and order.intent == "OPEN"
         return order
 
     # ---- exit-driven / forced closes -------------------------------------
@@ -164,6 +197,7 @@ class Trader:
         #       a forced close; the close is offset by aggression so it's marketable
         #       and actually gets us flat by the boundary.
         self.execution.cancel()
+        self._roll_reopen = False
         cur = market.price
         offset = self.aggression_ticks * self.tick_size
         qty = abs(self.position)
@@ -203,10 +237,32 @@ class Trader:
             # Why:  ExitRules need the entry reference (stop distance from entry,
             #       bars-in-trade); bar_idx/timestamp are recorded so time-stops can
             #       measure holding period.
-            self.entry_price = fill_price
-            self.entry_bar_idx = bar_idx
-            self.entry_timestamp = timestamp
+            # Tech: a roll's re-open on the closed position's side instead
+            #       restores the closed position's entry (price, bar, time).
+            # Why:  the backtest's spliced tape never closes a position at a
+            #       roll, so its percent stop and take-profit trail keep
+            #       measuring from the original entry. Carrying it here makes
+            #       live do the same: the stop keeps its width, and the trail,
+            #       which keys its state on (entry_bar_idx, entry_price, side),
+            #       keeps its best price and arming instead of restarting at
+            #       the new month.
+            carried = self._closed_entry
+            if (self._roll_reopen and carried is not None
+                    and carried[0] == (1 if new > 0 else -1)):
+                _side, self.entry_price, self.entry_bar_idx, self.entry_timestamp = carried
+            else:
+                self.entry_price = fill_price
+                self.entry_bar_idx = bar_idx
+                self.entry_timestamp = timestamp
+            self._roll_reopen = False
+            self._closed_entry = None
         elif new == 0:
+            # Tech: keep the closing position's entry before clearing it.
+            # Why:  if this flatten is a roll's close, the re-open restores it
+            #       (above). A strategy exit leaves it unused: only a roll's
+            #       re-open reads it, and the next open clears it.
+            self._closed_entry = (1 if prev > 0 else -1, self.entry_price,
+                                  self.entry_bar_idx, self.entry_timestamp)
             # Tech: returned to flat — clear all entry tracking to sentinels.
             # Why:  leaving stale entry data would make position_state() lie on the
             #       next trade and could trip an ExitRule against a closed position.
