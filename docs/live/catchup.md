@@ -86,4 +86,4 @@ already recorded (same timestamp, side and price) are not written twice.
   `--apply` logs in again, so a long replay never holds a session.
 
 ## Related
-[simtrade_operations.md §6.10](../simtrade_operations.md) · [live/flatten.py](flatten.md) · [live/owner_cli.py](owner_cli.md) · [live/exit_state.py](exit_state.md) · [real_data.py](../real_data.md)
+[simtrade_operations.md, "Catching up after downtime"](../simtrade_operations.md) · [live/flatten.py](flatten.md) · [live/owner_cli.py](owner_cli.md) · [live/exit_state.py](exit_state.md) · [real_data.py](../real_data.md)
