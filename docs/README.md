@@ -129,6 +129,7 @@ Three invariants make this honest (all enforced in code + tests):
 | [live/soak_epoch.py](live/soak_epoch.md) | soak identity | what `--fresh-start` and `--resume` actually mean across a restart |
 | [live/seed_cache.py](live/seed_cache.md) | warm-up bar cache | why a restart does not re-backfill from scratch |
 | [live/flatten.py](live/flatten.md) | close whatever is held | the one tool that closes a position nothing else can — and now says whose lots it is closing |
+| [live/catchup.py](live/catchup.md) | catch up after downtime | replays a deployment over the missed bars and trades the venue to where its strategy would be, recording the real fills |
 | [live/multi_deploy_probe.py](live/multi_deploy_probe.md) | S7/S8/X1-X3 probes | every question about concurrent deployments that had to be measured, not read |
 
 **The owning process** (STRATEGY_SPLIT_PLAN §18) — one process places every
@@ -257,5 +258,6 @@ For the **live** layer, after the above:
 | `python -m forecast_eval.live.v72_probe [--dry-run]` | [live/v72_probe.py](live/v72_probe.md) | live-path validation (**places 1 sim order**) | No — needs Shioaji credentials |
 | `python -m forecast_eval.live.owner_cli --out <dir>` | [live/owner_cli.py](live/owner_cli.md) | the owning process — **the only thing that places orders** under §18 | No — needs Shioaji credentials |
 | `python -m forecast_eval.live.flatten [--out-parent <dir>]` | [live/flatten.py](live/flatten.md) | close whatever the account holds (**places orders**) | No — needs Shioaji credentials |
+| `python -m forecast_eval.live.catchup --config <name> --warmup-bars <N> [--apply]` | [live/catchup.py](live/catchup.md) | catch a deployment up after downtime (plan only; **places orders** with `--apply`) | Yes (the replay) — and Shioaji credentials |
 | `python -m forecast_eval.live.multi_deploy_probe --mode {accounts,sessions,session,crossing,lag}` | [live/multi_deploy_probe.py](live/multi_deploy_probe.md) | the concurrency questions — `accounts`/`sessions` place nothing; `session`/`crossing`/`lag` **place orders** | No — needs Shioaji credentials |
 | `python -m forecast_eval.tools.g6_live --out <dir>` | [tools/g6_live.py](tools/g6_live.md) | G6 — two deployments holding at once (**opens 2 positions, then flattens**) | No — needs Shioaji credentials |

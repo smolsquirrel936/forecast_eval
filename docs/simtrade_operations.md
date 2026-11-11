@@ -56,6 +56,8 @@ production account.
 | `fatal.jsonl` | every fatal alert, all deployments in one file, **with no deployment field**; the owner's alerts go to `owner_session.jsonl` instead | review |
 | `telegram_level.json` | the Telegram alert level chosen with `/settings`, shared by every process (§9); absent = the `[telegram]` default | every alert |
 | `owner_positions.json` | the owner's own record of who holds what: each deployment's lots by month and entry, plus the total every Cover is sized against ([owner_positions](live/owner_positions.md)). Rewritten when the book moves; **edit it by hand to correct a missed fill while the owner runs** (§6.9). Since 2026-11-11 | owner start-up seed, the running owner |
+| `catchup_<slug>.csv` | the strategy's would-be trades during downtime, one row per replay fill, with the catch-up run that found it ([catchup](live/catchup.md), §6 "Catching up after downtime"); never read by live | review |
+| `catchup_<slug>_<timestamp>/` | one catch-up run: extended `tape.csv`, `replay/`, `replay.log`, `plan.json` | review |
 | `owner_session.jsonl` | the owner's trail, appended across runs: placements with their `ordno` and slug, deals, order events, pending/failed reconciles, hand corrections, anomalies (since 2026-10-07; freezes until 2026-11-11) | review |
 
 **Never move, clean or rename `outputs/` while a soak continues.** `--resume`
@@ -518,6 +520,30 @@ which must be noted where the result is read.
 **Rolls:** it rolls on its own, like any deployment (§6.5), through the same
 runtime path. A trader with entry filters needs the runtime's `rolling()` hook
 ([runtime.md](live/runtime.md), "Roll legs and trader filters").
+
+### 6.11 Catching up after downtime ([catchup.py](live/catchup.md))
+
+The simtrade was stopped while the strategy would have traded, and you want the
+deployment to be where its strategy would be now. **Do not edit the ledger to
+show trades the venue never made:** the owner refuses to start when the
+ledgers' total differs from the venue (§5), and that stops every deployment.
+
+1. **Stop the owner and every deployment** (§4). The catch-up checks the venue
+   against all the ledgers and places orders itself.
+2. **Plan** (sends nothing, records nothing; needs the GPU for the replay):
+   `uv run --no-sync python -m forecast_eval.live.catchup --config day --warmup-bars 6000`.
+   Read the downtime trades, the target and the order it prints.
+3. **Apply**, during a session: the same command with `--apply`. It refuses
+   (exit 5) on working orders, on venue ≠ ledgers, or on a held lot not on the
+   front month. Otherwise it trades to the target, writes the real fills to
+   `fills_<slug>.csv` (and `owner_positions.json` if present), writes or clears
+   `exit_state_<slug>.json`, and logs the strategy's downtime trades to
+   `catchup_<slug>.csv`.
+4. **Start as in §5** with `--resume`.
+
+Exit 4 means the venue did not reach the target. Every fill that arrived is
+already in the ledger; check the venue (`flatten --dry-run --show-orders`) and
+reconcile before starting.
 
 ## 7. The daily timeline
 
