@@ -9,7 +9,9 @@ to the half whose session it is (``environment.classify_session``):
   * ``RoutedTrader``    — ``on_signal`` / ``submit_exit`` by ``market.session``;
     ``on_fill`` to **both**, so the halves always agree on the one position;
     a live roll's re-open restores the original entry in both (2026-11-11);
-  * ``RoutedExitRule``  — by ``market.session``; a half with no rule never exits.
+  * ``RoutedExitRule``  — by ``market.session``; a half with no rule never exits;
+  * ``SessionTrail``    — per-session take-profit trails over one best price:
+    every print feeds both, the verdict is ``market.session``'s.
 
 The forecaster's router is in ``forecaster.py``, beside the construction site
 that ``forecaster_sha`` hashes. This file is frozen once the loop starts
@@ -218,3 +220,39 @@ class RoutedExitRule(ExitRule):
     ) -> bool:
         rule = self.halves[market.session]
         return False if rule is None else rule.should_exit(position, market, bar_idx=bar_idx)
+
+
+class SessionTrail(ExitRule):
+    # Tech: one take-profit trail per session over ONE best price: every print
+    #       goes to every present rule (each ratchets its own copy of the best
+    #       price from the same entry), and the verdict is the rule of
+    #       `market.session`'s; a session without a rule never fires.
+    # Why:  the lot carries across sessions, so the best price must see every
+    #       print (as the position-level `tp_*` trail does) while the arm and
+    #       give-back may differ by session — e.g. a wider trail through the
+    #       thin night. Unlike `RoutedExitRule`, the off-session rule is still
+    #       fed, so the two copies stay equal and either one exports the state;
+    #       restoring seeds both from the one `best_price`.
+    adoptable = False
+    restorable = True
+    state_keys = ("best_price",)
+
+    def __init__(self, day: Optional[ExitRule], night: Optional[ExitRule]):
+        self.halves: Dict[str, Optional[ExitRule]] = {"DAY": day, "NIGHT": night}
+        self._present = [r for r in self.halves.values() if r is not None]
+        if not self._present:
+            raise ValueError("SessionTrail needs a rule for at least one session")
+
+    def export_state(self):
+        return self._present[0].export_state()
+
+    def restore_state(self, position: PositionState, state) -> None:
+        for rule in self._present:
+            rule.restore_state(position, state)
+
+    def should_exit(
+        self, position: PositionState, market: MarketEvent, *, bar_idx: int
+    ) -> bool:
+        verdicts = {s: r.should_exit(position, market, bar_idx=bar_idx)
+                    for s, r in self.halves.items() if r is not None}
+        return verdicts.get(market.session, False)

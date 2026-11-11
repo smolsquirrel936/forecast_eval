@@ -27,6 +27,8 @@ half's Forecaster, SignalEmitter, Trader and optional percent stop from its
 | `max_position`, `forced_close` | one position, both traders; no close at a session change |
 | `checkpoint`, `buy_threshold`, `sell_threshold`, `min_prob`, `full_confidence_prob`, `aggression_ticks`, `max_aggression_ticks` | **inert**: None, and `make_strategy` refuses a value, so a typed `--buy-threshold` fails rather than being ignored |
 | `day_*` / `night_*` | `checkpoint`, `context_length`, the band, `min_prob`, `full_confidence_prob`, `aggression_ticks`, `max_aggression_ticks`, `stop_pct` for that half |
+| `tp_arm_pct`, `tp_trail_pct`, `tp_giveback_frac` | one position-level take-profit trail (`exits/profit_trail.py`) beside the routed stops; all None is off |
+| `day_tp_*` / `night_tp_*` | the same three knobs per session, built into a `router.SessionTrail` over the same one best price; a session left None never fires the trail. **Exclusive** with the `tp_*` trail (`make_strategy` refuses both) |
 
 ## Key points / gotchas
 - **UNTUNED.** Both halves start at `main`'s reset session packages
@@ -37,8 +39,10 @@ half's Forecaster, SignalEmitter, Trader and optional percent stop from its
 - **Registered for live** (2026-10-27) as `PINNED_HYBRID` in `live/config.py`:
   named package `hybrid`, file slug `hybrid` (never fullday's `day_night`). Live
   builds from this same `make_strategy`.
-- `exit_rule` is None unless a half sets `stop_pct`, so the unedited package
-  runs exactly the reset packages' path (no exit step).
+- `exit_rule` is None unless a half sets `stop_pct` or a take-profit trail is
+  set (`ProfitTrail` or `SessionTrail`, composed with the routed stops through
+  `any_of`), so the unedited package runs exactly the reset packages' path (no
+  exit step).
 - Stateful objects (emitters' deques, traders' mirrors, forecasters' model
   cache) are built fresh on every `make_strategy` call.
 

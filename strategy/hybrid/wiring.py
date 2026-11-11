@@ -36,7 +36,7 @@ from .forecaster import make_forecaster
 from .night_half.emitter import ThresholdEmitter as NightThresholdEmitter
 from .night_half.forecaster import make_forecaster as make_night_forecaster
 from .night_half.trader import Trader as NightTrader
-from .router import RoutedEmitter, RoutedExitRule, RoutedTrader
+from .router import RoutedEmitter, RoutedExitRule, RoutedTrader, SessionTrail
 
 # Tech: this package's default knobs — the twelve `real_data.py` resolves, then
 #       each half's own, prefixed.
@@ -59,6 +59,17 @@ PARAMS: Dict[str, Any] = {
     "tp_arm_pct": None,
     "tp_giveback_frac": None,
     "tp_trail_pct": None,
+    # per-session take-profit trail (router.SessionTrail, autoresearch_hybrid_tptrail_1111):
+    # the same three knobs per session, over the same one best price since entry —
+    # only the arm and give-back that a print is tested against follow its session.
+    # A session left all None never fires the trail. Exclusive with the tp_* trail
+    # above; all None is off.
+    "day_tp_arm_pct": None,
+    "day_tp_giveback_frac": None,
+    "day_tp_trail_pct": None,
+    "night_tp_arm_pct": None,
+    "night_tp_giveback_frac": None,
+    "night_tp_trail_pct": None,
     # unprefixed CLI knobs with no meaning here — must stay None
     "checkpoint": None,
     "buy_threshold": None,
@@ -203,11 +214,26 @@ def make_strategy(
     day_stop, night_stop = _stop(p["day_stop_pct"]), _stop(p["night_stop_pct"])
     routed = (RoutedExitRule(day_stop, night_stop)
               if day_stop is not None or night_stop is not None else None)
-    exit_rule = any_of([
-        routed,
-        profit_trail_from_knobs(p["tp_arm_pct"], p["tp_trail_pct"],
-                                p["tp_giveback_frac"]),
-    ])
+    trail = profit_trail_from_knobs(p["tp_arm_pct"], p["tp_trail_pct"],
+                                    p["tp_giveback_frac"])
+
+    # Tech: the per-session trail — one ProfitTrail per session from its
+    #       prefixed knobs, fed every print by SessionTrail; refused beside the
+    #       position-level trail.
+    # Why:  two trails over one position would race on the same best price
+    #       under two widths, and a cell's label would not say which fired.
+    per_session = {
+        half: profit_trail_from_knobs(p[f"{half}_tp_arm_pct"],
+                                      p[f"{half}_tp_trail_pct"],
+                                      p[f"{half}_tp_giveback_frac"])
+        for half in ("day", "night")
+    }
+    if any(r is not None for r in per_session.values()):
+        if trail is not None:
+            raise ValueError("set the tp_* trail or the day_tp_*/night_tp_* "
+                             "trails, not both")
+        trail = SessionTrail(per_session["day"], per_session["night"])
+    exit_rule = any_of([routed, trail])
 
     return {
         "forecaster": forecaster,
