@@ -179,7 +179,7 @@ summary { cursor: pointer; font-size: 13px; color: var(--ink-2); padding: 4px 0;
   <div id="perf-charts"></div>
 
   <h2 id="transactions">6 · Transactions</h2>
-  <p class="lede">Every order each deployment sent, what became of it, and the round trips it made, for the whole soak. A position still held is listed first. An order that never filled is marked: the owner cancels an unfilled limit after 15 minutes, and the deployment keeps its position. <i>Fill records</i> counts rows of <code>fills.csv</code>; it equals the filled orders when every fill is explained by an order, and a fill that matches no order is flagged.</p>
+  <p class="lede">Every order each deployment sent, what became of it, and the round trips it made, for the whole soak. A position still held is listed first. An order that never filled is marked: the owner cancels an unfilled limit after 15 minutes, and the deployment keeps its position. <i>Fill records</i> counts rows of <code>fills.csv</code>; it equals the filled orders when every fill is explained by an order, and a fill that matches no order is flagged. A fill the deployment never saw, booked in its <code>fills_&lt;slug&gt;.csv</code> ledger while it was stopped (a flatten, a hand-added row), is added and marked <i>from the ledger</i>.</p>
   <div class="table-wrap"><table id="tb-tx"></table></div>
   <div id="tx-runs"></div>
 
@@ -625,7 +625,8 @@ function renderTransactions() {
     ["Orders: filled / not filled", ...RUNS.map(r => `${r.transactions.orders.length - r.transactions.unfilled} / ${r.transactions.unfilled ? `<b style="color:var(--critical)">${r.transactions.unfilled}</b>` : 0}`)],
     // Never below the filled orders above: each fill is claimed by one order at most.
     ["Fill records (<code>fills.csv</code>)", ...RUNS.map(r => fmt(r.transactions.fills) + (r.transactions.unmatched_fills
-      ? ` <b style="color:var(--critical)">· ${r.transactions.unmatched_fills} match no order</b>` : ""))],
+      ? ` <b style="color:var(--critical)">· ${r.transactions.unmatched_fills} match no order</b>` : "")
+      + (r.transactions.ledger_fills ? ` <span class="small">+ ${fmt(r.transactions.ledger_fills)} from the ledger</span>` : ""))],
     ["Closed round trips (wins)", ...RUNS.map(r => `${r.transactions.trades.length} (${r.transactions.wins})`)],
     ["Realised net P&L", ...RUNS.map(r => pts(r.transactions.net_points, r))],
     // Valued at the newest bar, before fees: the entry fee is in the row below, the exit fee is not paid yet.
@@ -648,7 +649,8 @@ function renderTransactions() {
   RUNS.forEach((r, i) => {
     const t = r.transactions;
     if (t.trades.length) table(`tx-tr-${i}`, ["Entry", "Exit", "Side", "Entry price", "Exit price", "Points", "Fees", "Net"],
-      t.trades.map(x => [fdt(x.entry_ts), fdt(x.exit_ts), esc(x.side), fmt(x.entry), fmt(x.exit), fmt(x.points, 1), fmt(x.fees, 1), pts(x.net)]),
+      t.trades.map(x => [fdt(x.entry_ts), fdt(x.exit_ts) + (x.source === "ledger" ? ` <span class="small">(from the ledger)</span>` : ""),
+        esc(x.side), fmt(x.entry), fmt(x.exit), fmt(x.points, 1), fmt(x.fees, 1), pts(x.net)]),
       [3, 4, 5, 6, 7]);
     if (t.orders.length) table(`tx-od-${i}`, ["Bar", "Side", "Intent", "Limit", "Outcome", "Filled at", "Fill price"],
       t.orders.map(o => [fdt(o.ts), esc(o.side), esc(o.intent), fmt(o.limit),

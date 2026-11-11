@@ -297,14 +297,22 @@ def _sec(ts: str) -> str:
 
 def collect_transactions(orders: List[Dict[str, str]], fills: List[Dict[str, str]],
                          trades: List[Dict[str, str]],
-                         mark: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                         mark: Optional[Dict[str, Any]] = None,
+                         ledger_fills: List[Dict[str, str]] = ()) -> Dict[str, Any]:
     """One deployment's transaction record: orders with outcomes, closed trades, open lot.
 
     `mark` is the newest bar (`timestamp`, `price`); the open lot is valued at it.
+    `ledger_fills` are the soak's fills in `fills_<slug>.csv` after the run
+    folder's last one (a flatten with the deployment stopped, a row added by
+    hand): they close lots like any fill, and a round trip they close is added
+    to the trades, since no `trades.csv` holds it.
     """
-    fl = sorted(({"ts": _sec(f.get("timestamp", "")), "side": f.get("side", ""),
-                  "price": _num(f.get("fill_price")), "qty": int(_num(f.get("quantity")) or 0),
-                  "fee": _num(f.get("fee"))} for f in fills), key=lambda f: f["ts"])
+    def _fill(f: Dict[str, str], ledger: bool) -> Dict[str, Any]:
+        return {"ts": _sec(f.get("timestamp", "")), "side": f.get("side", ""),
+                "price": _num(f.get("fill_price")), "qty": int(_num(f.get("quantity")) or 0),
+                "fee": _num(f.get("fee")), "ledger": ledger}
+    fl = sorted([_fill(f, False) for f in fills] + [_fill(f, True) for f in ledger_fills],
+                key=lambda f: f["ts"])
     od = sorted(({"ts": _sec(o.get("timestamp", "")), "side": o.get("side", ""),
                   "intent": o.get("intent", ""), "limit": _num(o.get("limit_price")),
                   "qty": int(_num(o.get("quantity")) or 0)} for o in orders), key=lambda o: o["ts"])
@@ -322,7 +330,7 @@ def collect_transactions(orders: List[Dict[str, str]], fills: List[Dict[str, str
     claimed: set = set()
     for i, o in enumerate(od):
         end = od[i + 1]["ts"] if i + 1 < len(od) else None
-        hit = next((j for j, f in enumerate(fl) if j not in claimed
+        hit = next((j for j, f in enumerate(fl) if j not in claimed and not f["ledger"]
                     and f["side"] == o["side"] and f["ts"] >= o["ts"]
                     and (end is None or f["ts"] < end)), None)
         if hit is not None:
@@ -334,17 +342,32 @@ def collect_transactions(orders: List[Dict[str, str]], fills: List[Dict[str, str
     # Tech: the open position is what FIFO matching of the fills leaves over.
     # Why:  `trades.csv` holds only closed round trips, so a held lot appears in
     #       no file as such; the fills are the one record that covers both.
+    # Tech: a ledger fill that closes a lot also writes that round trip, with
+    #       both fills' fees pro rata.
+    # Why:  the run folder's `trades.csv` was written by the deployment, which
+    #       never saw that fill; without it the realised P&L would stop short.
     lots: List[Dict[str, Any]] = []
+    closed_by_ledger: List[Dict[str, Any]] = []
     for f in fl:
         sign, q = (1 if f["side"] == "BUY" else -1), f["qty"]
+        unit_fee = (f["fee"] or 0.0) / f["qty"] if f["qty"] else 0.0
         while q and lots and lots[0]["sign"] != sign:
             take = min(q, lots[0]["qty"])
+            if f["ledger"] and lots[0]["price"] is not None and f["price"] is not None:
+                points = lots[0]["sign"] * (f["price"] - lots[0]["price"]) * take
+                fees = (lots[0]["unit_fee"] + unit_fee) * take
+                closed_by_ledger.append({
+                    "entry_ts": lots[0]["ts"], "exit_ts": f["ts"],
+                    "side": "LONG" if lots[0]["sign"] > 0 else "SHORT",
+                    "entry": lots[0]["price"], "exit": f["price"], "points": points,
+                    "fees": fees, "net": points - fees, "source": "ledger"})
             lots[0]["qty"] -= take
             q -= take
             if not lots[0]["qty"]:
                 lots.pop(0)
         if q:
-            lots.append({"sign": sign, "qty": q, "price": f["price"], "ts": f["ts"]})
+            lots.append({"sign": sign, "qty": q, "price": f["price"], "ts": f["ts"],
+                         "unit_fee": unit_fee})
     open_lots = [{"side": "LONG" if l["sign"] > 0 else "SHORT", "qty": l["qty"],
                   "entry": l["price"], "since": l["ts"]} for l in lots]
 
@@ -366,16 +389,18 @@ def collect_transactions(orders: List[Dict[str, str]], fills: List[Dict[str, str
     tr = [{"entry_ts": _sec(t.get("entry_ts") or ""), "exit_ts": _sec(t.get("exit_ts") or ""), "side": t.get("side"),
            "entry": _num(t.get("entry_price")), "exit": _num(t.get("exit_price")),
            "points": _num(t.get("pnl_points")), "fees": _num(t.get("fees_points")),
-           "net": _num(t.get("net_pnl_points"))} for t in trades]
+           "net": _num(t.get("net_pnl_points"))} for t in trades] + closed_by_ledger
+    n_ledger = sum(f["ledger"] for f in fl)
     return {
-        "orders": od, "fills": len(fl), "trades": tr, "open": open_lots,
+        "orders": od, "fills": len(fl) - n_ledger, "ledger_fills": n_ledger,
+        "trades": tr, "open": open_lots,
         "unfilled": sum(o["outcome"] != "filled" for o in od),
         # Tech: fills no order claimed. Never negative: a fill is claimed once.
         # Why:  zero means every fill is explained by an order. More means an
         #       order filled in parts, a fill added by hand (2026-10-06), or a
         #       fill landing after the next order's bar, which the matching
         #       window then misreads — each one a reason to read the files.
-        "unmatched_fills": len(fl) - len(claimed),
+        "unmatched_fills": len(fl) - n_ledger - len(claimed),
         "net_points": sum(t["net"] or 0.0 for t in tr),
         "unrealised_points": unrealised,
         "mark": {"ts": _sec(str(mark.get("timestamp") or "")), "price": mark_price}
@@ -546,6 +571,14 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
     #       double-count. Orders are not replayed, so each folder holds only its own.
     orders = [r for rd in dirs for r in _rows(rd / "orders.csv")]
     fills, trades = (_rows(d / f) for f in ("fills.csv", "trades.csv"))
+    # Tech: the fill ledger; this soak's rows dated after the folder's last fill.
+    # Why:  a fill booked while the deployment was stopped (a flatten, §6.2; a
+    #       hand-added row, §6.9) is in the ledger and in no run folder, so the
+    #       transactions below would still show the lot it closed.
+    ledger = _rows(outputs / f"fills_{dep.slug}.csv")
+    last_fill = max((_sec(f.get("timestamp", "")) for f in fills), default="")
+    ledger_later = [f for f in ledger if f.get("soak_id") == params.get("soak_id")
+                    and _sec(f.get("timestamp", "")) > last_fill]
 
     # ---- positions: the deployment's view, the owner's, and the fill ledger's
     pos = [b.get("position", 0) for b in bars]
@@ -554,7 +587,6 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
     #       the last bar: a flatten run with the deployments stopped (§6.2) or a
     #       row added by hand (§6.9) reaches the ledger and no bar. Summed over
     #       every epoch, exactly as the owner's seed (`ledger.per_deployment_nets`).
-    ledger = _rows(outputs / f"fills_{dep.slug}.csv")
     ledger_now = (sum(int(r.get("quantity") or 0) * (1 if r.get("side") == "BUY" else -1)
                       for r in ledger) if ledger else None)
     owner_pos: Counter = Counter()
@@ -613,7 +645,8 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
             "ledger_now": ledger_now,
         },
         "performance": collect_performance(dep),
-        "transactions": collect_transactions(orders, fills, trades, bars[-1] if bars else None),
+        "transactions": collect_transactions(orders, fills, trades, bars[-1] if bars else None,
+                                             ledger_later),
         "stability": {
             "relogins": [e.get("when") for e in relogins],
             "relogin_failed": [{"when": e.get("wall"), "backoff": e.get("backoff_seconds")} for e in failed],
@@ -843,8 +876,8 @@ def findings(data: Mapping[str, Any]) -> List[Dict[str, str]]:
                                     f'last bar {r["position"]["now"]:+d}' for r in split))
                     + ". A fill reached the ledger after the deployment's last bar: a flatten run "
                       "with the deployments stopped (§6.2) or a row added by hand (§6.9). "
-                      "\"Now\" above is the ledger; section 6's open lots and P&L come from the "
-                      "newest run folder and still show the position before that fill."})
+                      "\"Now\" above is the ledger, and section 6 adds the soak's ledger fills "
+                      "that no run folder has, marked \"from the ledger\"."})
 
     unmatched = [r for r in runs if r["transactions"]["unmatched_fills"]]
     if unmatched:

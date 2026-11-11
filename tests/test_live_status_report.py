@@ -407,7 +407,7 @@ def test_a_fill_is_claimed_once_and_only_on_its_own_side():
 
 def test_no_orders_is_an_empty_record():
     t = sr.collect_transactions([], [], [])
-    assert t == {"orders": [], "fills": 0, "trades": [], "open": [], "unfilled": 0,
+    assert t == {"orders": [], "fills": 0, "ledger_fills": 0, "trades": [], "open": [], "unfilled": 0,
                  "unmatched_fills": 0, "net_points": 0.0, "unrealised_points": 0.0, "mark": None,
                  "fees_points": 0.0, "wins": 0}
 
@@ -535,3 +535,41 @@ def test_an_agreeing_or_missing_ledger_raises_nothing(tmp_path, monkeypatch):
         data["runs"][0]["position"].update(now=-1, values=[-1, 0], ledger_now=ledger_now)
         assert not any("disagree" in f["html"] for f in sr.findings(data))
         assert "Now (fill ledger): Night -1." in _positions_line(data)["html"]
+
+
+# ---- fills the deployment never saw (a flatten while stopped) -----------------
+
+def test_a_ledger_fill_closes_the_open_lot_and_books_the_round_trip():
+    # 2026-11-11: night stopped short 1 @ 42571; the flatten bought it back at
+    # 44301 with every process stopped, so only fills_night.csv has that fill
+    folder = [_fill("2026-11-10 23:45:58.352705002", "SELL", 42571)]
+    flatten = [_fill("2026-11-11 17:14:41.759821000", "BUY", 44301)]
+    orders = [_order("2026-11-10 23:45:00", "SELL", "OPEN", 42575)]
+    t = sr.collect_transactions(orders, folder, [], {"timestamp": "2026-11-11 04:59:00", "price": "42522"},
+                                ledger_fills=flatten)
+    assert t["open"] == [] and t["unrealised_points"] == 0.0
+    assert (t["fills"], t["ledger_fills"], t["unmatched_fills"]) == (1, 1, 0)
+    (rt,) = t["trades"]
+    assert (rt["side"], rt["entry"], rt["exit"], rt["points"], rt["source"]) == ("SHORT", 42571, 44301, -1730, "ledger")
+    assert rt["fees"] == pytest.approx(19.0) and rt["net"] == pytest.approx(-1749.0)
+    assert t["net_points"] == pytest.approx(-1749.0)
+    assert t["fees_points"] == pytest.approx(19.0)
+
+
+def test_collect_passes_only_this_soaks_later_ledger_fills(tmp_path, monkeypatch):
+    _fake_packages(tmp_path, monkeypatch)
+    out, log = _outputs(tmp_path)
+    run = out / "live_night_20260930_080000"
+    (run / "fills.csv").write_text(FILLS_HEAD + "\n2026-09-30 15:00:30,SELL,100.0,1,0.02\n",
+                                   encoding="utf-8")
+    soak = "soak_20260930_080000_000000"
+    (out / "fills_night.csv").write_text(
+        LEDGER_HEAD + "\n"
+        "2026-09-30 07:55:00,BUY,90.0,1,0.018,soak_old,TXFK6\n"           # another epoch
+        f"2026-09-30 15:00:30,SELL,100.0,1,0.02,{soak},TXFK6\n"           # in the folder
+        f"2026-10-01 17:14:39,BUY,98.0,1,0.0196,{soak},TXFK6\n",          # the flatten
+        encoding="utf-8")
+    t = sr.collect(out, log, NOW, processes=_procs(), hardware=HW)["runs"][0]["transactions"]
+    assert (t["fills"], t["ledger_fills"]) == (1, 1)
+    assert t["open"] == [] and t["trades"][-1]["source"] == "ledger"
+    assert t["trades"][-1]["points"] == pytest.approx(2.0)
