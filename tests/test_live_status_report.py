@@ -573,3 +573,24 @@ def test_collect_passes_only_this_soaks_later_ledger_fills(tmp_path, monkeypatch
     assert (t["fills"], t["ledger_fills"]) == (1, 1)
     assert t["open"] == [] and t["trades"][-1]["source"] == "ledger"
     assert t["trades"][-1]["points"] == pytest.approx(2.0)
+
+
+def test_performance_counts_the_round_trip_only_the_ledger_has(tmp_path, monkeypatch):
+    # sections 5 and 6 must agree: a short the run folder still shows open,
+    # closed by a fill booked in fills_night.csv while the deployment was stopped
+    _fake_packages(tmp_path, monkeypatch)
+    out, log = _outputs(tmp_path)
+    run = out / "live_night_20260930_080000"
+    (run / "fills.csv").write_text(FILLS_HEAD + "\n2026-09-30T15:00:30,SELL,100,1,0.02\n",
+                                   encoding="utf-8")
+    soak = "soak_20260930_080000_000000"
+    (out / "fills_night.csv").write_text(
+        LEDGER_HEAD + "\n"
+        f"2026-09-30 15:00:30,SELL,100.0,1,0.02,{soak},TXFK6\n"
+        f"2026-09-30 15:04:30,BUY,97.0,1,0.0194,{soak},TXFK6\n", encoding="utf-8")
+    run_data = sr.collect(out, log, NOW, processes=_procs(), hardware=HW, tz=UTC)["runs"][0]
+    m = dict(run_data["performance"]["metrics"])
+    assert m["n_trades"] == 1 and m["net_pnl_points"] == pytest.approx(3 - 0.0394)
+    assert m["net_pnl_points"] == pytest.approx(run_data["transactions"]["net_points"])
+    if run_data["performance"]["figs"]["price"] is not None:
+        assert [t["name"] for t in run_data["performance"]["figs"]["price"]["data"]] == ["price", "BUY", "SELL"]

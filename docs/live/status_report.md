@@ -82,7 +82,10 @@ appears in no file as such.
   runbook) or a row added by hand (§6.9) reaches `fills_<slug>.csv` and no bar,
   so the last bar would still show the lot. The finding names both numbers.
   First seen after the 2026-11-11 flatten.
-- **Section 6 adds the soak's ledger-only fills.** `fills_<slug>.csv` rows of the
+- **Sections 5 and 6 add the soak's ledger-only fills.** Section 5's metrics and
+  charts (`collect_performance(..., ledger_fills=, ledger_trades=)`) take the same
+  fills and the round trips section 6 books from them, so both count the same
+  trades. In section 6, `fills_<slug>.csv` rows of the
   run's `soak_id` dated after the newest folder's last fill are passed to
   `collect_transactions(..., ledger_fills=...)`: they close lots by FIFO like any
   fill, a round trip they close is added to the trades with both fills' fees
