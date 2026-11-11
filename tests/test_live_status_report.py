@@ -491,3 +491,47 @@ def test_a_routed_deployment_is_banded_by_each_forecasts_session(tmp_path, monke
         "day": {"buy": 0.001, "sell": -0.001, "min_prob": 0.65},
         "night": {"buy": 0.003, "sell": -0.003, "min_prob": 0.6}}
     assert r["params"]["buy"] is None
+
+
+# -------- positions: the fill ledger is the current one -----------------------
+
+LEDGER_HEAD = "timestamp,side,fill_price,quantity,fee,soak_id,contract"
+
+
+def _positions_line(data):
+    return next(f for f in sr.findings(data) if f["html"].startswith("<b>Positions taken"))
+
+
+def test_collect_reads_the_fill_ledger_net(tmp_path, monkeypatch):
+    _fake_packages(tmp_path, monkeypatch)
+    out, log = _outputs(tmp_path)
+    data = sr.collect(out, log, NOW, processes=_procs(), hardware=HW)
+    assert data["runs"][0]["position"]["ledger_now"] is None        # no ledger yet
+    (out / "fills_night.csv").write_text(
+        LEDGER_HEAD + "\n2026-09-30 15:00:30,SELL,100.0,1,0.02,s,TXFK6\n"
+        "2026-10-01 17:14:39,BUY,98.0,1,0.0196,s,TXFK6\n", encoding="utf-8")
+    data = sr.collect(out, log, NOW, processes=_procs(), hardware=HW)
+    assert data["runs"][0]["position"]["ledger_now"] == 0
+
+
+def test_a_flatten_after_the_last_bar_shows_the_ledger_and_warns(tmp_path, monkeypatch):
+    # the 2026-11-11 shape: the deployment's last bar held -1, then a flatten
+    # with every process stopped booked the close in the ledger only
+    _fake_packages(tmp_path, monkeypatch)
+    out, log = _outputs(tmp_path)
+    data = sr.collect(out, log, NOW, processes=_procs(), hardware=HW)
+    data["runs"][0]["position"].update(now=-1, values=[-1, 0], ledger_now=0)
+    assert "Now (fill ledger): Night 0." in _positions_line(data)["html"]
+    warn = [f for f in sr.findings(data) if "Fill ledger and last bar disagree" in f["html"]]
+    assert len(warn) == 1 and warn[0]["level"] == "warn"
+    assert "Night ledger +0, last bar -1" in warn[0]["html"]
+
+
+def test_an_agreeing_or_missing_ledger_raises_nothing(tmp_path, monkeypatch):
+    _fake_packages(tmp_path, monkeypatch)
+    out, log = _outputs(tmp_path)
+    data = sr.collect(out, log, NOW, processes=_procs(), hardware=HW)
+    for ledger_now in (-1, None):
+        data["runs"][0]["position"].update(now=-1, values=[-1, 0], ledger_now=ledger_now)
+        assert not any("disagree" in f["html"] for f in sr.findings(data))
+        assert "Now (fill ledger): Night -1." in _positions_line(data)["html"]

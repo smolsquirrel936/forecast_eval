@@ -223,6 +223,14 @@ def _rows(path: Path) -> List[Dict[str, str]]:
         return []
 
 
+def _now(run: Dict[str, Any]) -> Any:
+    # Tech: the fill ledger's net when the deployment has one, else the last bar's.
+    # Why:  the ledger is what the owner seeds the next start from, so it is the
+    #       current position; the last bar misses fills booked while stopped.
+    p = run["position"]
+    return p["ledger_now"] if p.get("ledger_now") is not None else p["now"]
+
+
 def collect_performance(dep: Deployment) -> Dict[str, Any]:
     """The per-run report's trading metrics and two charts, for one deployment."""
     # Tech: imported here, not at module level.
@@ -539,8 +547,16 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
     orders = [r for rd in dirs for r in _rows(rd / "orders.csv")]
     fills, trades = (_rows(d / f) for f in ("fills.csv", "trades.csv"))
 
-    # ---- positions: the deployment's view and the owner's
+    # ---- positions: the deployment's view, the owner's, and the fill ledger's
     pos = [b.get("position", 0) for b in bars]
+    # Tech: the signed net of every row in `fills_<slug>.csv`; None without one.
+    # Why:  the ledger is what the owner seeds from, and it can be newer than
+    #       the last bar: a flatten run with the deployments stopped (§6.2) or a
+    #       row added by hand (§6.9) reaches the ledger and no bar. Summed over
+    #       every epoch, exactly as the owner's seed (`ledger.per_deployment_nets`).
+    ledger = _rows(outputs / f"fills_{dep.slug}.csv")
+    ledger_now = (sum(int(r.get("quantity") or 0) * (1 if r.get("side") == "BUY" else -1)
+                      for r in ledger) if ledger else None)
     owner_pos: Counter = Counter()
     owner_last = None
     for o in _iter_jsonl(outputs / f"events_{dep.slug}.jsonl"):
@@ -594,6 +610,7 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
             "changes": sum(1 for a, b in zip(pos, pos[1:]) if a != b),
             "owner_events": sum(owner_pos.values()),
             "owner_values": {str(k): v for k, v in owner_pos.items()}, "owner_now": owner_last,
+            "ledger_now": ledger_now,
         },
         "performance": collect_performance(dep),
         "transactions": collect_transactions(orders, fills, trades, bars[-1] if bars else None),
@@ -807,10 +824,27 @@ def findings(data: Mapping[str, Any]) -> List[Dict[str, str]]:
                or any(k not in ("0", "None") for k in r["position"]["owner_values"])]
     out.append({"level": "info" if nonflat else "ok", "html":
                 ("<b>Positions taken:</b> " + esc(", ".join(names[r["package"]] for r in nonflat))
-                 + f". Now: " + esc(", ".join(f'{names[r["package"]]} {r["position"]["now"]}' for r in runs)) + "."
+                 + f". Now (fill ledger): " + esc(", ".join(f'{names[r["package"]]} {_now(r)}' for r in runs)) + "."
                  if nonflat else
                  "<b>Flat the whole time.</b> Every bar recorded position 0 and every owner position "
                  f"event reported 0 ({sum(r['position']['owner_events'] for r in runs):,} events).")})
+
+    # Tech: warn when the ledger's net and the last bar's position differ.
+    # Why:  the ledger is the newer record then (a flatten or a hand-added
+    #       fill after the last bar), and section 6's lots and P&L are built
+    #       from the newest run folder's fills, which do not have that fill.
+    split = [r for r in runs if r["position"]["ledger_now"] is not None
+             and r["position"]["now"] is not None
+             and r["position"]["ledger_now"] != r["position"]["now"]]
+    if split:
+        out.append({"level": "warn", "html":
+                    "<b>Fill ledger and last bar disagree:</b> "
+                    + esc(", ".join(f'{names[r["package"]]} ledger {r["position"]["ledger_now"]:+d}, '
+                                    f'last bar {r["position"]["now"]:+d}' for r in split))
+                    + ". A fill reached the ledger after the deployment's last bar: a flatten run "
+                      "with the deployments stopped (§6.2) or a row added by hand (§6.9). "
+                      "\"Now\" above is the ledger; section 6's open lots and P&L come from the "
+                      "newest run folder and still show the position before that fill."})
 
     unmatched = [r for r in runs if r["transactions"]["unmatched_fills"]]
     if unmatched:
