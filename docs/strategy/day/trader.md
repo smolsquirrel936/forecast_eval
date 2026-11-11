@@ -31,6 +31,18 @@ aggression and sizing, and the fill bookkeeping that feeds `ExitRule` queries.
 - `on_fill` has **no average-entry branch**: anything above `max_position=1` is
   unsound rather than merely risky, which is why the live rails refuse it at
   start-up.
+- **Roll carry (2026-11-11).** `rolling()` is the optional hook `live/runtime.py`
+  enters around a roll's calls. The re-open it submits is marked, and when that
+  OPEN fills on the closed position's side, `on_fill` restores the closed
+  position's entry (price, bar, time) instead of stamping a fresh one — so the
+  percent stop keeps its width and a take-profit trail keeps its best price
+  across the roll, as on the backtest's spliced tape. A later signal or exit
+  cancels the mark; the carry is used once. Same mechanism as fullday's Trader.
+- **Take-profit re-entry cooldown** (`tp_cooldown_signals`, simtrade_0929 only,
+  default 0 = off). After an exit-rule close that flattens a position *in
+  profit*, a same-side OPEN is skipped for K signals (HOLDs count). A roll's
+  close never arms it, and a roll's re-open bypasses and clears it. Measured in
+  `autoresearch_day_tptrail_1111`: it hurt every cell, so it stays 0.
 
 ## Related
 [strategy/day/wiring.md](wiring.md) · [strategy/wiring.py](../wiring.md) · [strategy/base.py](../base.md) · [STRATEGY_SPLIT_PLAN.md](../../../STRATEGY_SPLIT_PLAN.md)

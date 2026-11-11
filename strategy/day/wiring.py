@@ -32,10 +32,11 @@ It trails eval-window buy-and-hold by 24 419 points, and it has never traded.
 """
 from typing import Any, Dict
 
+from ...exits.any_of import any_of
 from ...exits.pct_stop import EntryPercentStop
+from ...exits.profit_trail import profit_trail_from_knobs
 from .emitter import ThresholdEmitter
 from .forecaster import make_forecaster
-from .profit_trail import AnyOf, ProfitTrail
 from .trader import Trader
 
 # Tech: this session's default knobs — the twelve values `real_data.py`'s
@@ -64,18 +65,19 @@ PARAMS: Dict[str, Any] = {
     # percent-stop knob — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param stop_pct=...``.
     "stop_pct": 0.1,
-    # take-profit trail knobs — package-declared, beyond the twelve CLI knobs
-    # (D6/D7), reachable only through ``--param tp_arm_pct=...`` etc.
-    # Why:  autoresearch_day_tptrail_1111. tp_arm_pct: the trail does nothing
-    # until the best price since entry is this fraction of the entry in the
-    # position's favour; then EITHER tp_giveback_frac (exit when the open
-    # gain falls to 1-f of its maximum) OR tp_trail_pct (exit y below/above
-    # the best price) — exactly one with an arm. tp_cooldown_signals: after a
-    # profitable exit-rule close, skip same-side opens for K signals. All
-    # None/0 is the CONTROL, byte-identical to the pre-knob package.
+    # take-profit trail knobs (exits/profit_trail.py) — package-declared,
+    # reachable only through ``--param tp_arm_pct=...`` etc. tp_arm_pct: the
+    # trail does nothing until the best price since entry is this fraction of
+    # the entry in the position's favour; then EITHER tp_trail_pct (exit y off
+    # the best price) OR tp_giveback_frac (exit when the open gain falls to
+    # 1-f of its maximum). All None is off: no rule is built.
     "tp_arm_pct": 0.15,
     "tp_giveback_frac": None,
     "tp_trail_pct": 0.02,
+    # take-profit re-entry cooldown — DAY only (strategy/day/trader.py):
+    # after a profitable exit-rule close, skip same-side opens for K
+    # signals. 0 is off; it hurt every cell it was measured in
+    # (autoresearch_day_tptrail_1111), so it stays 0.
     "tp_cooldown_signals": 0,
 }
 
@@ -87,11 +89,12 @@ PARAMS: Dict[str, Any] = {
 #       6000-6025) this cell beats the 0.10-stop config on train 5/6,
 #       held-out 2021-12..2026-08 5/6 (mean +201 pts) and whole history 6/6
 #       (mean +2124); train Calmar 6.61 vs 5.37 at warmup 6000. Small, and
-#       few events: 5 take-profits in 10.8 train years. Known live gaps: the
-#       rule is not adoptable (a --resume into a held lot needs best_price),
-#       and this package's Trader does not carry the entry across a roll, so
-#       a roll restarts the trail. An explicit ``--param tp_arm_pct=none
-#       --param tp_trail_pct=none`` turns it off.
+#       few events: 5 take-profits in 10.8 train years. The rule is the
+#       shared exits/profit_trail.py since main 88eae8d. Known live gap: it
+#       is not adoptable (a --resume into a held lot needs best_price); since
+#       main aaa37f5 this package's Trader carries the entry across a roll,
+#       so the trail stays armed through it. An explicit ``--param
+#       tp_arm_pct=none --param tp_trail_pct=none`` turns it off.
 
 # Tech: the knob's tuned value — 0.10, ADOPTED on simtrade_0929 (2026-10-12).
 # Why:  day_pctstop_iter05 (ledger `results_day.tsv`, commit 6aaa7bb on
@@ -173,34 +176,20 @@ def make_strategy(
             tp_cooldown_signals=p["tp_cooldown_signals"],
         )
 
-    # Tech: build the percent stop only when its knob is set; None means no
-    #       exit rule, exactly what every recorded run before this knob used.
+    # Tech: build the percent stop and the take-profit trail from their knobs
+    #       and compose whichever are set (`any_of`): None when neither is, the
+    #       bare stop when only it is, AnyOf when both are.
     # Why:  run_backtest queries the rule every tick a position is open
     #       (run.py Step 2) and submits a closing limit on fire — the
     #       flatten-and-continue semantics the live deployment wants, so the
-    #       backtest measures precisely what live would do.
-    # Tech: compose the take-profit trail with the stop through AnyOf only
-    #       when an arm is set; otherwise return the bare stop (or None).
-    # Why:  the control must be byte-identical to the pre-knob package, so
-    #       the composition wrapper appears only when the trail is on; a
-    #       give-back knob without an arm would be silently inert, so refuse it.
-    exit_rules = []
-    if p["stop_pct"] is not None:
-        exit_rules.append(EntryPercentStop(stop_pct=p["stop_pct"]))
-    if p["tp_arm_pct"] is not None:
-        exit_rules.append(ProfitTrail(
-            arm_pct=p["tp_arm_pct"],
-            giveback_frac=p["tp_giveback_frac"],
-            trail_pct=p["tp_trail_pct"],
-        ))
-    elif p["tp_giveback_frac"] is not None or p["tp_trail_pct"] is not None:
-        raise ValueError("tp_giveback_frac / tp_trail_pct need tp_arm_pct")
-    if not exit_rules:
-        exit_rule = None
-    elif len(exit_rules) == 1:
-        exit_rule = exit_rules[0]
-    else:
-        exit_rule = AnyOf(exit_rules)
+    #       backtest measures precisely what live would do. Collapsing to the
+    #       bare stop keeps every run recorded before the trail knobs exact.
+    exit_rule = any_of([
+        EntryPercentStop(stop_pct=p["stop_pct"])
+        if p["stop_pct"] is not None else None,
+        profit_trail_from_knobs(p["tp_arm_pct"], p["tp_trail_pct"],
+                                p["tp_giveback_frac"]),
+    ])
 
     return {
         "forecaster": forecaster,

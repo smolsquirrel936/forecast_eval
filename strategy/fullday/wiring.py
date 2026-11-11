@@ -73,6 +73,7 @@ ADOPTED into ``simtrade_0929`` on 2026-10-26 (user decision), trading from
 """
 from typing import Any, Dict
 
+from ...exits.profit_trail import profit_trail_from_knobs
 from .emitter import ThresholdEmitter
 from .exits import (
     AnyOf,
@@ -167,6 +168,15 @@ PARAMS: Dict[str, Any] = {
     # a run at 0.001 must be byte-identical to one without the knob. min_prob,
     # the trend filter and the path check still gate the exit signal.
     "exit_threshold": 0.001,
+    # take-profit trail knobs (exits/profit_trail.py) — package-declared,
+    # reachable only through ``--param tp_arm_pct=...`` etc. tp_arm_pct: the
+    # trail does nothing until the best price since entry is this fraction of
+    # the entry in the position's favour; then EITHER tp_trail_pct (exit y off
+    # the best price) OR tp_giveback_frac (exit when the open gain falls to
+    # 1-f of its maximum). All None is off: no rule is built.
+    "tp_arm_pct": None,
+    "tp_giveback_frac": None,
+    "tp_trail_pct": None,
 }
 
 # Tech: the knob's tuned value — 0.05, ADOPTED on simtrade_0929 (2026-10-18).
@@ -314,6 +324,13 @@ def make_strategy(
         exit_rules.append(GivebackTrail(giveback_frac=p["giveback_frac"]))
     if p["channel_exit_bars"] is not None:
         exit_rules.append(ChannelExit(channel_exit_bars=p["channel_exit_bars"]))
+    # Tech: append the shared take-profit trail when its knobs are set.
+    # Why:  main's tp_* knobs (exits/profit_trail.py); all None adds
+    #       nothing, so the adopted stack is unchanged.
+    trail = profit_trail_from_knobs(p["tp_arm_pct"], p["tp_trail_pct"],
+                                    p["tp_giveback_frac"])
+    if trail is not None:
+        exit_rules.append(trail)
     if not exit_rules:
         exit_rule = None
     elif len(exit_rules) == 1:
