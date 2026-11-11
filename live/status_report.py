@@ -231,8 +231,14 @@ def _now(run: Dict[str, Any]) -> Any:
     return p["ledger_now"] if p.get("ledger_now") is not None else p["now"]
 
 
-def collect_performance(dep: Deployment) -> Dict[str, Any]:
-    """The per-run report's trading metrics and two charts, for one deployment."""
+def collect_performance(dep: Deployment, *, ledger_fills: List[Dict[str, str]] = (),
+                        ledger_trades: List[Dict[str, Any]] = ()) -> Dict[str, Any]:
+    """The per-run report's trading metrics and two charts, for one deployment.
+
+    `ledger_fills` / `ledger_trades` are the soak's fills that only
+    `fills_<slug>.csv` has and the round trips they close (`collect_transactions`);
+    they join the run folder's, so the metrics and charts match section 6.
+    """
     # Tech: imported here, not at module level.
     # Why:  `reports` pulls matplotlib and plotly, and `metrics` pulls pandas;
     #       the rest of this module reads plain CSV and JSON, so the heavy
@@ -252,6 +258,29 @@ def collect_performance(dep: Deployment) -> Dict[str, Any]:
     #       numbers rather than a second implementation of them.
     trades = reports._read_artifact(dep.run_dir, "trades")
     fills = reports._read_artifact(dep.run_dir, "fills")
+    # Tech: append the ledger-only fills and the round trips they close, in the
+    #       artifacts' own columns, then re-sort by time.
+    # Why:  a fill booked while the deployment was stopped (a flatten, a row
+    #       added by hand) is in no run folder; without it the equity curve and
+    #       the metrics would stop at the last trade the deployment wrote.
+    if ledger_trades:
+        extra = pd.DataFrame([{
+            "entry_ts": pd.Timestamp(t["entry_ts"]), "exit_ts": pd.Timestamp(t["exit_ts"]),
+            "side": t["side"], "entry_price": t["entry"], "exit_price": t["exit"],
+            "pnl_points": t["points"], "fees_points": t["fees"], "net_pnl_points": t["net"],
+            "session": classify_session(datetime.fromisoformat(t["exit_ts"])) or "",
+            "bars_held": 0, "rolled": 0} for t in ledger_trades])
+        trades = (extra if trades is None or trades.empty
+                  else pd.concat([trades, extra], ignore_index=True))
+        trades = trades.sort_values("exit_ts", ignore_index=True)
+    if ledger_fills:
+        extra = pd.DataFrame([{
+            "timestamp": pd.Timestamp(f["timestamp"]), "side": f["side"],
+            "fill_price": float(f["fill_price"]), "quantity": int(float(f["quantity"])),
+            "fee": float(f["fee"])} for f in ledger_fills])
+        fills = (extra if fills is None or fills.empty
+                 else pd.concat([fills, extra], ignore_index=True))
+        fills = fills.sort_values("timestamp", ignore_index=True)
     point_value = float(dep.params.get("point_value") or 200.0)
     fee_rate = float(dep.params.get("fee_rate") or 0.0002)
     m = trading_metrics([TradeRecord(**t) for t in trades.to_dict("records")])
@@ -605,6 +634,9 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
     warm = next((e for e in reversed(events) if e.get("event") == "warm_up"), {})
     hb = dep.restart.get("last_heartbeat")
     lat = ticks.pop("lat")
+    # Tech: transactions first; their ledger-closed round trips feed performance.
+    # Why:  sections 5 and 6 must count the same trades.
+    tx = collect_transactions(orders, fills, trades, bars[-1] if bars else None, ledger_later)
 
     return {
         "slug": dep.slug, "package": package, "dir": d.name, "dirs": [x.name for x in dirs],
@@ -644,9 +676,10 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
             "owner_values": {str(k): v for k, v in owner_pos.items()}, "owner_now": owner_last,
             "ledger_now": ledger_now,
         },
-        "performance": collect_performance(dep),
-        "transactions": collect_transactions(orders, fills, trades, bars[-1] if bars else None,
-                                             ledger_later),
+        "performance": collect_performance(
+            dep, ledger_fills=ledger_later,
+            ledger_trades=[t for t in tx["trades"] if t.get("source") == "ledger"]),
+        "transactions": tx,
         "stability": {
             "relogins": [e.get("when") for e in relogins],
             "relogin_failed": [{"when": e.get("wall"), "backoff": e.get("backoff_seconds")} for e in failed],
