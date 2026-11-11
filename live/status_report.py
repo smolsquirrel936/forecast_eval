@@ -557,8 +557,15 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
         direction = "BUY" if buy is not None and r >= buy else (
             "SELL" if sell is not None and r <= sell else None)
         crossed = direction is not None
-        prob_ok = crossed and (min_prob is None or (
-            pu is not None and (pu if direction == "BUY" else 1 - pu) >= min_prob))
+        # Tech: a crossed forecast passes min_prob when no gate is set, when the
+        #       payload has no prob_up, or when its directional probability
+        #       clears the gate.
+        # Why:  `ThresholdEmitter._decide` skips the min_prob gate for a payload
+        #       without prob_up (night's ridge logs none), so counting it as a
+        #       failure reported every night forecast as failing and hid the
+        #       trend-filter vetoes that held them.
+        prob_ok = crossed and (min_prob is None or pu is None or (
+            (pu if direction == "BUY" else 1 - pu) >= min_prob))
         band_pass += crossed
         prob_pass += prob_ok
         s = signals.get(e["timestamp"], {})
