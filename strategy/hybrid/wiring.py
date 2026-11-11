@@ -25,8 +25,10 @@ its own file slug ``hybrid``; live builds from this same ``make_strategy``.
 """
 from typing import Any, Dict, Optional
 
+from ...exits.any_of import any_of
 from ...exits.base import ExitRule
 from ...exits.pct_stop import EntryPercentStop
+from ...exits.profit_trail import profit_trail_from_knobs
 from .day_half.emitter import ThresholdEmitter as DayThresholdEmitter
 from .day_half.forecaster import make_forecaster as make_day_forecaster
 from .day_half.trader import Trader as DayTrader
@@ -49,6 +51,14 @@ PARAMS: Dict[str, Any] = {
     "stride_bars": 30,
     "max_position": 1,
     "forced_close": False,
+    # take-profit trail (exits/profit_trail.py) — one rule for the POSITION,
+    # not one per half: the lot carries across sessions, so the trail must see
+    # every print of it (a per-half trail would track only its own session's
+    # best price). Same meaning as in the single-session packages; all None
+    # is off: no rule is built.
+    "tp_arm_pct": None,
+    "tp_giveback_frac": None,
+    "tp_trail_pct": None,
     # unprefixed CLI knobs with no meaning here — must stay None
     "checkpoint": None,
     "buy_threshold": None,
@@ -183,12 +193,21 @@ def make_strategy(
             ),
         )
 
-    # Tech: route per-half stops when either half has one; None when neither.
+    # Tech: route per-half stops when either half has one; then compose the
+    #       position-level take-profit trail beside them when its knobs are set.
     # Why:  None keeps `run_backtest` skipping the exit step entirely, as every
     #       reset package does, so the unedited hybrid matches them tick for tick.
+    #       The trail sits outside the router so it sees both sessions' prints;
+    #       composed through AnyOf, a live resume restores its best price (the
+    #       router itself has no restorable state).
     day_stop, night_stop = _stop(p["day_stop_pct"]), _stop(p["night_stop_pct"])
-    exit_rule = (RoutedExitRule(day_stop, night_stop)
-                 if day_stop is not None or night_stop is not None else None)
+    routed = (RoutedExitRule(day_stop, night_stop)
+              if day_stop is not None or night_stop is not None else None)
+    exit_rule = any_of([
+        routed,
+        profit_trail_from_knobs(p["tp_arm_pct"], p["tp_trail_pct"],
+                                p["tp_giveback_frac"]),
+    ])
 
     return {
         "forecaster": forecaster,

@@ -22,7 +22,9 @@ untuned configs; ``PINNED_FULLDAY`` still records itself unprovenanced.
 """
 from typing import Any, Dict
 
+from ...exits.any_of import any_of
 from ...exits.pct_stop import EntryPercentStop
+from ...exits.profit_trail import profit_trail_from_knobs
 from .emitter import ThresholdEmitter
 from .forecaster import make_forecaster
 from .trader import Trader
@@ -53,6 +55,15 @@ PARAMS: Dict[str, Any] = {
     # percent-stop knob — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param stop_pct=...``.
     "stop_pct": None,
+    # take-profit trail knobs (exits/profit_trail.py) — package-declared,
+    # reachable only through ``--param tp_arm_pct=...`` etc. tp_arm_pct: the
+    # trail does nothing until the best price since entry is this fraction of
+    # the entry in the position's favour; then EITHER tp_trail_pct (exit y off
+    # the best price) OR tp_giveback_frac (exit when the open gain falls to
+    # 1-f of its maximum). All None is off: no rule is built.
+    "tp_arm_pct": None,
+    "tp_giveback_frac": None,
+    "tp_trail_pct": None,
 }
 
 # Tech: the knob deliberately defaults OFF.
@@ -131,17 +142,20 @@ def make_strategy(
             max_aggression_ticks=p["max_aggression_ticks"],
         )
 
-    # Tech: build the percent stop only when its knob is set; None means no
-    #       exit rule, exactly what every recorded run before this knob used.
+    # Tech: build the percent stop and the take-profit trail from their knobs
+    #       and compose whichever are set (`any_of`): None when neither is, the
+    #       bare stop when only it is, AnyOf when both are.
     # Why:  run_backtest queries the rule every tick a position is open
     #       (run.py Step 2) and submits a closing limit on fire — the
     #       flatten-and-continue semantics the live deployment wants, so the
-    #       backtest measures precisely what live would do.
-    exit_rule = (
+    #       backtest measures precisely what live would do. Collapsing to the
+    #       bare stop keeps every run recorded before the trail knobs exact.
+    exit_rule = any_of([
         EntryPercentStop(stop_pct=p["stop_pct"])
-        if p["stop_pct"] is not None
-        else None
-    )
+        if p["stop_pct"] is not None else None,
+        profit_trail_from_knobs(p["tp_arm_pct"], p["tp_trail_pct"],
+                                p["tp_giveback_frac"]),
+    ])
 
     return {
         "forecaster": forecaster,
