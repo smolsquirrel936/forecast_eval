@@ -196,3 +196,67 @@ def test_hybrid_trail_sees_both_sessions():
     pos = _pos()
     assert rule.should_exit(pos, _mkt(110.0, session="NIGHT"), bar_idx=11) is False
     assert rule.should_exit(pos, _mkt(107.7, minutes=1, session="DAY"), bar_idx=12) is True
+
+
+# -------- hybrid per-session trail (router.SessionTrail) -----------------------
+
+def test_hybrid_session_trail_uses_the_session_width_over_one_best_price():
+    # night trail 5% / day trail 2%, both armed at 5%: the best price 110 is set
+    # on a night print; a day print 2% off it fires, a night print there does not
+    w = _wiring("hybrid")
+    rule = w.make_strategy(warmup_bars=10, day_tp_arm_pct=0.05, day_tp_trail_pct=0.02,
+                           night_tp_arm_pct=0.05, night_tp_trail_pct=0.05)["exit_rule"]
+    pos = _pos()
+    assert rule.should_exit(pos, _mkt(110.0, session="NIGHT"), bar_idx=11) is False
+    assert rule.should_exit(pos, _mkt(107.7, minutes=1, session="NIGHT"), bar_idx=12) is False
+    assert rule.should_exit(pos, _mkt(107.7, minutes=2, session="DAY"), bar_idx=13) is True
+
+
+def test_hybrid_session_trail_off_session_never_fires_but_tracks_best():
+    # day-only trail: a night print sets the best and gives back without a
+    # fire; the next day print, still 2% off that night best, fires
+    w = _wiring("hybrid")
+    rule = w.make_strategy(warmup_bars=10, day_tp_arm_pct=0.05,
+                           day_tp_trail_pct=0.02)["exit_rule"]
+    pos = _pos()
+    assert rule.should_exit(pos, _mkt(110.0, session="NIGHT"), bar_idx=11) is False
+    assert rule.should_exit(pos, _mkt(100.0, minutes=1, session="NIGHT"), bar_idx=12) is False
+    assert rule.should_exit(pos, _mkt(107.0, minutes=2, session="DAY"), bar_idx=13) is True
+
+
+def test_hybrid_session_trail_equal_widths_match_the_position_trail():
+    w = _wiring("hybrid")
+    prices = [(100, "DAY"), (112, "NIGHT"), (111, "DAY"), (109.9, "NIGHT"),
+              (109.7, "DAY"), (115, "DAY"), (112.6, "NIGHT")]
+    one = w.make_strategy(warmup_bars=10, tp_arm_pct=0.1, tp_trail_pct=0.02)["exit_rule"]
+    two = w.make_strategy(warmup_bars=10, day_tp_arm_pct=0.1, day_tp_trail_pct=0.02,
+                          night_tp_arm_pct=0.1, night_tp_trail_pct=0.02)["exit_rule"]
+
+    def fires(rule):
+        pos = _pos()
+        return [rule.should_exit(pos, _mkt(p, minutes=k, session=s), bar_idx=11 + k)
+                for k, (p, s) in enumerate(prices)]
+    assert fires(one) == fires(two) and any(fires(one))
+
+
+def test_hybrid_session_trail_restores_both_sessions_from_one_best_price():
+    w = _wiring("hybrid")
+    rule = w.make_strategy(warmup_bars=10, day_tp_arm_pct=0.05, day_tp_trail_pct=0.02,
+                           night_tp_arm_pct=0.05, night_tp_trail_pct=0.04)["exit_rule"]
+    assert rule.restorable is True and rule.state_keys == ("best_price",)
+    pos = _pos()
+    rule.restore_state(pos, {"best_price": 110.0})
+    assert rule.export_state() == {"best_price": 110.0}
+    assert rule.should_exit(pos, _mkt(107.7, session="NIGHT"), bar_idx=11) is False
+    assert rule.should_exit(pos, _mkt(107.7, minutes=1, session="DAY"), bar_idx=12) is True
+
+
+def test_hybrid_position_and_session_trails_are_exclusive():
+    with pytest.raises(ValueError, match="not both"):
+        _wiring("hybrid").make_strategy(warmup_bars=10, tp_arm_pct=0.1, tp_trail_pct=0.02,
+                                        night_tp_arm_pct=0.1, night_tp_trail_pct=0.03)
+
+
+def test_hybrid_session_shape_without_arm_is_refused():
+    with pytest.raises(ValueError, match="need tp_arm_pct"):
+        _wiring("hybrid").make_strategy(warmup_bars=10, night_tp_trail_pct=0.03)

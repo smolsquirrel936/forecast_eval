@@ -16,6 +16,7 @@ half whose session it is.
 | `RoutedEmitter(day, night)` | class | `emit` / `emit_signal`: **both** halves see every forecast; the result is the half's of `forecast.timestamp`'s session |
 | `RoutedTrader(day, night)` | class | `on_signal` / `submit_exit` by `market.session`; `on_fill` to **both**; `position` / `position_state()` checked to agree; assigning `position` or `entry_price` / `entry_bar_idx` / `entry_timestamp` writes both halves (a live `--resume`); `rolling()` enters each half's own `rolling()` hook during a live contract roll, and the router carries the original entry across it |
 | `RoutedExitRule(day, night)` | class | `should_exit` by `market.session`; a half with no rule never fires; `adoptable` only if every present rule is |
+| `SessionTrail(day, night)` | class | per-session take-profit trails over **one** best price: every print feeds every present rule, the verdict is `market.session`'s; a session with no rule never fires; restorable from `best_price` (both rules seeded) |
 
 ## Key points / gotchas
 - **One position, two mirrors.** Both traders fold every fill, so a lot one half
@@ -29,6 +30,11 @@ half whose session it is.
   measuring from it, as on the backtest's spliced tape, and the mirrors never
   split. A later signal, or an exit on a held position, cancels the mark; the
   carry is used once.
+- **`SessionTrail` feeds the off-session rule too.** Unlike `RoutedExitRule`,
+  each print goes to both sessions' trails, so both ratchet the same best price
+  since entry and only the arm / give-back differ. A day-only trail therefore
+  measures its give-back from a night high. Built by `wiring.py` from the
+  `day_tp_*` / `night_tp_*` knobs.
 - **The incoming half owns an inherited lot from its session's first tick**: its
   exit rule checks it on every tick, its emitter decides at its first boundary.
 - **One `Execution`.** Both traders share it, so either half's cancel-first

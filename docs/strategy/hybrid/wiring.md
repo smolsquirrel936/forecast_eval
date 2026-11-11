@@ -27,6 +27,8 @@ half's Forecaster, SignalEmitter, Trader and optional percent stop from its
 | `max_position`, `forced_close` | one position, both traders; no close at a session change |
 | `checkpoint`, `buy_threshold`, `sell_threshold`, `min_prob`, `full_confidence_prob`, `aggression_ticks`, `max_aggression_ticks` | **inert**: None, and `make_strategy` refuses a value, so a typed `--buy-threshold` fails rather than being ignored |
 | `day_*` / `night_*` | `checkpoint`, `context_length`, the band, `min_prob`, `full_confidence_prob`, `aggression_ticks`, `max_aggression_ticks`, `stop_pct` for that half |
+| `tp_arm_pct`, `tp_trail_pct`, `tp_giveback_frac` | one position-level take-profit trail (`exits/profit_trail.py`) beside the routed stops; all None is off |
+| `day_tp_*` / `night_tp_*` | the same three knobs per session, built into a `router.SessionTrail` over the same one best price; a session left None never fires the trail. **Exclusive** with the `tp_*` trail (`make_strategy` refuses both) |
 
 ## Key points / gotchas
 - **Tuned: `hybrid_split_iter22` plus percent stops.** The code of both halves
@@ -45,8 +47,10 @@ half's Forecaster, SignalEmitter, Trader and optional percent stop from its
 - **Registered for live** (2026-10-27) as `PINNED_HYBRID` in `live/config.py`:
   named package `hybrid`, file slug `hybrid` (never fullday's `day_night`). Live
   builds from this same `make_strategy`.
-- `exit_rule` is a `RoutedExitRule` when either half sets `stop_pct`, None when
-  neither does — then `run_backtest` skips the exit step, as the reset packages do.
+- `exit_rule` is a `RoutedExitRule` when either half sets `stop_pct`, composed
+  through `any_of` with the take-profit trail (`ProfitTrail` or `SessionTrail`)
+  when one is set; None when nothing is — then `run_backtest` skips the exit
+  step, as the reset packages do.
 - Stateful objects (emitters' deques, traders' mirrors, forecasters' model
   cache) are built fresh on every `make_strategy` call.
 
