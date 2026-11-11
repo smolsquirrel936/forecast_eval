@@ -245,6 +245,31 @@ def test_a_hold_past_band_and_min_prob_names_its_veto(tmp_path, monkeypatch):
     assert "1 vetoed by the trend filter, 1 by the trend filter or path check" in text
 
 
+def test_a_forecast_without_prob_up_passes_min_prob(tmp_path, monkeypatch):
+    """The emitter skips min_prob for a payload with no prob_up (night's ridge
+    logs none, and no median_path either), so such a forecast is not a min_prob
+    failure, and its HOLD is the trend filter's veto."""
+    _fake_packages(tmp_path, monkeypatch)
+    out, log = _outputs(tmp_path)
+    run = out / "live_night_20260930_080000"
+    sell = {"predicted_return": -0.005, "last_price": 99.0}
+    _write_jsonl(run / "session.jsonl", [
+        json.loads(l) for l in (run / "session.jsonl").read_text(encoding="utf-8").splitlines()
+        if not l.startswith('{"truncated"')] + [
+        {"event": "forecast", "bar_idx": 3, "timestamp": "2026-09-30T15:04:00", "payload": sell},
+        {"event": "signal", "timestamp": "2026-09-30T15:04:00", "direction": "HOLD"},
+        {"event": "forecast", "bar_idx": 4, "timestamp": "2026-10-01T00:01:00", "payload": sell},
+        {"event": "signal", "timestamp": "2026-10-01T00:01:00", "direction": "SELL"},
+    ])
+    data = sr.collect(out, log, NOW, processes=_procs(), hardware=HW, tz=UTC)
+    d = data["runs"][0]["decisions"]
+    assert (d["band_pass"], d["prob_pass"]) == (4, 3)   # only the fixture's prob 0.5 fails
+    assert [f["veto"] for f in d["rows"]] == [None, None, "trend", None]
+    assert d["vetoes"] == {"trend": 1}
+    text = " ".join(f["html"] for f in sr.findings(data))
+    assert "4 crossed the band, 1 failed min_prob, 1 vetoed by the trend filter" in text
+
+
 def test_performance_is_the_per_run_reports_metrics_and_charts(tmp_path):
     """The table is `metrics.trading_metrics` over trades.csv, in its own key
     order; the charts are the per-run report's plotly figures, drawn against the
