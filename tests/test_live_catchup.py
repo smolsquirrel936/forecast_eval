@@ -219,6 +219,19 @@ def test_an_incomplete_run_still_returns_every_fill_and_stops_at_that_leg():
     assert [o.intent for o in broker.submitted] == ["CLOSE", "OPEN", "OPEN", "OPEN"]
 
 
+def test_a_deal_stamped_in_utc_epoch_seconds_is_booked_in_taipei_time():
+    """ShioajiBroker passes the deal's raw `ts` (UTC epoch seconds). The
+    2026-11-12 night catch-up wrote it into the ledger unconverted."""
+    broker = _Broker([1])
+    broker.submit = lambda order, *, current_price: broker._queue.append(
+        FillEvent(1794444464.509279, order.side, order.limit_price, 1, 0.0))
+    fills = _trade(broker, "BUY", 1, account_net=0)
+    assert fills[0].timestamp == pd.Timestamp("2026-11-12 08:47:44.509279013")
+    # A fill already in local time is left as it is.
+    assert _trade(_Broker([1]), "BUY", 1, 0)[0].timestamp == pd.Timestamp(
+        "2026-11-12 09:00")
+
+
 def test_no_reference_price_refuses():
     broker = _Broker([1])
     with pytest.raises(CatchupRefused, match="no reference price"):
