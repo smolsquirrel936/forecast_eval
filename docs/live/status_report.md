@@ -29,7 +29,7 @@ snapshot by nature.
 | Ticks | every folder's `ticks.csv` |
 | Orders | every folder's `orders.csv`, summed |
 | Fills, trades, PnL, `params.json`, warm-up | the **newest** folder only: a `--resume` replays the soak's earlier fills into it, so summing would double-count |
-| Transactions (§6) | every folder's `orders.csv`, with the newest folder's `fills.csv` and `trades.csv` (`collect_transactions`) |
+| Transactions (§6) | every folder's `orders.csv`, with the newest folder's `fills.csv` and `trades.csv` (`collect_transactions`); round trips and realised P&L from `catchup_<slug>.csv` where it exists (`collect_catchup`, `with_catchup`) |
 | Heartbeat, failures | `live_restart_<slug>.json` |
 | Owner's position view | `events_<slug>.jsonl` |
 | Position "now" | the fill ledger `fills_<slug>.csv`, net of every row (what the owner seeds from); the last bar's position when there is no ledger |
@@ -91,6 +91,20 @@ appears in no file as such.
   fill, a round trip they close is added to the trades with both fills' fees
   (marked *from the ledger*), and they are counted apart from `fills.csv`
   ("+ N from the ledger"), never as fills that match no order.
+- **A catch-up record replaces the venue's round trips it covers** (since
+  2026-11-12, the user's decision). Where `catchup_<slug>.csv` exists
+  ([catchup](catchup.md)), section 6's round trips are the record's paper round
+  trips, paired FIFO from flat and marked *catch-up, paper*, plus the venue's
+  round trips **entered after the record's last row**. "Realised net P&L" and
+  "Closed round trips (wins)" count that list, and the row names where the
+  record ends. The venue trades of the same stretch drop out: on 2026-11-12
+  day's realised read +8,580.9 (the paper take-profit close of the 10-28 short)
+  instead of +2,705.7 (the flatten that closed it at the venue). The open lot,
+  the orders, the fill counts and the fees stay the venue's, and **section 5
+  stays the venue's record**, so the two sections differ wherever a record
+  exists. A record must start with the entry of any lot its first row closes;
+  catch-ups write it since 2026-11-12, and the first three records had it added
+  by hand.
 - **Unrealised P&L is the open lot at the newest bar's price, before fees**
   (since 2026-11-05). The entry fee is already in "Fees on all fills" and the
   exit fee is not paid until the lot closes. The row names the price and bar

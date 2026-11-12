@@ -210,6 +210,23 @@ def session_events(tape: pd.DataFrame, policy: Any,
             if m.session in policy.sessions]
 
 
+def entry_before(fills: Sequence[FillEvent], since: Any) -> Optional[FillEvent]:
+    """The fill that opened the lot `fills` hold at `since`; None when flat then."""
+    # Tech: replay the fills up to `since` and return the one `lot_opened_at`
+    #       names, the last fill at that time.
+    # Why:  the gap's first fill may close a lot opened before the downtime
+    #       (night's 2026-11-02 SELL closed a 10-31 long). Without its entry the
+    #       record cannot be paired into round trips, and the status report
+    #       (`collect_catchup`) pairs it FIFO from flat.
+    if since is None:
+        return None
+    prior = [f for f in fills if pd.Timestamp(f.timestamp) <= since]
+    opened = lot_opened_at(prior)
+    if opened is None:
+        return None
+    return next(f for f in reversed(prior) if pd.Timestamp(f.timestamp) == opened)
+
+
 def record_gap(path: Path, gap: Sequence[FillEvent], run: str) -> int:
     """Append the gap's would-be fills to `catchup_<slug>.csv`; return how many were new."""
     # Tech: skip any row already recorded (same timestamp, side and price),
@@ -724,7 +741,11 @@ def main(argv=None) -> int:
                       bars_for[-1])
         print(f"exit state -> {state_path}: {rule.export_state()}")
 
-    recorded = record_gap(out_parent / f"catchup_{slug}.csv", gap, work.name)
+    # Tech: the record starts with the entry of any lot held when the gap began.
+    # Why:  so the record pairs into round trips on its own (`entry_before`).
+    entry = entry_before(replay_fills, since)
+    recorded = record_gap(out_parent / f"catchup_{slug}.csv",
+                          ([entry] if entry else []) + gap, work.name)
     print(f"gap record: +{recorded} row(s) -> {out_parent / f'catchup_{slug}.csv'}")
     print(f"\nDONE. {slug} holds {(final.signed_qty if final else 0):+d}; "
           f"start it with --resume.")
