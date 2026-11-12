@@ -73,6 +73,10 @@ already recorded (same timestamp, side and price) are not written twice.
   sent.
 - **Every fill is written to the ledger before anything else can fail**, under
   the deployment's current `soak_id` and the front month's code.
+- **Fill times are converted to Taipei time** (`venue_time`), as the owner
+  converts its deals: the broker hands over the deal's raw UTC epoch seconds.
+  Before 2026-11-12 they went in unconverted, and the first live `--apply`
+  (night) wrote `1794444464.509279` into the ledger and crashed on the replay.
 - **Working orders refuse, not cancel.** Unlike `flatten`, this tool has no
   emergency that would excuse withdrawing an order it did not place.
 - **Exit-rule state.** A lot opened by the catch-up starts its state at the real

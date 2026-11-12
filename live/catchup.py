@@ -25,6 +25,7 @@ import json
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, List, Optional, Sequence, Tuple
@@ -329,9 +330,27 @@ def trade_to_target(broker: Any, side: str, quantity: int, account_net: int,
     return fills
 
 
+def venue_time(ts: Any) -> pd.Timestamp:
+    """A deal's timestamp as naive Taipei time, the ledger's clock."""
+    # Tech: an epoch number becomes UTC seconds + VENUE_UTC_OFFSET, a missing
+    #       one becomes now, anything else is parsed as it is.
+    # Why:  ShioajiBroker hands the deal callback's raw `ts` (UTC epoch seconds)
+    #       through unconverted; the owner converts it the same way
+    #       (`owner_process`'s deal handler). Unconverted, the 2026-11-12 night
+    #       catch-up wrote `1794444464.509279` into fills_night.csv and the
+    #       ledger replay after it failed.
+    from forecast_eval.live.owner_process import VENUE_UTC_OFFSET
+    if ts is None or ts == "":
+        return pd.Timestamp.now()
+    if isinstance(ts, (int, float)):
+        return pd.Timestamp(ts, unit="s") + VENUE_UTC_OFFSET
+    return pd.Timestamp(ts)
+
+
 def _drain(broker: Any, price: float, want: int, seconds: float,
            into: List[FillEvent], clock: Any) -> int:
-    # Tech: poll the broker for fills until `want` lots arrive or `seconds` pass.
+    # Tech: poll the broker for fills until `want` lots arrive or `seconds` pass,
+    #       stamping each in Taipei time (`venue_time`).
     # Why:  fills arrive on Shioaji's callback thread, never synchronously with
     #       `place_order` (v4_probe's `_drain`, same reason).
     got = 0
@@ -340,6 +359,7 @@ def _drain(broker: Any, price: float, want: int, seconds: float,
         for f in broker.poll_fills(MarketEvent(datetime.now(), float(price), 1,
                                                classify_session(pd.Timestamp.now())
                                                or "DAY")):
+            f = replace(f, timestamp=venue_time(f.timestamp))
             into.append(f)
             got += int(f.quantity)
             print(f"    fill: {f.side} {f.quantity} @ {f.fill_price}")
