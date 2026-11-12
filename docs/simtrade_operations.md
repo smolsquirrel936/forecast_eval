@@ -56,7 +56,7 @@ production account.
 | `fatal.jsonl` | every fatal alert, all deployments in one file, **with no deployment field**; the owner's alerts go to `owner_session.jsonl` instead | review |
 | `telegram_level.json` | the Telegram alert level chosen with `/settings`, shared by every process (§9); absent = the `[telegram]` default | every alert |
 | `owner_positions.json` | the owner's own record of who holds what: each deployment's lots by month and entry, plus the total every Cover is sized against ([owner_positions](live/owner_positions.md)). Rewritten when the book moves; **edit it by hand to correct a missed fill while the owner runs** (§6.9). Since 2026-11-11 | owner start-up seed, the running owner |
-| `catchup_<slug>.csv` | the strategy's would-be trades during downtime, one row per replay fill, with the catch-up run that found it ([catchup](live/catchup.md), §6 "Catching up after downtime"); never read by live | review |
+| `catchup_<slug>.csv` | the strategy's would-be trades during downtime, one row per replay fill, with the catch-up run that found it, led by the entry of any lot held when the downtime began ([catchup](live/catchup.md), §6 "Catching up after downtime"); never read by live; the status page's section 6 realised P&L reads it | review |
 | `catchup_<slug>_<timestamp>/` | one catch-up run: extended `tape.csv`, `replay/`, `replay.log`, `plan.json` | review |
 | `owner_session.jsonl` | the owner's trail, appended across runs: placements with their `ordno` and slug, deals, order events, pending/failed reconciles, hand corrections, anomalies (since 2026-10-07; freezes until 2026-11-11) | review |
 

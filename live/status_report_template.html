@@ -628,7 +628,9 @@ function renderTransactions() {
       ? ` <b style="color:var(--critical)">· ${r.transactions.unmatched_fills} match no order</b>` : "")
       + (r.transactions.ledger_fills ? ` <span class="small">+ ${fmt(r.transactions.ledger_fills)} from the ledger</span>` : ""))],
     ["Closed round trips (wins)", ...RUNS.map(r => `${r.transactions.trades.length} (${r.transactions.wins})`)],
-    ["Realised net P&L", ...RUNS.map(r => pts(r.transactions.net_points, r))],
+    // With a catch-up record, the record's paper round trips replace the venue's up to its last row (with_catchup).
+    ["Realised net P&L", ...RUNS.map(r => pts(r.transactions.net_points, r) + (r.transactions.catchup
+      ? `<br><span class="small">catch-up record (paper) to ${fhm(r.transactions.catchup.last)}, venue trades after it</span>` : ""))],
     // Valued at the newest bar, before fees: the entry fee is in the row below, the exit fee is not paid yet.
     ["Unrealised P&L (open lot)", ...RUNS.map(r => {
       const t = r.transactions;
@@ -649,7 +651,8 @@ function renderTransactions() {
   RUNS.forEach((r, i) => {
     const t = r.transactions;
     if (t.trades.length) table(`tx-tr-${i}`, ["Entry", "Exit", "Side", "Entry price", "Exit price", "Points", "Fees", "Net"],
-      t.trades.map(x => [fdt(x.entry_ts), fdt(x.exit_ts) + (x.source === "ledger" ? ` <span class="small">(from the ledger)</span>` : ""),
+      t.trades.map(x => [fdt(x.entry_ts), fdt(x.exit_ts) + (x.source === "ledger" ? ` <span class="small">(from the ledger)</span>`
+        : x.source === "catchup" ? ` <span class="small">(catch-up, paper)</span>` : ""),
         esc(x.side), fmt(x.entry), fmt(x.exit), fmt(x.points, 1), fmt(x.fees, 1), pts(x.net)]),
       [3, 4, 5, 6, 7]);
     if (t.orders.length) table(`tx-od-${i}`, ["Bar", "Side", "Intent", "Limit", "Outcome", "Filled at", "Fill price"],

@@ -389,6 +389,48 @@ def _fill(ts, side, price):
             "fee": "9.5"}
 
 
+CATCHUP_HEAD = "timestamp,side,fill_price,quantity,fee,catchup_run"
+
+
+def test_catchup_record_replaces_the_venue_trades_it_covers(tmp_path):
+    # Day 2026-11-12: the venue short from 10-28 was flattened at 44301; the
+    # record closes it at the paper take-profit 38427 and holds a long from 11-11.
+    path = tmp_path / "catchup_day.csv"
+    path.write_text(CATCHUP_HEAD + "\r\n"
+                    "2026-11-06 09:15:00,BUY,38427.0,1,7.6854,r\r\n"
+                    "2026-10-28 10:46:03.983184099,SELL,47025.0,1,9.405,r\r\n"
+                    "2026-11-11 11:54:00,BUY,43829.0,1,8.7658,r\r\n", encoding="utf-8")
+    cu = sr.collect_catchup(path)
+    assert cu["fills"] == 3 and cu["last"] == "2026-11-11T11:54:00"
+    assert [(t["side"], t["entry"], t["exit"]) for t in cu["trades"]] == [("SHORT", 47025.0, 38427.0)]
+    assert cu["trades"][0]["net"] == pytest.approx(8598 - 9.405 - 7.6854)
+    assert cu["open"] == [{"side": "LONG", "qty": 1, "entry": 43829.0, "since": "2026-11-11T11:54:00"}]
+
+    def trade(entry_ts, exit_ts, side, entry, exit_, pnl):
+        return {"entry_ts": entry_ts, "exit_ts": exit_ts, "side": side, "entry_price": str(entry),
+                "exit_price": str(exit_), "pnl_points": str(pnl), "fees_points": "19",
+                "net_pnl_points": str(pnl - 19)}
+    venue = sr.collect_transactions([], [
+        _fill("2026-10-28 10:46:03", "SELL", 47025), _fill("2026-11-11 17:14:39", "BUY", 44301),
+        _fill("2026-11-12 09:03:13", "BUY", 44194), _fill("2026-11-13 10:00:00", "SELL", 44400)],
+        [trade("2026-10-28 10:46:03", "2026-11-11 17:14:39", "SHORT", 47025, 44301, 2724),
+         trade("2026-11-12 09:03:13", "2026-11-13 10:00:00", "LONG", 44194, 44400, 206)])
+    tx = sr.with_catchup(venue, cu)
+    # the flatten round trip is replaced; the one entered after the record counts
+    assert [t["exit"] for t in tx["trades"]] == [38427.0, 44400.0]
+    assert tx["net_points"] == pytest.approx(8598 - 9.405 - 7.6854 + 206 - 19)
+    assert tx["wins"] == 2 and tx["catchup"]["replaced"] == 1
+    # the open lot, orders and fees stay the venue's
+    assert tx["open"] == venue["open"] and tx["fees_points"] == venue["fees_points"]
+
+
+def test_no_catchup_record_leaves_the_venue_record_alone(tmp_path):
+    venue = sr.collect_transactions([], [_fill("2026-10-01 09:00", "BUY", 100),
+                                         _fill("2026-10-01 10:00", "SELL", 101)], [])
+    assert sr.collect_catchup(tmp_path / "catchup_night.csv") is None
+    assert sr.with_catchup(venue, None) is venue
+
+
 # Night's soak as recorded 2026-10-12..17: four filled orders, then a long that
 # two closing orders could not get out of (both cancelled unfilled).
 NIGHT_ORDERS = [_order("2026-10-12 21:32:00", "BUY", "OPEN", 49098),

@@ -439,6 +439,74 @@ def collect_transactions(orders: List[Dict[str, str]], fills: List[Dict[str, str
     }
 
 
+def collect_catchup(path: Path) -> Optional[Dict[str, Any]]:
+    """`catchup_<slug>.csv` as round trips: the strategy's paper trades over downtime.
+
+    None when the deployment has no record. The record is paired FIFO from flat,
+    so it must start with the fill that opened any lot its first row closes
+    (`catchup.record_gap` writes it; earlier records had it added by hand).
+    """
+    # Tech: sort the rows by time and pair them FIFO; a closing row writes one
+    #       round trip with both fills' fees pro rata, whatever is left is open.
+    # Why:  the record holds fills only, like the ledger, and nothing else knows
+    #       which paper fill closed which: the replay folders behind it are not
+    #       kept for every record (day's 2026-11-11 rows were written by hand).
+    rows = sorted(({"ts": _sec(r.get("timestamp", "")), "side": r.get("side", ""),
+                    "price": _num(r.get("fill_price")), "qty": int(_num(r.get("quantity")) or 0),
+                    "fee": _num(r.get("fee")) or 0.0} for r in _rows(path)),
+                  key=lambda f: f["ts"])
+    if not rows:
+        return None
+    lots: List[Dict[str, Any]] = []
+    trades: List[Dict[str, Any]] = []
+    for f in rows:
+        sign, q = (1 if f["side"] == "BUY" else -1), f["qty"]
+        unit_fee = f["fee"] / f["qty"] if f["qty"] else 0.0
+        while q and lots and lots[0]["sign"] != sign:
+            take = min(q, lots[0]["qty"])
+            points = lots[0]["sign"] * (f["price"] - lots[0]["price"]) * take
+            fees = (lots[0]["unit_fee"] + unit_fee) * take
+            trades.append({"entry_ts": lots[0]["ts"], "exit_ts": f["ts"],
+                           "side": "LONG" if lots[0]["sign"] > 0 else "SHORT",
+                           "entry": lots[0]["price"], "exit": f["price"], "points": points,
+                           "fees": fees, "net": points - fees, "source": "catchup"})
+            lots[0]["qty"] -= take
+            q -= take
+            if not lots[0]["qty"]:
+                lots.pop(0)
+        if q:
+            lots.append({"sign": sign, "qty": q, "price": f["price"], "ts": f["ts"],
+                         "unit_fee": unit_fee})
+    return {"fills": len(rows), "first": rows[0]["ts"], "last": rows[-1]["ts"],
+            "trades": trades,
+            "open": [{"side": "LONG" if l["sign"] > 0 else "SHORT", "qty": l["qty"],
+                      "entry": l["price"], "since": l["ts"]} for l in lots]}
+
+
+def with_catchup(tx: Dict[str, Any], catchup: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """`tx` with the catch-up record's round trips in place of the venue's it covers."""
+    # Tech: keep the venue round trips entered after the record's last row, put
+    #       the record's paper round trips before them, and recount the realised
+    #       P&L and the wins over that list.
+    # Why:  the user's decision (2026-11-12): section 6's realised P&L follows
+    #       the strategy, so the record replaces the venue trades of the same
+    #       stretch — day's paper take-profit close (+8,580.9) instead of the
+    #       flatten that closed the same short (+2,705.7). A venue trade entered
+    #       after the record is the deployment trading again (the catch-up's own
+    #       fill opens one), so it counts. The open lot, the orders and the fees
+    #       stay the venue's: they describe the account.
+    if not catchup:
+        return tx
+    kept = [t for t in tx["trades"] if (t.get("entry_ts") or "") > catchup["last"]]
+    trades = catchup["trades"] + kept
+    return {**tx, "trades": trades,
+            "net_points": sum(t["net"] or 0.0 for t in trades),
+            "wins": sum((t["net"] or 0) > 0 for t in trades),
+            "catchup": {"fills": catchup["fills"], "first": catchup["first"],
+                        "last": catchup["last"], "trades": len(catchup["trades"]),
+                        "replaced": len(tx["trades"]) - len(kept)}}
+
+
 def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]:
     """Everything the report shows about one deployment, as plain JSON-able data."""
     params, d = dep.params, dep.run_dir
@@ -686,7 +754,8 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
         "performance": collect_performance(
             dep, ledger_fills=ledger_later,
             ledger_trades=[t for t in tx["trades"] if t.get("source") == "ledger"]),
-        "transactions": tx,
+        # Section 5 stays the venue's record; section 6 follows the strategy.
+        "transactions": with_catchup(tx, collect_catchup(outputs / f"catchup_{dep.slug}.csv")),
         "stability": {
             "relogins": [e.get("when") for e in relogins],
             "relogin_failed": [{"when": e.get("wall"), "backoff": e.get("backoff_seconds")} for e in failed],

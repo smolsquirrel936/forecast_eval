@@ -16,7 +16,7 @@ from forecast_eval.exits.profit_trail import ProfitTrail
 from forecast_eval.live import catchup
 from forecast_eval.live.broker.base import HeldPosition
 from forecast_eval.live.catchup import (
-    CatchupRefused, check_venue, exit_state_after, extend_tape, gap_since,
+    CatchupRefused, check_venue, entry_before, exit_state_after, extend_tape, gap_since,
     lot_opened_at, order_for, overlap_mismatches, record_gap, trade_to_target,
 )
 
@@ -83,6 +83,19 @@ def test_lot_opened_at_is_the_fill_that_left_flat_or_crossed_it():
     crossed = [_fill("2026-11-01 09:00", "SELL", 100.0),
                _fill("2026-11-02 09:00", "BUY", 101.0, qty=2)]
     assert lot_opened_at(crossed) == pd.Timestamp("2026-11-02 09:00")
+
+
+def test_the_record_starts_with_the_entry_of_a_lot_held_when_the_gap_began():
+    """Night 2026-11-02: the gap's first fill closed a long opened 10-31; the
+    record needs that entry to pair into round trips."""
+    fills = [_fill("2026-10-30 09:00", "SELL", 44000.0),
+             _fill("2026-10-30 10:00", "BUY", 43900.0),
+             _fill("2026-10-31 03:24", "BUY", 44224.0),
+             _fill("2026-11-02 15:54", "SELL", 45150.0)]
+    since = pd.Timestamp("2026-11-02 08:45")
+    assert entry_before(fills, since) == fills[2]
+    assert entry_before(fills, pd.Timestamp("2026-10-30 12:00")) is None   # flat then
+    assert entry_before(fills, None) is None
 
 
 def test_downtime_starts_at_the_later_of_last_fill_and_heartbeat():

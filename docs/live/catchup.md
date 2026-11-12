@@ -42,6 +42,13 @@ venue never made stops every deployment from starting. The strategy's would-be
 trades are kept in `catchup_<slug>.csv` instead, which nothing live reads. Rows
 already recorded (same timestamp, side and price) are not written twice.
 
+When the downtime starts with the replay holding a lot, the record also gets
+the fill that **opened** that lot, even though it is older than the downtime
+(`entry_before`, since 2026-11-12). Without it the first row closes a lot the
+record never opened, and the status page, which pairs the record into round
+trips and shows them as section 6's realised P&L
+([status_report](status_report.md)), could not price it.
+
 ## Exit codes
 | Code | Meaning |
 |---|---|
