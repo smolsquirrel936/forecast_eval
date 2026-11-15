@@ -39,7 +39,8 @@ over bars whose target ends by 2024-01-18 03:35.
   `median_path` the path check is inert. The trend filter still runs.
 - No model, no GPU: live's pre-warm just runs one forecast, and the banner
   shows `ckpt=None`.
-- Built and measured on branch `strategy_test_1108_ridge` (`f0c74e9`); the code
+- Built and measured on branch `strategy_test_1108_ridge` (`f0c74e9`, deleted
+  2026-11-15; its summary is in `output_backup/strategy_test_1108_ridge/`); the code
   is that branch's file. [forecaster.py](forecaster.md) (Toto2) stays in the
   package unused, so `forecaster_sha` and the Toto2 forecast-cache key do not move.
 

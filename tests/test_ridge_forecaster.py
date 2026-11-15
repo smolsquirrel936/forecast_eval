@@ -101,7 +101,8 @@ def test_wiring_builds_the_ridge_from_the_shipped_weights():
 
 
 def test_shipped_weights_are_the_backtested_fit():
-    # strategy_test_1108_ridge f0c74e9, outputs/strategy_test_1108_ridge/coef/night_h1140.json
+    # strategy_test_1108_ridge f0c74e9 (deleted 2026-11-15), now
+    # output_backup/strategy_test_1108_ridge/coef/night_h1140.json
     c = json.loads(wiring.RIDGE_COEF.read_text(encoding="utf-8"))
     assert c["features"] == ridge.FEATURES and c["target_bars"] == 1140
     assert c["fit_end"] == "2024-01-18 03:35:00" and c["fit_rows"] == 132372

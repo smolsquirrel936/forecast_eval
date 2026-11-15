@@ -65,14 +65,15 @@ places orders on.** `live/config.py` holds only the provenance record.
 | `stop_pct` | **0.05** (since 2026-10-18, `bb7a602`) |
 
 - **Price ridge, adopted 2026-11-09 (user decision).** Built and measured on
-  branch `strategy_test_1108_ridge` (`f0c74e9`); `ridge.py` is that branch's
+  branch `strategy_test_1108_ridge` (`f0c74e9`, deleted 2026-11-15); `ridge.py` is that branch's
   file. It predicts the next 1140 night bars' log return from the tape's own
   60/300/1140/3420-bar log returns and 1140-bar volatility, with weights fitted
   on bars whose target ends by 2024-01-18 03:35 and frozen (no refit). Emitter,
   trader and stop are `night_iter30`'s; with no `prob_up`, `min_prob` 0.6 is
   inert. The band was chosen on schedule p00 by matching Toto2's Train trade
   count (238 vs 246), not by P&L. Every forecast schedule was run over the whole
-  tape (`outputs/strategy_test_1108_ridge/`, `summary.md`). Median of 15:
+  tape (`summary.md`, kept in `output_backup/strategy_test_1108_ridge/`; the run
+  folders were deleted 2026-11-15). Median of 15:
   - net **+25 713** (Toto2 +7 472), positive on **15 of 15** schedules (Toto2
     13), worst schedule +21 993 (Toto2 −2 618): the schedule luck is gone;
   - Train (ridge in sample) +5 689; 2024-01-18 → 2026-08-21 +11 512 (out of
@@ -158,9 +159,9 @@ places orders on.** `live/config.py` holds only the provenance record.
   - the roll's re-open keeps the original entry, so the stop and the lock keep
     measuring from it, as in the backtest.
 - **Stop cooldown, added 2026-11-08 (user decision):** built and measured on
-  branch `strategy_test_1108` (`9e31443`); only the fullday Trader/wiring part
+  branch `strategy_test_1108` (`9e31443`, deleted 2026-11-15); only the fullday Trader/wiring part
   is on this branch. Every forecast schedule was run over the whole tape
-  (`outputs/strategy_test_1108_stopcd/`). Median of 10:
+  (`outputs/strategy_test_1108_stopcd/`, deleted 2026-11-15). Median of 10:
   - net +14 798 → **+18 623**, Calmar 1.24 → **2.17**;
   - the new holdout from 2026-08-21: −6 316 → −3 182.
 
