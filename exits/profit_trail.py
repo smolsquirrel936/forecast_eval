@@ -9,6 +9,12 @@ with exactly one of two give-back shapes:
   * ``giveback_frac`` f: exit when the open gain falls to (1 - f) of its
     maximum — the stop widens with the gain banked.
 
+The percent trail can switch once (``arm2_pct`` y2, ``trail2_pct`` b): from a
+max gain of y2 on, the width is b instead of ``trail_pct`` — narrower or wider.
+A wider b lowers the stop at the switch, the one case where it moves against
+the position. Measured on DAY (``autoresearch_day_tptrail2_1115``,
+``TPTRAIL_TAPER_POSTMORTEM.md`` §3): 0.17 / 0.015 adopted 2026-11-15.
+
 Why an arm: DAY's day_trail loop (2026-10-11) killed every pure trail armed
 from the entry fill — it fires at V-bottoms on trades that never earned
 anything. A trade that never reaches ``arm_pct`` can never fire this rule.
@@ -50,6 +56,8 @@ class ProfitTrail(ExitRule):
         *,
         giveback_frac: Optional[float] = None,
         trail_pct: Optional[float] = None,
+        arm2_pct: Optional[float] = None,
+        trail2_pct: Optional[float] = None,
     ):
         # Tech: require a fractional arm level and exactly one give-back shape,
         #       itself a fraction in (0, 1).
@@ -63,6 +71,22 @@ class ProfitTrail(ExitRule):
         for name, v in (("giveback_frac", giveback_frac), ("trail_pct", trail_pct)):
             if v is not None and not 0.0 < v < 1.0:
                 raise ValueError(f"{name} must be in (0, 1), got {v}")
+        # Tech: the second stage takes both of its knobs or neither, needs the
+        #       percent trail, and arms above the first arm:
+        #       arm_pct < arm2_pct < 1, 0 < trail2_pct < 1.
+        # Why:  half a stage has no defined switch, and a second arm at or
+        #       below the first would replace the first stage outright.
+        if (arm2_pct is None) != (trail2_pct is None):
+            raise ValueError("set both or neither of arm2_pct / trail2_pct")
+        if arm2_pct is not None:
+            if trail_pct is None:
+                raise ValueError("arm2_pct / trail2_pct need trail_pct")
+            if not arm_pct < arm2_pct < 1.0:
+                raise ValueError(f"arm2_pct must be in (arm_pct, 1), got {arm2_pct}")
+            if not 0.0 < trail2_pct < 1.0:
+                raise ValueError(f"trail2_pct must be in (0, 1), got {trail2_pct}")
+        self.arm2_pct = arm2_pct
+        self.trail2_pct = trail2_pct
         self.arm_pct = arm_pct
         self.giveback_frac = giveback_frac
         self.trail_pct = trail_pct
@@ -113,21 +137,33 @@ class ProfitTrail(ExitRule):
         if self.giveback_frac is not None:
             gain = sign * (market.price - entry)
             return gain <= (1.0 - self.giveback_frac) * max_gain
-        return sign * (self._best - market.price) >= self.trail_pct * self._best
+        return sign * (self._best - market.price) >= self._width(max_gain / entry) * self._best
+
+    def _width(self, gain: float) -> float:
+        # Tech: the trail width at a max gain (fraction of entry): trail_pct,
+        #       or trail2_pct from arm2_pct on.
+        # Why:  max gain only ratchets, so the stage never switches back, and
+        #       it derives from best_price, so the state stays that one number.
+        if self.arm2_pct is not None and gain >= self.arm2_pct:
+            return self.trail2_pct
+        return self.trail_pct
 
 
 def profit_trail_from_knobs(
     arm_pct: Optional[float],
     trail_pct: Optional[float] = None,
     giveback_frac: Optional[float] = None,
+    arm2_pct: Optional[float] = None,
+    trail2_pct: Optional[float] = None,
 ) -> Optional[ProfitTrail]:
-    """Build the rule from a package's three ``tp_*`` knobs, or None when off."""
+    """Build the rule from a package's ``tp_*`` knobs, or None when off."""
     # Tech: no arm -> no rule; a give-back shape without an arm is refused.
     # Why:  every package declares the same three knobs and must turn them into
     #       the same rule the same way; a shape set without an arm would be
     #       silently inert, so the typo stops the run instead.
     if arm_pct is None:
-        if trail_pct is not None or giveback_frac is not None:
+        if any(v is not None for v in (trail_pct, giveback_frac, arm2_pct, trail2_pct)):
             raise ValueError("tp_trail_pct / tp_giveback_frac need tp_arm_pct")
         return None
-    return ProfitTrail(arm_pct, trail_pct=trail_pct, giveback_frac=giveback_frac)
+    return ProfitTrail(arm_pct, trail_pct=trail_pct, giveback_frac=giveback_frac,
+                       arm2_pct=arm2_pct, trail2_pct=trail2_pct)
