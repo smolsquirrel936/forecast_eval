@@ -32,7 +32,7 @@ that lets them compose with the shared percent stop.
 - **Their state survives a live roll.** The rules key their state on the entry's
   `(entry_bar_idx, entry_price, side)` and restart on a new one. A roll closes
   and re-opens the position, but the fullday [Trader](trader.md) carries the
-  original entry onto the roll's re-open (`candidate_fullday_iter34`). So the
+  original entry onto the roll's re-open (`9205bb7`, from `candidate_fullday_iter34`). So the
   lock keeps its best price and arming, as it does on the backtest's spliced
   tape. Any other new entry restarts the rules.
 - **`run.py` queries the rule only while a position is open** (Step 2), so the

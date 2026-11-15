@@ -47,7 +47,7 @@ aggression and sizing, and the fill bookkeeping that feeds `ExitRule` queries.
     each ladder rung burned one count.
   - **Clearing at the re-open covers both close paths,** including the scheduled
     close's venue fill, which arrives outside the hook.
-  - **The re-open keeps the original entry** (`candidate_fullday_iter34`).
+  - **The re-open keeps the original entry** (`9205bb7`, from `candidate_fullday_iter34`).
     An OPEN submitted inside the hook is marked as the roll's re-open. When it
     fills, on the closed position's side, the trader restores the closed
     position's entry price, bar and time instead of the fill's. So the

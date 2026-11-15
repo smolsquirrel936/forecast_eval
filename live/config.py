@@ -434,8 +434,9 @@ PINNED_FULLDAY = LiveConfig(
     source_commit=None,
     source_calmar=None,
     source_dataset=r"\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_fullday.csv",
-    # autoresearch_fullday_reversal_1026 was deleted 2026-11-15; its tip
-    # a17466a is on simtrade_0929.
+    # autoresearch_fullday_reversal_1026 and candidate_fullday_iter34 were
+    # deleted 2026-11-15; their commits are on simtrade_0929 (loop tip
+    # a17466a, merge 4104409).
     source_note=(
         "SIMTRADE_0929 since 2026-10-27: fullday_rev_iter34 "
         "(autoresearch_fullday_reversal_1026, via candidate_fullday_iter34); "

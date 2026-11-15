@@ -846,7 +846,8 @@ support for a second DAY+NIGHT deployment came from `main` (merges `8db3335`,
 (caution 19).
 
 **2026-10-26: live fullday adopts `fullday_rev_iter34`.**
-`candidate_fullday_iter34` was merged into `simtrade_0929` (user decision), and
+`candidate_fullday_iter34` was merged into `simtrade_0929` as `4104409` (user decision;
+the branch was deleted 2026-11-15), and
 fullday trades it from the 2026-10-27 restart.
 
 - **Config:** stride 10, `entry_min_prob` 0.60, stop 0.05, `lock_after_pct`

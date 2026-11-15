@@ -141,10 +141,11 @@ places orders on.** `live/config.py` holds only the provenance record.
 | `stop_cooldown_minutes` | **4320** (since 2026-11-08): after a stop-sized loss (≥ 98 % of `stop_pct`), an open on the same side waits 3 days of clock time; the other side opens freely |
 
 - **Source:** `autoresearch_fullday_reversal_1026` →
-  `candidate_fullday_iter34` (merged 2026-10-26). It is the loop's `iter34`;
+  `candidate_fullday_iter34` (merged 2026-10-26 as `4104409`). It is the loop's `iter34`;
   the loop's last kept run (`iter35`, cooldown 48) was not taken. Plan and
-  results: `../../autoresearch_trading_plan_fullday_reversal.md`, phase 2. The
-  loop branch was deleted 2026-11-15; its tip `a17466a` is on this branch.
+  results: `../../autoresearch_trading_plan_fullday_reversal.md`, phase 2. Both
+  branches were deleted 2026-11-15; their commits are on this branch (loop tip
+  `a17466a`, merge `4104409`).
 - **Score:** train-70 % Calmar **4.4463**, 181 trades, net +10 789, max
   drawdown −2 427 (the replaced config: 3.2466). Its reversal ride is 0.3614
   against 0.4065, so it gets off the wrong side of a reversal sooner.
