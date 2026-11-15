@@ -51,8 +51,8 @@ factory. This is the file a search for this session edits first.
 > **no Calmar carries into the loop as a bar to beat** (§6 Q4): `results_fullday.tsv`
 > starts empty and the loop's `iter01` sets the first best. Live no longer refuses `--config fullday`
 > (LIVE_STRATEGY_ROUTING_PLAN D1). The package was restored to this state on
-> 2026-09-14 after the fullday loop (iter00–05, archived at
-> `archive/fullday-toto2-iter05`).
+> 2026-09-14 after the fullday loop (iter00–05, tip at commit
+> `30f70d7`).
 
 ## Related
 [strategy/fullday/wiring.md](wiring.md) · [strategy/wiring.py](../wiring.md) · [strategy/base.py](../base.md) · [STRATEGY_SPLIT_PLAN.md](../../../STRATEGY_SPLIT_PLAN.md)

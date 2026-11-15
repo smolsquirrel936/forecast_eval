@@ -260,7 +260,8 @@ run per session. Output dirs: `outputs/reset_g3_{night,day}_<ts>/` (not `iterNN`
   not re-sync the venv.
 - **Phase 1.** Tags `archive/day-rsi-iter05` → `1c7901d`, `archive/night-rsi-iter09`
   → `c70bb38`, **`archive/pre-toto2-reset` → `f2b3251`** (not `1c7901d` as written:
-  `main` had moved to the docs commit that added this plan). Local only. 31 entries
+  `main` had moved to the docs commit that added this plan). Local only; all three tags
+  were deleted on 2026-11-15 and the commits stay reachable from `main`. 31 entries
   (`iter*_day_*`, `iter*_night_*` folders and logs) moved to
   `outputs/archive_rsi_2026-09/`, plus the three plan files under `plans/`.
 - **Phases 2–4.** As written. Index diff against `20767bb` for the four restored paths:
@@ -311,7 +312,8 @@ all of these, two new test files, and **one shared test**: `e773c23` rewrote
 **Execution record**
 
 - **F1 archive.** Tags `archive/fullday-toto2-iter05` → `30f70d7` (the loop's tip) and
-  `archive/pre-fullday-reset` → `90bff4c`, both local. `iter0{1..5}_fullday_*` (10 entries) and
+  `archive/pre-fullday-reset` → `90bff4c`, both local (deleted on 2026-11-15; the commits stay
+  reachable from `main`). `iter0{1..5}_fullday_*` (10 entries) and
   the four `fullday_band_sweep*` files moved to `outputs/archive_fullday_2026-09/`. Copies of
   `autoresearch_trading_plan_fullday.md` and the index went under `plans/`.
 - **F2–F4.** Branch `fullday_toto2_reset` from `main@90bff4c`. `strategy/fullday` and

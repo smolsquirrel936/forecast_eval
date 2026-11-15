@@ -596,7 +596,7 @@ Tests: **1537 passed, 1 failed, 2 skipped** (CRLF artifact).
 > The "FULLDAY trades iter05" bullet above is now history. `strategy/fullday/` is back
 > at `20767bb`, the same `ThresholdEmitter` + two-sided `Trader` + Toto2 code as day,
 > with day's inherited band (±0.001 / `min_prob` 0.65). `combine.py` and the long-only
-> trader are deleted; the loop is archived at `archive/fullday-toto2-iter05`. All three
+> trader are deleted; the loop's tip is commit `30f70d7`. All three
 > deployments now trade the same strategy code, differing only in band, gate and
 > session policy.
 
