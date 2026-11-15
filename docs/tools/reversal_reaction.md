@@ -47,6 +47,8 @@ Every call writes `reversal_<window>.json` into the run folder.
 | `fullday_pctstop_iter03` (stop 0.10) | 0.4084 | −0.0010 [−0.0031, +0.0000] |
 | `fullday_pctstop_adopt005` (stop 0.05, live) | 0.4065 | −0.0030 [−0.0121, +0.0087] |
 
+The four run folders were deleted on 2026-11-15, so these values cannot be recomputed.
+
 193 legs, 91 exposed at the turn, median reaction 38.2 session hours, 37 % ridden to the leg's end.
 
 ## Caveats

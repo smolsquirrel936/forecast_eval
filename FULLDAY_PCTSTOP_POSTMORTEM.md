@@ -5,6 +5,10 @@ Branch `autoresearch_fullday_pctstop_1012` (forked from `simtrade_0929` tip
 `results_fullday.tsv` iter01–iter04. Question: what `stop_pct` for the
 FULLDAY strategy minimizes the performance degradation of applying the stop?
 
+> Deleted 2026-11-15: the branch (its tip `d699954` is on `simtrade_0929`) and the run
+> folders `fullday_pctstop_iter01`–`04`, `fullday_pctstop_adopt_20261012_050652` and
+> `fullday_pctstop_adopt005_20261018_214145`. The numbers below are all that remain.
+
 Baseline: `fullday_split_iter07` — Calmar 2.8213, 134 trades, net +9809.6712,
 DD −3477.0220, **train 70 %** (split bar 1651591, boundary 2024-01-18 03:35,
 warmup 5000), forecaster `d7acdb22299f`. iter01 reproduced it to 4dp with
