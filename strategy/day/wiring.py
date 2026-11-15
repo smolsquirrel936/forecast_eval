@@ -77,8 +77,8 @@ PARAMS: Dict[str, Any] = {
     # trail second stage (exits/profit_trail.py): from a max gain of
     # tp_arm2_pct on, the width is tp_trail2_pct (narrower or wider). Both
     # None is the one-stage trail.
-    "tp_arm2_pct": None,
-    "tp_trail2_pct": None,
+    "tp_arm2_pct": 0.17,
+    "tp_trail2_pct": 0.015,
     # take-profit re-entry cooldown — DAY only (strategy/day/trader.py):
     # after a profitable exit-rule close, skip same-side opens for K
     # signals. 0 is off; it hurt every cell it was measured in
@@ -99,7 +99,23 @@ PARAMS: Dict[str, Any] = {
 #       is not adoptable (a --resume into a held lot needs best_price); since
 #       main aaa37f5 this package's Trader carries the entry across a roll,
 #       so the trail stays armed through it. An explicit ``--param
-#       tp_arm_pct=none --param tp_trail_pct=none`` turns it off.
+#       tp_arm_pct=none --param tp_trail_pct=none --param tp_arm2_pct=none
+#       --param tp_trail2_pct=none`` turns it off (the second stage alone
+#       needs an arm, so all four go).
+
+# Tech: the trail's second stage — from a max gain of 0.17 the width is
+#       0.015 instead of 0.02. ADOPTED on simtrade_0929 (2026-11-15, user
+#       decision); the rule is the shared exits/profit_trail.py (main 94ab15c).
+# Why:  autoresearch_day_tptrail2_1115 (TPTRAIL_TAPER_POSTMORTEM.md section 3,
+#       report tptrail_taper_report_20261115.html there). Of 12 cells (y
+#       0.16-0.18 x b 0.01-0.03) over six forecast schedules, only 0.17 /
+#       0.015 and its neighbour 0.18 / 0.015 met the rule set before the
+#       runs: no train loss (5/0, +81), held-out last 30% 4/6 (+239), whole
+#       history 5/6 (+321 mean, about 1% of net). It exits 1-6 trades per
+#       schedule that ran past +17% a little earlier. Small. State is still
+#       best_price alone (max gain derives from it), so --resume is unchanged.
+#       ``--param tp_arm2_pct=none --param tp_trail2_pct=none`` is the
+#       one-stage 0.15 / 0.02 trail.
 
 # Tech: the knob's tuned value — 0.10, ADOPTED on simtrade_0929 (2026-10-12).
 # Why:  day_pctstop_iter05 (ledger `results_day.tsv`, commit 6aaa7bb on

@@ -23,10 +23,13 @@ PACKAGES = ("day", "night", "fullday", "hybrid")
 # cases that exercise the position-level tp_* trail it excludes
 SESSION_OFF = dict(day_tp_arm_pct=None, day_tp_trail_pct=None,
                    night_tp_arm_pct=None, night_tp_trail_pct=None)
+# day's trail second stage, adopted on simtrade_0929 (2026-11-15): off, for the
+# cases that turn the arm off or exercise the one-stage trail
+STAGE_OFF = dict(tp_arm2_pct=None, tp_trail2_pct=None)
 
 
 def _session_off(pkg):
-    return SESSION_OFF if pkg == "hybrid" else {}
+    return {"hybrid": SESSION_OFF, "day": STAGE_OFF}.get(pkg, {})
 
 
 def _mkt(price, minutes=0, session="DAY"):

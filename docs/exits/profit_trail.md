@@ -42,8 +42,9 @@ the position's favour; then exactly one give-back shape decides the exit.
   reaches `arm2_pct` (> `arm_pct`). Max gain derives from `best_price`, so the
   state is unchanged. `trail2_pct` may be narrower or wider; a wider one lowers
   the stop at the switch. Only DAY declares the knobs (`tp_arm2_pct` /
-  `tp_trail2_pct`, None here); measured on `autoresearch_day_tptrail2_1115`
-  (`TPTRAIL_TAPER_POSTMORTEM.md` §3), where 0.17 / 0.015 passed.
+  `tp_trail2_pct`, None on main); measured on `autoresearch_day_tptrail2_1115`
+  (`TPTRAIL_TAPER_POSTMORTEM.md` §3), where 0.17 / 0.015 passed. ADOPTED on
+  simtrade_0929 (2026-11-15).
 
 ## Related
 [exits/any_of.md](any_of.md) · [exits/pct_stop.md](pct_stop.md) · [exits/base.md](base.md) · [run.md](../run.md) Step 2

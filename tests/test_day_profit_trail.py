@@ -28,18 +28,21 @@ def _mkt(price, minutes=0):
 # -------- wiring ---------------------------------------------------------------
 
 def test_wiring_default_is_the_adopted_trail():
-    # adopted 2026-11-11: arm 0.15 / trail 0.02 around the 0.10 stop
+    # adopted 2026-11-11: arm 0.15 / trail 0.02 around the 0.10 stop;
+    # second stage adopted 2026-11-15: from +17% the trail is 0.015
     s = make_strategy(warmup_bars=100)
     assert isinstance(s["exit_rule"], AnyOf)
     stop, trail = s["exit_rule"].rules
     assert type(stop) is EntryPercentStop and stop.stop_pct == 0.10
     assert isinstance(trail, ProfitTrail)
     assert (trail.arm_pct, trail.trail_pct, trail.giveback_frac) == (0.15, 0.02, None)
+    assert (trail.arm2_pct, trail.trail2_pct) == (0.17, 0.015)
     assert s["exit_rule"].restorable is True
 
 
 def test_wiring_control_is_the_bare_percent_stop():
-    s = make_strategy(warmup_bars=100, tp_arm_pct=None, tp_trail_pct=None)
+    s = make_strategy(warmup_bars=100, tp_arm_pct=None, tp_trail_pct=None,
+                      tp_arm2_pct=None, tp_trail2_pct=None)
     assert type(s["exit_rule"]) is EntryPercentStop
 
 
