@@ -133,7 +133,10 @@ appears in no file as such.
   since that bar may not be flushed yet.
 - **Decision funnel:** the band and `min_prob` stages are rebuilt from each
   forecast's `predicted_return` / `prob_up`. "Vetoed by trend/path" is what is
-  left once emitted signals are counted.
+  left once emitted signals are counted. A forecast with **no** `prob_up` (night's
+  price ridge) passes `min_prob`, as the emitter does: before `f60f7d8`
+  (2026-11-12) the page counted every such forecast as a `min_prob` failure, so
+  night read "56 failed min_prob, 0 vetoed" when the truth was 0 and 41.
 - **A routed deployment (hybrid) is banded per session** (since 2026-10-27): each
   forecast is judged by its own session's half (`day_`/`night_` knobs from the
   package's `PARAMS`), and the page shows both bands and gates. Like
