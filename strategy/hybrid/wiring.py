@@ -130,10 +130,17 @@ PARAMS: Dict[str, Any] = {
     "night_aggression_ticks": 0,
     "night_max_aggression_ticks": None,
     "night_stop_pct": 0.06,         # see day_stop_pct
-    # hybrid_split_iter09: the night half closes but never opens (its own
-    # entries measured -997.1 train points at iter08); --param night_allow_open=true
-    # restores the copied behavior
-    "night_allow_open": False,
+    # Tech: the night half opens from flat as well as closing (the copied trader
+    #       behavior), ADOPTED on simtrade_0929 2026-11-16 (user decision); stops
+    #       and take-profit trails stay as tuned above.
+    # Why:  hybrid_split_iter09 had set it False on one schedule, train only, at
+    #       iter08's settings (night entries -997.1). Re-tested over six forecast
+    #       schedules, 70/30 (HYBRID_NIGHTOPEN_TEST.md, branch
+    #       autoresearch_hybrid_nightopen_1116): Test net up on 5/6 (median 3656 ->
+    #       11460, night longs in the 2024-26 rally), but Train Calmar down on 4/6
+    #       (3.09 -> 2.19), drawdown deeper, and worse since 2026-08-21 on 6/6.
+    #       --param night_allow_open=false restores the closes-only half.
+    "night_allow_open": True,
 }
 
 # Tech: the per-session take-profit trail's tuned values — day arm 0.10 / trail

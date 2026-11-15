@@ -761,7 +761,7 @@ that branch only.
 | day | `day_split_iter02` (09-29) | band ±0.001, `min_prob` 0.65, stride 30, stop 0.10 |
 | night | `night_iter30` (10-05; launched as `night_iter10`) + price ridge (11-09) | ridge forecaster (horizon 1140, history 3421 bars), band ±0.00044, `min_prob` 0.6 (inert), two-sided, stride 15, stop 0.05 |
 | fullday | `fullday_rev_iter34` (10-27; launched as `fullday_split_iter07`) | band ±0.001, `min_prob` 0.50 / entry 0.60, stride 10, stop 0.05, lock 0.03, cooldown 16, stop cooldown 3 days (11-08) |
-| hybrid | `hybrid_split_iter22` (registered 10-27, **not yet started**) | day half ±0.0005 / 0.60, no opens 09:30–12:59; night half ±0.0007 / 0.50, closes only; stride 30, stop 0.05 day / 0.06 night (11-01), take-profit trail day 0.10 / 0.03, night 0.12 / 0.02 (11-12) |
+| hybrid | `hybrid_split_iter22` (registered 10-27, **not yet started**) | day half ±0.0005 / 0.60, no opens 09:30–12:59; night half ±0.0007 / 0.50, opens and closes (11-16; closes only before); stride 30, stop 0.05 day / 0.06 night (11-01), take-profit trail day 0.10 / 0.03, night 0.12 / 0.02 (11-12) |
 
 **2026-11-09: night's forecaster is the price ridge (user decision).** Toto2
 is replaced by `strategy/night/ridge.py` with frozen weights

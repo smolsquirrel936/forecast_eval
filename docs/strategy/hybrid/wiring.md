@@ -56,6 +56,11 @@ half's Forecaster, SignalEmitter, Trader and optional percent stop from its
   (`exit_state_hybrid.json` or `--exit-state`). `--param day_tp_arm_pct=none
   day_tp_trail_pct=none night_tp_arm_pct=none night_tp_trail_pct=none` restores
   the stops-only run.
+- **Night opens since 2026-11-16:** `night_allow_open` True, a user decision
+  from `HYBRID_NIGHTOPEN_TEST.md` (`autoresearch_hybrid_nightopen_1116`). Six
+  forecast schedules, 70/30: median test net 3656 → 11460 (up on 5/6), train
+  Calmar 3.09 → 2.19 (down on 4/6), drawdown deeper, worse since 2026-08-21 on
+  6/6. `--param night_allow_open=false` restores the closes-only half.
 - **Registered for live** (2026-10-27) as `PINNED_HYBRID` in `live/config.py`:
   named package `hybrid`, file slug `hybrid` (never fullday's `day_night`). Live
   builds from this same `make_strategy`.

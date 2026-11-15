@@ -223,7 +223,7 @@ half manages it (`strategy/hybrid/router.py`).
 |---|---|---|
 | band | buy +0.0005 / sell −0.0005 | buy +0.0007 / sell −0.0007 |
 | `min_prob` | 0.60 | 0.50 |
-| opens | **none 09:30–12:59** (`day_open_block_start` 9.5 / `_end` 13) | **never** (`night_allow_open` False): closes only |
+| opens | **none 09:30–12:59** (`day_open_block_start` 9.5 / `_end` 13) | **yes** (`night_allow_open` True, since 2026-11-16; closes only before) |
 | `stop_pct` | **0.05** (since 2026-11-01) | **0.06** (since 2026-11-01) |
 | take-profit trail (`*_tp_arm_pct` / `*_tp_trail_pct`) | **arm 0.10 / trail 0.03** (since 2026-11-12) | **arm 0.12 / trail 0.02** (since 2026-11-12) |
 | shared | stride 30, Toto2-1B (one copy, both halves), context 3008 | |
@@ -251,6 +251,14 @@ half manages it (`strategy/hybrid/router.py`).
   (was +16 429), MDD −2342 unchanged. Thin: 5 take-profits in 8.8 years, none
   since 2026-08-21 (no lot reached +1.98 %). Not adoptable: a `--resume` into a
   held lot needs `best_price`.
+- **Night opens (2026-11-16):** `night_allow_open` True, a user decision from
+  `HYBRID_NIGHTOPEN_TEST.md` (`autoresearch_hybrid_nightopen_1116`, report in
+  `outputs/hybrid_nightopen_1116/`). Re-tested over six forecast schedules, 70/30,
+  stops and trails unchanged: median test net 3 656 → 11 460 (up on 5/6, night
+  longs in the 2024–26 rally), train Calmar 3.09 → 2.19 (down on 4/6), drawdown
+  deeper, worse since 2026-08-21 on 6/6. A follow-up search for exits to go with
+  it (`HYBRID_NIGHTEXIT_STUDY.md`) found none that hold on test, so the exits stay.
+  `--param night_allow_open=false` restores the closes-only half.
 - **Live:** slug `hybrid` (its own ledger, bar cache and wire; never fullday's
   `day_night`). Registered by `4b82111` and the five commits before it on
   `main` (`autoresearch_trading_plan_hybrid_split07.md`, "Going live").

@@ -457,8 +457,8 @@ PINNED_FULLDAY = LiveConfig(
 #       `main` the package is Step 0 (the reset day and night settings,
 #       `eaaad1d`), untuned; a live branch that adopts a loop result restates
 #       `source_note`, as it does for the others. On simtrade_0929 the note
-#       names iter22 plus the two later adoptions, the stops (11-01) and the
-#       take-profit trail (11-12).
+#       names iter22 plus the three later adoptions, the stops (11-01), the
+#       take-profit trail (11-12) and night opens (11-16).
 PINNED_HYBRID = LiveConfig(
     source_commit=None,
     source_calmar=None,
@@ -476,7 +476,12 @@ PINNED_HYBRID = LiveConfig(
         "0.10 / trail 0.03, night arm 0.12 / trail 0.02 "
         "(HYBRID_TPTRAIL_POSTMORTEM, autoresearch_hybrid_tptrail_1111, iter219): "
         "train Calmar 11.9828, 88 trades, MDD -1157; held-out net +20333 vs "
-        "+16429, MDD -2342 unchanged; 6/6 forecast schedules on held-out"
+        "+16429, MDD -2342 unchanged; 6/6 forecast schedules on held-out. "
+        "Since 2026-11-16: night half opens as well as closes "
+        "(night_allow_open True; HYBRID_NIGHTOPEN_TEST, "
+        "autoresearch_hybrid_nightopen_1116, user decision): six schedules, "
+        "70/30, median test net 3656 -> 11460 (up 5/6), train Calmar 3.09 -> "
+        "2.19 (down 4/6), worse since 2026-08-21 on 6/6"
     ),
     policy=SessionPolicy.both(slug="hybrid"),
     package="hybrid",
