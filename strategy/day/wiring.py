@@ -74,6 +74,11 @@ PARAMS: Dict[str, Any] = {
     "tp_arm_pct": 0.15,
     "tp_giveback_frac": None,
     "tp_trail_pct": 0.02,
+    # trail second stage (exits/profit_trail.py): from a max gain of
+    # tp_arm2_pct on, the width is tp_trail2_pct (narrower or wider). Both
+    # None is the one-stage trail.
+    "tp_arm2_pct": None,
+    "tp_trail2_pct": None,
     # take-profit re-entry cooldown — DAY only (strategy/day/trader.py):
     # after a profitable exit-rule close, skip same-side opens for K
     # signals. 0 is off; it hurt every cell it was measured in
@@ -188,7 +193,8 @@ def make_strategy(
         EntryPercentStop(stop_pct=p["stop_pct"])
         if p["stop_pct"] is not None else None,
         profit_trail_from_knobs(p["tp_arm_pct"], p["tp_trail_pct"],
-                                p["tp_giveback_frac"]),
+                                p["tp_giveback_frac"], p["tp_arm2_pct"],
+                                p["tp_trail2_pct"]),
     ])
 
     return {

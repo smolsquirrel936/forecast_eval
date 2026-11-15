@@ -12,8 +12,8 @@ the position's favour; then exactly one give-back shape decides the exit.
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
-| `ProfitTrail(arm_pct, *, trail_pct=None, giveback_frac=None)` | class | arm at `arm_pct` in favour; then exit `trail_pct` off the best price, or when the open gain falls to `(1-giveback_frac)` of its max — exactly one shape |
-| `profit_trail_from_knobs(arm_pct, trail_pct, giveback_frac)` | function | the rule from a package's three `tp_*` knobs; None when `arm_pct` is None; refuses a shape without an arm |
+| `ProfitTrail(arm_pct, *, trail_pct=None, giveback_frac=None, arm2_pct=None, trail2_pct=None)` | class | arm at `arm_pct` in favour; then exit `trail_pct` off the best price, or when the open gain falls to `(1-giveback_frac)` of its max — exactly one shape; the percent trail may switch to `trail2_pct` from `arm2_pct` (below) |
+| `profit_trail_from_knobs(arm_pct, trail_pct, giveback_frac, arm2_pct=None, trail2_pct=None)` | function | the rule from a package's `tp_*` knobs; None when `arm_pct` is None; refuses a shape or stage without an arm |
 | `export_state()` / `restore_state(position, state)` | method | the one restorable number, `best_price` |
 
 ## Key points / gotchas
@@ -37,6 +37,13 @@ the position's favour; then exactly one give-back shape decides the exit.
   through it; one that does not restarts it at the new month.
 - **Never fires on the arming print** (price == best there), and the percent
   shape compares against `trail_pct * best`, a fraction of price, not points.
+- **Second stage (percent trail only).** With `arm2_pct` and `trail2_pct` set,
+  the width switches once from `trail_pct` to `trail2_pct` when the max gain
+  reaches `arm2_pct` (> `arm_pct`). Max gain derives from `best_price`, so the
+  state is unchanged. `trail2_pct` may be narrower or wider; a wider one lowers
+  the stop at the switch. Only DAY declares the knobs (`tp_arm2_pct` /
+  `tp_trail2_pct`, None here); measured on `autoresearch_day_tptrail2_1115`
+  (`TPTRAIL_TAPER_POSTMORTEM.md` §3), where 0.17 / 0.015 passed.
 
 ## Related
 [exits/any_of.md](any_of.md) · [exits/pct_stop.md](pct_stop.md) · [exits/base.md](base.md) · [run.md](../run.md) Step 2

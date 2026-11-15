@@ -76,6 +76,47 @@ def test_never_fires_on_the_arming_print():
     assert _run(ProfitTrail(0.05, giveback_frac=0.99), [105]) == [False]
 
 
+STEP = dict(trail_pct=0.04, arm2_pct=0.20)
+
+
+def test_step_narrower_after_the_second_arm():
+    # below gain 0.20 the width is 0.04: best 119 fires only at <= 114.24
+    assert _run(ProfitTrail(0.10, trail2_pct=0.01, **STEP), [110, 119, 118]) == [False, False, False]
+    # from gain 0.20 on it is 0.01: best 120 fires at <= 118.8
+    assert _run(ProfitTrail(0.10, trail2_pct=0.01, **STEP), [110, 120, 119, 118.7]) == [False, False, False, True]
+
+
+def test_step_wider_after_the_second_arm():
+    # trail2 0.08: best 120 fires at <= 110.4, not at the stage-1 level 115.2
+    rule = ProfitTrail(0.10, trail2_pct=0.08, **STEP)
+    assert _run(rule, [110, 120, 115, 111, 110.3]) == [False, False, False, False, True]
+
+
+def test_step_short_mirror():
+    # best 80 (gain 0.20) -> width 0.01: fires at >= 80.8
+    rule = ProfitTrail(0.10, trail2_pct=0.01, **STEP)
+    assert _run(rule, [90, 80, 80.5, 80.9], _pos("SHORT")) == [False, False, False, True]
+
+
+def test_step_restores_from_best_price_alone():
+    # a resumed rule with best 120 already sits in the second stage
+    rule = ProfitTrail(0.10, trail2_pct=0.01, **STEP)
+    rule.restore_state(_pos(), {"best_price": 120.0})
+    assert _run(rule, [119.0, 118.7]) == [False, True]
+
+
+@pytest.mark.parametrize("kw", [
+    dict(trail_pct=0.02, arm2_pct=0.20),
+    dict(trail_pct=0.02, trail2_pct=0.01),
+    dict(giveback_frac=0.5, arm2_pct=0.20, trail2_pct=0.01),
+    dict(trail_pct=0.02, arm2_pct=0.15, trail2_pct=0.01),
+    dict(trail_pct=0.02, arm2_pct=0.20, trail2_pct=0.0),
+])
+def test_step_invalid_arguments_rejected(kw):
+    with pytest.raises(ValueError):
+        ProfitTrail(0.15, **kw)
+
+
 def test_state_resets_on_a_new_entry():
     rule = ProfitTrail(0.05, giveback_frac=0.5)
     _run(rule, [110])                                  # armed on trade 1
@@ -120,6 +161,10 @@ def test_from_knobs():
         profit_trail_from_knobs(None, 0.02, None)
     with pytest.raises(ValueError, match="need tp_arm_pct"):
         profit_trail_from_knobs(None, None, 0.5)
+    with pytest.raises(ValueError, match="need tp_arm_pct"):
+        profit_trail_from_knobs(None, None, None, 0.17, 0.015)
+    rule = profit_trail_from_knobs(0.15, 0.02, None, 0.17, 0.015)
+    assert (rule.arm2_pct, rule.trail2_pct) == (0.17, 0.015)
 
 
 # -------- any_of / AnyOf -------------------------------------------------------
