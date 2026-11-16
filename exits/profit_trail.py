@@ -15,6 +15,12 @@ A wider b lowers the stop at the switch, the one case where it moves against
 the position. Measured on DAY (``autoresearch_day_tptrail2_1115``,
 ``TPTRAIL_TAPER_POSTMORTEM.md`` §3): 0.17 / 0.015 adopted 2026-11-15.
 
+Or the percent trail can taper (``trail_min_pct`` m, ``trail_span_pct`` s),
+exclusive with the switch: its width falls linearly from ``trail_pct`` at the
+arm to m at ``arm_pct + s`` of max gain, then stays at m — the stop tightens as
+the gain grows. Ported from ``autoresearch_day_tptrail2_1115`` (``e610496``)
+for NIGHT's search (``autoresearch_night_tptrail_1116``).
+
 Why an arm: DAY's day_trail loop (2026-10-11) killed every pure trail armed
 from the entry fill — it fires at V-bottoms on trades that never earned
 anything. A trade that never reaches ``arm_pct`` can never fire this rule.
@@ -58,6 +64,8 @@ class ProfitTrail(ExitRule):
         trail_pct: Optional[float] = None,
         arm2_pct: Optional[float] = None,
         trail2_pct: Optional[float] = None,
+        trail_min_pct: Optional[float] = None,
+        trail_span_pct: Optional[float] = None,
     ):
         # Tech: require a fractional arm level and exactly one give-back shape,
         #       itself a fraction in (0, 1).
@@ -85,6 +93,26 @@ class ProfitTrail(ExitRule):
                 raise ValueError(f"arm2_pct must be in (arm_pct, 1), got {arm2_pct}")
             if not 0.0 < trail2_pct < 1.0:
                 raise ValueError(f"trail2_pct must be in (0, 1), got {trail2_pct}")
+        # Tech: the taper takes both of its knobs or neither, needs the percent
+        #       trail, excludes the second stage, and may only narrow the
+        #       width: 0 < trail_min_pct < trail_pct, trail_span_pct > 0.
+        # Why:  half a taper has no defined slope; a floor at or above the
+        #       starting width is the fixed trail under another label; a taper
+        #       and a switch together would give a cell two width schedules.
+        if (trail_min_pct is None) != (trail_span_pct is None):
+            raise ValueError("set both or neither of trail_min_pct / trail_span_pct")
+        if trail_min_pct is not None:
+            if trail_pct is None:
+                raise ValueError("trail_min_pct / trail_span_pct need trail_pct")
+            if arm2_pct is not None:
+                raise ValueError("set the taper or the second stage, not both")
+            if not 0.0 < trail_min_pct < trail_pct:
+                raise ValueError(
+                    f"trail_min_pct must be in (0, trail_pct), got {trail_min_pct}")
+            if not trail_span_pct > 0.0:
+                raise ValueError(f"trail_span_pct must be > 0, got {trail_span_pct}")
+        self.trail_min_pct = trail_min_pct
+        self.trail_span_pct = trail_span_pct
         self.arm2_pct = arm2_pct
         self.trail2_pct = trail2_pct
         self.arm_pct = arm_pct
@@ -141,11 +169,17 @@ class ProfitTrail(ExitRule):
 
     def _width(self, gain: float) -> float:
         # Tech: the trail width at a max gain (fraction of entry): trail_pct,
-        #       or trail2_pct from arm2_pct on.
-        # Why:  max gain only ratchets, so the stage never switches back, and
-        #       it derives from best_price, so the state stays that one number.
+        #       trail2_pct from arm2_pct on, or the linear taper clamped at
+        #       trail_min_pct.
+        # Why:  max gain only ratchets, so the stage never switches back and the
+        #       taper only narrows, and it derives from best_price, so the state
+        #       stays that one number.
         if self.arm2_pct is not None and gain >= self.arm2_pct:
             return self.trail2_pct
+        if self.trail_min_pct is not None:
+            slope = (self.trail_pct - self.trail_min_pct) / self.trail_span_pct
+            return max(self.trail_min_pct,
+                       self.trail_pct - slope * (gain - self.arm_pct))
         return self.trail_pct
 
 
@@ -155,6 +189,8 @@ def profit_trail_from_knobs(
     giveback_frac: Optional[float] = None,
     arm2_pct: Optional[float] = None,
     trail2_pct: Optional[float] = None,
+    trail_min_pct: Optional[float] = None,
+    trail_span_pct: Optional[float] = None,
 ) -> Optional[ProfitTrail]:
     """Build the rule from a package's ``tp_*`` knobs, or None when off."""
     # Tech: no arm -> no rule; a give-back shape without an arm is refused.
@@ -162,8 +198,10 @@ def profit_trail_from_knobs(
     #       the same rule the same way; a shape set without an arm would be
     #       silently inert, so the typo stops the run instead.
     if arm_pct is None:
-        if any(v is not None for v in (trail_pct, giveback_frac, arm2_pct, trail2_pct)):
+        if any(v is not None for v in (trail_pct, giveback_frac, arm2_pct, trail2_pct,
+                                       trail_min_pct, trail_span_pct)):
             raise ValueError("tp_trail_pct / tp_giveback_frac need tp_arm_pct")
         return None
     return ProfitTrail(arm_pct, trail_pct=trail_pct, giveback_frac=giveback_frac,
-                       arm2_pct=arm2_pct, trail2_pct=trail2_pct)
+                       arm2_pct=arm2_pct, trail2_pct=trail2_pct,
+                       trail_min_pct=trail_min_pct, trail_span_pct=trail_span_pct)

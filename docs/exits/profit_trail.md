@@ -12,8 +12,8 @@ the position's favour; then exactly one give-back shape decides the exit.
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
-| `ProfitTrail(arm_pct, *, trail_pct=None, giveback_frac=None, arm2_pct=None, trail2_pct=None)` | class | arm at `arm_pct` in favour; then exit `trail_pct` off the best price, or when the open gain falls to `(1-giveback_frac)` of its max — exactly one shape; the percent trail may switch to `trail2_pct` from `arm2_pct` (below) |
-| `profit_trail_from_knobs(arm_pct, trail_pct, giveback_frac, arm2_pct=None, trail2_pct=None)` | function | the rule from a package's `tp_*` knobs; None when `arm_pct` is None; refuses a shape or stage without an arm |
+| `ProfitTrail(arm_pct, *, trail_pct=None, giveback_frac=None, arm2_pct=None, trail2_pct=None, trail_min_pct=None, trail_span_pct=None)` | class | arm at `arm_pct` in favour; then exit `trail_pct` off the best price, or when the open gain falls to `(1-giveback_frac)` of its max — exactly one shape; the percent trail may switch to `trail2_pct` from `arm2_pct`, or taper (below) |
+| `profit_trail_from_knobs(arm_pct, trail_pct, giveback_frac, arm2_pct=None, trail2_pct=None, trail_min_pct=None, trail_span_pct=None)` | function | the rule from a package's `tp_*` knobs; None when `arm_pct` is None; refuses a shape, stage or taper without an arm |
 | `export_state()` / `restore_state(position, state)` | method | the one restorable number, `best_price` |
 
 ## Key points / gotchas
@@ -45,6 +45,14 @@ the position's favour; then exactly one give-back shape decides the exit.
   `tp_trail2_pct`, None on main); measured on `autoresearch_day_tptrail2_1115`
   (`TPTRAIL_TAPER_POSTMORTEM.md` §3), where 0.17 / 0.015 passed. ADOPTED on
   simtrade_0929 (2026-11-15).
+- **Taper (test branch `autoresearch_night_tptrail_1116` only), exclusive with
+  the second stage.** With `trail_min_pct` and `trail_span_pct` set, the
+  percent trail's width falls linearly from `trail_pct` at the arm to
+  `trail_min_pct` at `arm_pct + trail_span_pct` of max gain, then stays there.
+  Max gain only ratchets, so the stop never loosens and the state is still just
+  `best_price`. Only NIGHT declares the knobs (`tp_trail_min_pct` /
+  `tp_trail_span`, off). Ported from `autoresearch_day_tptrail2_1115`
+  (`e610496`), where it was not adopted.
 
 ## Related
 [exits/any_of.md](any_of.md) · [exits/pct_stop.md](pct_stop.md) · [exits/base.md](base.md) · [run.md](../run.md) Step 2

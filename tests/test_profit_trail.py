@@ -120,6 +120,51 @@ def test_step_invalid_arguments_rejected(kw):
         ProfitTrail(0.15, **kw)
 
 
+TAPER = dict(trail_pct=0.04, trail_min_pct=0.01, trail_span_pct=0.10)
+
+
+def test_taper_reaches_the_floor():
+    # gain 0.20 = arm + span -> width 0.01: best 120 fires at <= 118.8;
+    # the fixed 0.04 trail would wait for 115.2
+    assert _run(ProfitTrail(0.10, **TAPER), [110, 120, 119, 118.7]) == [False, False, False, True]
+    assert _run(ProfitTrail(0.10, trail_pct=0.04), [110, 120, 119, 118.7]) == [False] * 4
+
+
+def test_taper_mid_slope():
+    # gain 0.15 -> width 0.04 - 0.3 * 0.05 = 0.025: best 115 fires at <= 112.125
+    assert _run(ProfitTrail(0.10, **TAPER), [115, 112.2, 112.0]) == [False, False, True]
+
+
+def test_taper_short_mirror():
+    # best 80 (gain 0.20) -> width 0.01: fires at >= 80.8
+    rule = ProfitTrail(0.10, **TAPER)
+    assert _run(rule, [90, 80, 80.5, 80.9], _pos("SHORT")) == [False, False, False, True]
+
+
+@pytest.mark.parametrize("kw", [
+    dict(trail_pct=0.02, trail_min_pct=0.01),
+    dict(trail_pct=0.02, trail_span_pct=0.1),
+    dict(giveback_frac=0.5, trail_min_pct=0.01, trail_span_pct=0.1),
+    dict(trail_pct=0.02, trail_min_pct=0.02, trail_span_pct=0.1),
+    dict(trail_pct=0.02, trail_min_pct=0.01, trail_span_pct=0.0),
+    dict(trail_pct=0.02, trail_min_pct=0.01, trail_span_pct=0.1, arm2_pct=0.20, trail2_pct=0.01),
+])
+def test_taper_invalid_arguments_rejected(kw):
+    with pytest.raises(ValueError):
+        ProfitTrail(0.15, **kw)
+
+
+def test_night_taper_knobs_reach_the_rule():
+    w = _wiring("night")
+    assert (w.PARAMS["tp_trail_min_pct"], w.PARAMS["tp_trail_span"]) == (None, None)
+    rule = w.make_strategy(warmup_bars=10, tp_arm_pct=0.07, tp_trail_pct=0.04,
+                           tp_trail_min_pct=0.02, tp_trail_span=0.10)["exit_rule"]
+    trail = rule.rules[1]
+    assert (trail.trail_pct, trail.trail_min_pct, trail.trail_span_pct) == (0.04, 0.02, 0.10)
+    with pytest.raises(ValueError, match="need tp_arm_pct"):
+        w.make_strategy(warmup_bars=10, tp_trail_min_pct=0.02, tp_trail_span=0.10)
+
+
 def test_state_resets_on_a_new_entry():
     rule = ProfitTrail(0.05, giveback_frac=0.5)
     _run(rule, [110])                                  # armed on trade 1

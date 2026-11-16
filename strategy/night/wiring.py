@@ -81,6 +81,11 @@ PARAMS: Dict[str, Any] = {
     "tp_arm_pct": None,
     "tp_giveback_frac": None,
     "tp_trail_pct": None,
+    # trail taper (autoresearch_night_tptrail_1116): the width falls linearly
+    # from tp_trail_pct at the arm to tp_trail_min_pct at tp_arm_pct +
+    # tp_trail_span of max gain. Both None is the fixed trail.
+    "tp_trail_min_pct": None,
+    "tp_trail_span": None,
 }
 
 # Tech: the knob's tuned value — 0.05, ADOPTED on simtrade_0929 (2026-10-18).
@@ -187,7 +192,9 @@ def make_strategy(
         EntryPercentStop(stop_pct=p["stop_pct"])
         if p["stop_pct"] is not None else None,
         profit_trail_from_knobs(p["tp_arm_pct"], p["tp_trail_pct"],
-                                p["tp_giveback_frac"]),
+                                p["tp_giveback_frac"],
+                                trail_min_pct=p["tp_trail_min_pct"],
+                                trail_span_pct=p["tp_trail_span"]),
     ])
 
     return {
