@@ -19,7 +19,8 @@ Or the percent trail can taper (``trail_min_pct`` m, ``trail_span_pct`` s),
 exclusive with the switch: its width falls linearly from ``trail_pct`` at the
 arm to m at ``arm_pct + s`` of max gain, then stays at m — the stop tightens as
 the gain grows. Ported from ``autoresearch_day_tptrail2_1115`` (``e610496``)
-for NIGHT's search (``autoresearch_night_tptrail_1116``).
+for NIGHT's search (``autoresearch_night_tptrail_1116``); adopted for NIGHT on
+simtrade_0929 2026-11-16 (arm 0.07 / trail 0.04 / floor 0.032 / span 0.10).
 
 Why an arm: DAY's day_trail loop (2026-10-11) killed every pure trail armed
 from the entry fill — it fires at V-bottoms on trades that never earned

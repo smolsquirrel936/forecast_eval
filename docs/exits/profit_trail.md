@@ -45,14 +45,16 @@ the position's favour; then exactly one give-back shape decides the exit.
   `tp_trail2_pct`, None on main); measured on `autoresearch_day_tptrail2_1115`
   (`TPTRAIL_TAPER_POSTMORTEM.md` §3), where 0.17 / 0.015 passed. ADOPTED on
   simtrade_0929 (2026-11-15).
-- **Taper (test branch `autoresearch_night_tptrail_1116` only), exclusive with
-  the second stage.** With `trail_min_pct` and `trail_span_pct` set, the
-  percent trail's width falls linearly from `trail_pct` at the arm to
-  `trail_min_pct` at `arm_pct + trail_span_pct` of max gain, then stays there.
-  Max gain only ratchets, so the stop never loosens and the state is still just
+- **Taper (on `simtrade_0929` only, not on `main`), exclusive with the second
+  stage.** With `trail_min_pct` and `trail_span_pct` set, the percent trail's
+  width falls linearly from `trail_pct` at the arm to `trail_min_pct` at
+  `arm_pct + trail_span_pct` of max gain, then stays there. Max gain only
+  ratchets, so the stop never loosens and the state is still just
   `best_price`. Only NIGHT declares the knobs (`tp_trail_min_pct` /
-  `tp_trail_span`, off). Ported from `autoresearch_day_tptrail2_1115`
-  (`e610496`), where it was not adopted.
+  `tp_trail_span`). Ported from `autoresearch_day_tptrail2_1115` (`e610496`),
+  where it was not adopted; measured on `autoresearch_night_tptrail_1116`
+  (`NIGHT_TPTRAIL_POSTMORTEM.md`). ADOPTED for night on simtrade_0929
+  (2026-11-16): arm 0.07 / trail 0.04, floor 0.032 over a span of 0.10.
 
 ## Related
 [exits/any_of.md](any_of.md) · [exits/pct_stop.md](pct_stop.md) · [exits/base.md](base.md) · [run.md](../run.md) Step 2

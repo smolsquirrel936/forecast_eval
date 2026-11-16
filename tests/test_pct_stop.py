@@ -53,8 +53,9 @@ def _percent_stop_within(rule):
     #       stop_pct builds THE shared EntryPercentStop at exactly that width —
     #       survives composition; this recovers the nested rule so the same
     #       assertion holds. Day composes too since its take-profit trail was
-    #       adopted (2026-11-11, TPTRAIL_POSTMORTEM.md); night never composes,
-    #       so only the fullday and day parametrizations call this (see TestWiring).
+    #       adopted (2026-11-11, TPTRAIL_POSTMORTEM.md), and night since its
+    #       tapered trail was adopted (2026-11-16, NIGHT_TPTRAIL_POSTMORTEM.md
+    #       on autoresearch_night_tptrail_1116); see TestWiring.
     if isinstance(rule, EntryPercentStop):
         return rule
     for inner in getattr(rule, "rules", ()):
@@ -148,9 +149,9 @@ class TestWiring:
             assert strat["exit_rule"] is None
         else:
             rule = strat["exit_rule"]
-            if session in ("fullday", "day"):
-                # freeze-line exception: fullday and day compose (see
-                # _percent_stop_within); night keeps the bare-rule shape.
+            if session in ("fullday", "day", "night"):
+                # freeze-line exception: fullday, day and night (take-profit
+                # trail adopted 2026-11-16) compose (see _percent_stop_within).
                 rule = _percent_stop_within(rule)
             assert isinstance(rule, EntryPercentStop)
             assert rule.stop_pct == declared
@@ -162,8 +163,8 @@ class TestWiring:
         w = _wiring(session)
         strat = w.make_strategy(warmup_bars=10, stop_pct=0.03)
         rule = strat["exit_rule"]
-        if session in ("fullday", "day"):
-            # freeze-line exception: fullday and day compose their kept
+        if session in ("fullday", "day", "night"):
+            # freeze-line exception: fullday, day and night compose their kept
             # protection rules around the stop (see _percent_stop_within); the shared
             # rule is still built, at the declared width.
             rule = _percent_stop_within(rule)

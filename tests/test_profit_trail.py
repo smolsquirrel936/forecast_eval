@@ -26,10 +26,13 @@ SESSION_OFF = dict(day_tp_arm_pct=None, day_tp_trail_pct=None,
 # day's trail second stage, adopted on simtrade_0929 (2026-11-15): off, for the
 # cases that turn the arm off or exercise the one-stage trail
 STAGE_OFF = dict(tp_arm2_pct=None, tp_trail2_pct=None)
+# night's trail taper, adopted on simtrade_0929 (2026-11-16): off, for the
+# cases that turn the arm off or exercise the one-stage trail
+TAPER_OFF = dict(tp_trail_min_pct=None, tp_trail_span=None)
 
 
 def _session_off(pkg):
-    return {"hybrid": SESSION_OFF, "day": STAGE_OFF}.get(pkg, {})
+    return {"hybrid": SESSION_OFF, "day": STAGE_OFF, "night": TAPER_OFF}.get(pkg, {})
 
 
 def _mkt(price, minutes=0, session="DAY"):
@@ -154,15 +157,27 @@ def test_taper_invalid_arguments_rejected(kw):
         ProfitTrail(0.15, **kw)
 
 
+def test_night_default_is_the_adopted_tapered_trail():
+    # adopted on simtrade_0929 2026-11-16: arm 0.07 / trail 0.04, tapering to
+    # 0.032 at +17% max gain, beside the 0.05 stop
+    w = _wiring("night")
+    rule = w.make_strategy(warmup_bars=10)["exit_rule"]
+    stop, trail = rule.rules
+    assert isinstance(stop, EntryPercentStop) and stop.stop_pct == 0.05
+    assert (trail.arm_pct, trail.trail_pct, trail.giveback_frac) == (0.07, 0.04, None)
+    assert (trail.trail_min_pct, trail.trail_span_pct) == (0.032, 0.10)
+    assert rule.restorable is True and rule.state_keys == ("best_price",)
+
+
 def test_night_taper_knobs_reach_the_rule():
     w = _wiring("night")
-    assert (w.PARAMS["tp_trail_min_pct"], w.PARAMS["tp_trail_span"]) == (None, None)
     rule = w.make_strategy(warmup_bars=10, tp_arm_pct=0.07, tp_trail_pct=0.04,
                            tp_trail_min_pct=0.02, tp_trail_span=0.10)["exit_rule"]
     trail = rule.rules[1]
     assert (trail.trail_pct, trail.trail_min_pct, trail.trail_span_pct) == (0.04, 0.02, 0.10)
     with pytest.raises(ValueError, match="need tp_arm_pct"):
-        w.make_strategy(warmup_bars=10, tp_trail_min_pct=0.02, tp_trail_span=0.10)
+        w.make_strategy(warmup_bars=10, tp_arm_pct=None, tp_trail_pct=None,
+                        tp_trail_min_pct=0.02, tp_trail_span=0.10)
 
 
 def test_state_resets_on_a_new_entry():

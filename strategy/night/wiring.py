@@ -78,14 +78,14 @@ PARAMS: Dict[str, Any] = {
     # the entry in the position's favour; then EITHER tp_trail_pct (exit y off
     # the best price) OR tp_giveback_frac (exit when the open gain falls to
     # 1-f of its maximum). All None is off: no rule is built.
-    "tp_arm_pct": None,
+    "tp_arm_pct": 0.07,
     "tp_giveback_frac": None,
-    "tp_trail_pct": None,
+    "tp_trail_pct": 0.04,
     # trail taper (autoresearch_night_tptrail_1116): the width falls linearly
     # from tp_trail_pct at the arm to tp_trail_min_pct at tp_arm_pct +
     # tp_trail_span of max gain. Both None is the fixed trail.
-    "tp_trail_min_pct": None,
-    "tp_trail_span": None,
+    "tp_trail_min_pct": 0.032,
+    "tp_trail_span": 0.10,
 }
 
 # Tech: the knob's tuned value — 0.05, ADOPTED on simtrade_0929 (2026-10-18).
@@ -100,6 +100,21 @@ PARAMS: Dict[str, Any] = {
 #       widened DD to -5083. In-sample: night's settings were tuned on this
 #       same window (no held-out tail). User decision 2026-10-18. An
 #       explicit ``--param stop_pct=...`` still overrides it.
+
+# Tech: the take-profit trail's tuned values — arm 0.07 / trail 0.04, tapering
+#       to 0.032 at +17% max gain (span 0.10), ADOPTED on simtrade_0929
+#       (2026-11-16), composed with the 0.05 stop through any_of.
+# Why:  autoresearch_night_tptrail_1116 (NIGHT_TPTRAIL_POSTMORTEM.md), 15
+#       schedules, Train 70 / Test 30, vs no trail: arm 0.07 / trail 0.04
+#       passes all seven pass rules compared there (whole +2497 mean, +835
+#       without the 2025-04-07 week, Train +264, Test DD -13256 -> -12261);
+#       the taper adds +192 more (13/15) from exits moved minutes to hours
+#       earlier. Most of the gain is the 2025-04-07 short, shared by every
+#       schedule. User decision 2026-11-16. The rule is restorable, not
+#       adoptable: a held lot at restart needs best_price (--exit-state or
+#       exit_state_night.json). ``--param tp_arm_pct=none --param
+#       tp_trail_pct=none --param tp_trail_min_pct=none --param
+#       tp_trail_span=none`` turns it off.
 
 # Tech: the emitter knobs deliberately absent from PARAMS — `short_window`,
 #       `min_trend_ticks`, `path_momentum`, `trend_filter`.

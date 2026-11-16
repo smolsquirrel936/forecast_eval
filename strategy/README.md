@@ -369,6 +369,9 @@ half manages it (`strategy/hybrid/router.py`).
       account's net, which can be 0 while fullday holds (10-29: day −1, fullday
       +1).
     - **Day and night are unaffected:** their percent stops resume as before.
+      Night's take-profit trail (since 2026-11-16) is the exception: like the
+      lock, it resumes a held lot only with its best price, from
+      `outputs/exit_state_night.json` or `--exit-state best_price=<price>`.
 17. **A weekday market holiday can halt a running deployment.**
     `SessionPolicy.holidays` is empty, so a holiday's session reads as open.
     Once a deployment has seen ticks, 900 s of holiday silence halts it with
