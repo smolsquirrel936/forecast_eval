@@ -63,7 +63,17 @@ places orders on.** `live/config.py` holds only the provenance record.
 | `stride_bars` | **15** |
 | sides | long and short |
 | `stop_pct` | **0.05** (since 2026-10-18, `bb7a602`) |
+| take-profit trail | arm **0.07** / trail **0.04**, tapering to **0.032** at +17 % max gain (`tp_trail_min_pct` 0.032, `tp_trail_span` 0.10), since 2026-11-16 |
 
+- **Tapered take-profit trail, adopted 2026-11-16 (user decision, `bb52957`).**
+  Measured on branch `autoresearch_night_tptrail_1116`
+  (`NIGHT_TPTRAIL_POSTMORTEM.md`, `night_tptrail_report_20261116.html`): 15
+  schedules, Train 70 / Test 30, vs no trail. Arm 0.07 / trail 0.04 adds
+  +2 497 whole-history on average (+835 without the 2025-04-07 week; Train
+  +264) and passes all seven pass rules compared there; the taper adds +192
+  more. Most of the gain is the 2025-04-07 short, which every schedule trades.
+  The taper code (`exits/profit_trail.py`) was cherry-picked here without a
+  merge (`0d8c0f5`); `main` does not have it.
 - **Price ridge, adopted 2026-11-09 (user decision).** Built and measured on
   branch `strategy_test_1108_ridge` (`f0c74e9`, deleted 2026-11-15); `ridge.py` is that branch's
   file. It predicts the next 1140 night bars' log return from the tape's own
