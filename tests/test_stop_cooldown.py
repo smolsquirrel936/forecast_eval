@@ -84,10 +84,12 @@ def _wired(**kw):
 
 
 def test_wiring_adopted_value_and_loss_from_stop_pct():
-    assert wiring.PARAMS["stop_cooldown_minutes"] == 4320  # adopted 2026-11-08
-    tr = _wired()
+    # 4320 was adopted 2026-11-08; the iter14 port (2026-11-19) set it and
+    # stop_pct to their controls, so the iter34 values are passed explicitly.
+    assert wiring.PARAMS["stop_cooldown_minutes"] == 0
+    tr = _wired(stop_pct=0.05, stop_cooldown_minutes=4320)
     assert tr.stop_cooldown_minutes == 4320
-    assert tr.stop_cooldown_loss == pytest.approx(0.98 * wiring.PARAMS["stop_pct"])
+    assert tr.stop_cooldown_loss == pytest.approx(0.98 * 0.05)
     assert _wired(stop_cooldown_minutes=0).stop_cooldown_minutes == 0  # the control is reachable
 
 

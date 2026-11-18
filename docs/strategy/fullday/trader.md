@@ -73,5 +73,40 @@ aggression and sizing, and the fill bookkeeping that feeds `ExitRule` queries.
   unsound rather than merely risky, which is why the live rails refuse it at
   start-up.
 
+## Knobs: `entry_passive_ticks`, `entry_rest_forecasts` (fullday_split_iter03 / iter08 / iter10)
+
+Ported from `autoresearch_split_0.7_fullday_b` on 2026-11-19; `PARAMS` sets
+them to **1** and **3** (iter14). The class defaults (`None`) are off.
+
+`N` rests the **entry** limit N ticks beyond the placement price — BUY below
+the touch, SELL above it — so `Execution`'s passive branch applies (SPEC §4.5:
+a strict cross is required, the fill is at the limit, no price improvement).
+
+Why: the timestral research report measured the gated 5-minute fade's edge at
+the signal bar's close, while a marketable entry fills at the post-bounce
+next print (~10% capture, `fee_drag` 8.26 at band 0.002). A resting limit
+into the move's extension fills only when the move extends — the subset
+where `corr(prior move, first-bar) = -0.667` says the snapback is strongest
+— and at a better price than the touch.
+
+- **Entries only.** Closes (`on_signal` opposing side) and `submit_exit`
+  keep `aggression_ticks`: a close is risk-reducing and must fill reliably.
+- The confidence ramp (`max_aggression_ticks`) does not apply while passive
+  is set — passive is passive.
+- `entry_rest_forecasts` K lets a resting passive OPEN survive K HOLD
+  forecasts before §4.4's cancel reclaims it (a real BUY/SELL always
+  replaces it). The iter08–iter10 ladder found a drawdown cliff at 4.
+- **A roll's re-open** (`rolling()`) is placed marketable, not passive, and
+  arms no rest budget: it restores exposure and must fill.
+
+## Knob: `night_only_open` (fullday_split_iter14)
+
+`True` (`PARAMS`, since the 2026-11-19 port) gates flat-position **opens** to
+the NIGHT session (`market.session`); closes and exits are never gated. Why:
+the timestral fade is a night-liquidity phenomenon (97% of the report's
+signal mass; iter10's train book measured day opens at 20 trades / −255.9
+pts against night's +50.7/trade). **A roll's re-open bypasses the gate**:
+fullday rolls at 12:45, inside the DAY session.
+
 ## Related
 [strategy/fullday/wiring.md](wiring.md) · [strategy/wiring.py](../wiring.md) · [strategy/base.py](../base.md) · [STRATEGY_SPLIT_PLAN.md](../../../STRATEGY_SPLIT_PLAN.md)

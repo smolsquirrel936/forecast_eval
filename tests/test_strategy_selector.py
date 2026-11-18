@@ -145,7 +145,8 @@ def test_an_explicit_flag_beats_the_strategy_at_its_own_default_value():
 
 def test_fullday_band_is_its_own_values_and_names_its_split_source():
     # Tech: full-day's band and probability gate are pinned to their own literal
-    #       values (fullday_split_iter07), and its docstring names that source.
+    #       values (fullday_split_iter14 since 2026-11-19; fullday_split_iter07
+    #       before), and its docstring names that source.
     # Why:  §5/D5 — the docstring is what stops these values being read as
     #       whole-data provenance. If someone retunes full-day and forgets the
     #       docstring, this fails and asks for it (SIMTRADE_0929).
@@ -155,12 +156,12 @@ def test_fullday_band_is_its_own_values_and_names_its_split_source():
     p = wiring.params("fullday")
     assert p["buy_threshold"] == 0.001
     assert p["sell_threshold"] == -0.001
-    assert p["min_prob"] == 0.50
-    assert p["stride_bars"] == 10
+    assert p["min_prob"] == 0.65
+    assert p["stride_bars"] == 5
     doc = __import__(
         "forecast_eval.strategy.fullday.wiring", fromlist=["wiring"]
     ).__doc__
-    assert "fullday_split_iter07" in doc
+    assert "fullday_split_iter14" in doc
 
 
 def test_an_unknown_strategy_raises():

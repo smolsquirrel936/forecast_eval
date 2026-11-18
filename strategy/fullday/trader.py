@@ -29,6 +29,14 @@ makes on a roll's behalf. Inside it, an OPEN from flat bypasses the cooldown and
 clears it, so a roll's re-open is never mistaken for a same-side re-entry. The
 backtest never enters the hook (its spliced tape has no rolls), so every
 recorded run is unchanged.
+
+DIVERGED (``fullday_split_iter03`` / ``iter08`` / ``iter14``, branch
+``autoresearch_split_0.7_fullday_b``; ported to simtrade_0929 2026-11-19):
+passive fade entries (``entry_passive_ticks``), a rest budget that lets a
+resting passive OPEN survive HOLD forecasts (``entry_rest_forecasts``), and
+night-only opens (``night_only_open``). All three default off, so a Trader
+built without them is unchanged. A roll leg (``rolling()``) bypasses all
+three: a roll's re-open restores exposure and must fill whatever the session.
 """
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -55,6 +63,9 @@ class Trader:
         reentry_cooldown_signals: int = 0,
         stop_cooldown_minutes: int = 0,
         stop_cooldown_loss: Optional[float] = None,
+        entry_passive_ticks: Optional[int] = None,
+        entry_rest_forecasts: Optional[int] = None,
+        night_only_open: bool = False,
     ):
         # Tech: hold the execution handle and order-placement parameters, and
         #       initialize position/entry tracking to flat.
@@ -132,6 +143,43 @@ class Trader:
         self.stop_cooldown_loss = stop_cooldown_loss
         self._stop_block_side: int = 0      # +1 blocked BUYs, -1 blocked SELLs
         self._stop_block_until: Optional[datetime] = None
+        # Tech: entry_passive_ticks (optional) places ENTRY limits on the passive
+        #       side instead — N ticks beyond the placement price (BUY below,
+        #       SELL above), where the fill model demands a strict cross and
+        #       grants no price improvement (SPEC §4.5).
+        # Why:  the 2026-11-17 timestral research report's execution physics — the
+        #       gated 5-minute fade's at-close edge is a first-minute latency
+        #       effect, and a marketable entry fills at the post-bounce next
+        #       print (~10% capture). A resting limit into the move's extension
+        #       fills only when the move extends — the subset where
+        #       corr(prior move, first-bar) = -0.667 says the snapback is
+        #       strongest — and at a better price. Entries only: closes/exits
+        #       keep aggression_ticks because a close is risk-reducing and must
+        #       fill reliably. None (the default) preserves v1 behaviour exactly.
+        # Tech: entry_rest_forecasts (optional) is how many HOLD forecasts a
+        #       resting passive OPEN order may survive before §4.4's
+        #       cancel-at-the-next-forecast reclaims it.
+        # Why:  a passive fade entry only fills on an extension, which often
+        #       needs more than the one forecast period (stride bars) the
+        #       recorded cancel-on-HOLD gives it — at N=1 the measured fill
+        #       rate is ~34%. The budget bounds the staleness explicitly
+        #       instead of leaving it implicit: 0/None is the recorded §4.4
+        #       behaviour; a real BUY/SELL signal still cancels and replaces
+        #       the order whatever the budget. The limit price was fixed at
+        #       placement, so no future information leaks into the resting order.
+        # Tech: night_only_open gates flat-position OPENS to the NIGHT
+        #       session only; closes and exits are never gated.
+        # Why:  the 2026-11-17 report's signal mass is 97% night (fading
+        #       night-session up-spikes in thinner liquidity), and iter10's
+        #       train book measured the day-session opens as a small net
+        #       negative (20 trades, -255.9 pts) while night opens average
+        #       +50.7 — the fade is a night-liquidity phenomenon. False (the
+        #       default) is recorded behaviour.
+        self.entry_passive_ticks = entry_passive_ticks
+        self.entry_rest_forecasts = entry_rest_forecasts
+        self.night_only_open = night_only_open
+        self._resting_passive = False
+        self._rest_budget = 0
 
     # ---- confidence-scaled placement helpers -----------------------------
 
@@ -181,6 +229,23 @@ class Trader:
     def on_signal(
         self, direction: Direction, market: MarketEvent, *, strength: float = 1.0
     ) -> Optional[OrderEvent]:
+        # Tech: a resting passive OPEN entry may survive HOLD forecasts while
+        #       it has rest budget left (entry_rest_forecasts); the branch
+        #       returns early so the cancel below never sees it.
+        # Why:  §4.4's cancel-on-signal exists so a stale forecast's order
+        #       cannot outlive the forecast — for a passive entry the rest
+        #       budget is that guarantee, made explicit and bounded. A real
+        #       BUY/SELL signal never takes this branch, so it still cancels
+        #       and replaces whatever is resting.
+        if (
+            direction == "HOLD"
+            and self._resting_passive
+            and self._rest_budget > 0
+            and self.execution.has_pending()
+        ):
+            self._rest_budget -= 1
+            return None
+        self._resting_passive = False
         # Tech: unconditionally cancel any resting order before acting.
         # Why:  §4.4 — a pending limit lives only until the next signal; cancelling
         #       first (even for HOLD) guarantees a stale forecast's order can never
@@ -216,6 +281,16 @@ class Trader:
         #       no-op and an opposing signal closes only.
         order: Optional[OrderEvent] = None
         if self.position == 0:
+            # Tech: the session gate applies to the open branch only, after
+            #       the cancel above — a gated signal cancels any resting
+            #       order and stands aside. A roll's re-open is never gated.
+            # Why:  closes must act whenever they arrive (risk-reducing);
+            #       only new risk is session-gated. Fullday rolls at 12:45,
+            #       inside the DAY session, so gating a roll leg would drop
+            #       the exposure the roll exists to carry. See __init__.
+            if (self.night_only_open and not self._rolling
+                    and market.session != "NIGHT"):
+                return None
             # Tech: re-entry cooldown — while a cooldown is armed, an OPEN on
             #       the closed position's side is skipped; every signal seen
             #       while flat and cooling (this one included) consumes one of
@@ -258,16 +333,45 @@ class Trader:
             #       never gated — see __init__.
             if strength < self.entry_floor:
                 return None
-            offset = self._entry_offset(strength)
             qty = self._entry_qty(strength)
-            if direction == "BUY":
-                order = OrderEvent(
-                    market.timestamp, "BUY", cur + offset, "OPEN", quantity=qty
-                )
+            if self.entry_passive_ticks is not None and not self._rolling:
+                # Tech: rest the entry limit N ticks BEYOND the placement price
+                #       (BUY below, SELL above) so §4.5 classifies it passive.
+                # Why:  the fade's edge unfolds in the first minute after the
+                #       signal bar; a marketable entry pays the post-bounce next
+                #       print. Filling passively means the move extended to
+                #       cross our price — the deeper-extension subset, where the
+                #       snapback the model selected for is strongest — and the
+                #       fill itself is at a better price than the touch. The
+                #       confidence ramp does not apply: passive is passive. A
+                #       roll's re-open takes the marketable branch below — it
+                #       restores exposure and must fill.
+                pas = self.entry_passive_ticks * self.tick_size
+                if direction == "BUY":
+                    order = OrderEvent(
+                        market.timestamp, "BUY", cur - pas, "OPEN", quantity=qty
+                    )
+                else:
+                    order = OrderEvent(
+                        market.timestamp, "SELL", cur + pas, "OPEN", quantity=qty
+                    )
+                # Tech: arm the rest budget only for passive OPEN orders.
+                # Why:  marketable orders rest for at most one print, and
+                #       closes/exits must never linger — only the passive
+                #       entry's fill condition (a strict cross) can be worth
+                #       waiting for.
+                self._resting_passive = True
+                self._rest_budget = self.entry_rest_forecasts or 0
             else:
-                order = OrderEvent(
-                    market.timestamp, "SELL", cur - offset, "OPEN", quantity=qty
-                )
+                offset = self._entry_offset(strength)
+                if direction == "BUY":
+                    order = OrderEvent(
+                        market.timestamp, "BUY", cur + offset, "OPEN", quantity=qty
+                    )
+                else:
+                    order = OrderEvent(
+                        market.timestamp, "SELL", cur - offset, "OPEN", quantity=qty
+                    )
         elif self.position > 0:
             if direction == "SELL":
                 order = OrderEvent(

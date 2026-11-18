@@ -1,4 +1,19 @@
-"""FULL-DAY's strategy wiring — ``fullday_split_iter07`` (SIMTRADE_0929).
+"""FULL-DAY's strategy wiring — ``fullday_split_iter14`` (SIMTRADE_0929).
+
+**PORTED 2026-11-19 (user decision): live fullday trades ``fullday_split_iter14``**
+(tag ``fullday_split_iter14`` = ``f3efaa4``, branch
+``autoresearch_split_0.7_fullday_b``, ledger ``results_fullday.tsv`` there):
+Timestral-209M at context 2048, horizon/stride 5, band ±0.001, ``min_prob``
+0.65, trend filter off; passive entries 1 tick beyond the price that rest
+through up to 3 HOLD forecasts; a 5-bar horizon exit; opens in the NIGHT
+session only. The loop ran it as flags on main's untuned package; here the
+config is PARAMS. Every rule the iter34 stack below added (stop, break-even
+lock, both cooldowns, the 0.60 entry gate) is set to its inert control, so
+this package trades exactly what iter14 measured. Train 70 % (to 2024-03-18):
+355 trades, net +17 826.6, maxDD -62.3, Calmar 286.3. Held-out 30 %, read
+after the loop from its trades.csv: 116 trades, net +8 544.9, maxDD -158.0.
+It replaced ``candidate_fullday_iter34`` (Toto2-1B). The history below is
+that package's and is kept for the knobs it still declares.
 
 **These parameters come from the split loop, scored on its TRAIN 70 % only.**
 ``autoresearch_split_0.7_fullday`` @ ``394ce85`` moved ``stride_bars`` 30 -> 15
@@ -83,6 +98,7 @@ from .exits import (
     GivebackTrail,
 )
 from .forecaster import make_forecaster
+from .time_exit import BarsInTradeExit
 from .trader import Trader
 
 # Tech: this session's default knobs — the twelve values `real_data.py`'s
@@ -93,24 +109,57 @@ from .trader import Trader
 #       in the split rather than a strategy change. An explicit CLI flag still
 #       beats these; the run banner prints which knob came from where.
 PARAMS: Dict[str, Any] = {
-    # forecaster
-    "checkpoint": "Datadog/Toto-2.0-1B",
-    "context_length": 3008,
-    "horizon_bars": 30,
-    "stride_bars": 10,
+    # forecaster — fullday_split_iter14: Timestral-209M at context 2048,
+    # forecasting 5 bars every 5 bars.
+    "checkpoint": "mistralai/Timestral-209M",
+    "context_length": 2048,
+    "horizon_bars": 5,
+    "stride_bars": 5,
+    # which forecaster class the checkpoint belongs to (branch
+    # forecaster_eval_1116): 'toto2' or 'timestral'
+    # (strategy/fullday/timestral.py, Mistral Timestral-209M).
+    "forecaster": "timestral",
     # emitter
     "buy_threshold": 0.001,
     "sell_threshold": -0.001,
-    "min_prob": 0.50,
+    "min_prob": 0.65,
     "full_confidence_prob": 0.9,
+    # emitter filter knobs — package-declared (D6/D7), reachable only
+    # through ``--param``. timestral's gated 5-minute stream is a
+    # mean-reversion FADE, which the trend filter (a momentum
+    # confirmation) vetoes, so iter14 runs with it off.
+    "trend_filter": False,
+    "path_momentum": True,
     # trader
     "aggression_ticks": 0,
     "max_aggression_ticks": None,
     "max_position": 1,
     "forced_close": False,
+    # passive fade entries (trader.py) — package-declared, reachable only
+    # through ``--param``. N rests the ENTRY limit N ticks beyond the
+    # placement price (BUY below, SELL above): the fill model demands a
+    # strict cross, so the entry fills only when the move extends — the
+    # subset where the report measured the stronger snapback — and at a
+    # better price. Closes/exits stay marketable at aggression_ticks.
+    # None is off. iter03 -> 1 (ladder 1/2/3, peak at 1).
+    "entry_passive_ticks": 1,
+    # how many HOLD forecasts a resting passive entry may survive before
+    # §4.4's cancel-at-the-next-forecast reclaims it (trader.py). None/0
+    # is the recorded cancel-on-HOLD. iter10 -> 3 (ladder 0/2/3/4,
+    # drawdown cliff at 4).
+    "entry_rest_forecasts": 3,
+    # flat-position OPENS only in the NIGHT session; closes and exits are
+    # never gated (trader.py). iter14 -> True.
+    "night_only_open": True,
+    # horizon exit (time_exit.py): close after N bars in the position.
+    # None is off. iter03 onward -> 5 (the forecast horizon). Adoptable as
+    # expired: a lot adopted on a live restart is closed on the first bar.
+    "time_exit_bars": 5,
     # percent-stop knob — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param stop_pct=...``.
-    "stop_pct": 0.05,
+    # None since the iter14 port (2026-11-19, user decision: exact iter14,
+    # which ran with no stop). Was 0.05.
+    "stop_pct": None,
     # profit-protection exits — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param lock_after_pct=...`` /
     # ``--param giveback_frac=...``.
@@ -122,7 +171,8 @@ PARAMS: Dict[str, Any] = {
     # CONTROL: wiring returns the bare EntryPercentStop, byte-identical to the
     # pre-knob package. The rules are stateful -> adoptable=False, so a live
     # --resume into a held lot is refused for them.
-    "lock_after_pct": 0.03,
+    # lock_after_pct None since the iter14 port (2026-11-19). Was 0.03.
+    "lock_after_pct": None,
     "giveback_frac": None,
     # price-channel exit — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param channel_exit_bars=...``.
@@ -138,8 +188,8 @@ PARAMS: Dict[str, Any] = {
     # position, an OPEN on the closed position's side is skipped for K
     # signals (HOLDs count); the opposite side opens freely. 0 is the
     # CONTROL: the cooldown never arms, so runs are byte-identical to the
-    # pre-knob package.
-    "reentry_cooldown_signals": 16,
+    # pre-knob package. 0 since the iter14 port (2026-11-19). Was 16.
+    "reentry_cooldown_signals": 0,
     # stop cooldown (strategy_test_1108 step 3): after a stop-sized loss (at
     # least 98% of stop_pct), skip same-side opens for this many minutes of
     # clock time. 0 = control, never arms; inert when stop_pct is None.
@@ -150,7 +200,8 @@ PARAMS: Dict[str, Any] = {
     # -3 182. Weak evidence: the gain is mostly the 08-21 holdout that
     # prompted the rule; train is mixed (median +8 595 -> +8 440) and 6 of 10
     # schedules lose a little on 2024-01..2026-08.
-    "stop_cooldown_minutes": 4320,
+    # 0 since the iter14 port (2026-11-19); inert anyway with stop_pct None.
+    "stop_cooldown_minutes": 0,
     # entry-probability gate — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param entry_min_prob=...``.
     # Why:  reversal loop decision 2. 0.50 is the CONTROL value: the floor it
@@ -158,7 +209,10 @@ PARAMS: Dict[str, Any] = {
     # still opens and a run at 0.50 must be byte-identical to one without the
     # knob. The gate applies to opens only; min_prob (above) stays the exit
     # gate inside the emitter.
-    "entry_min_prob": 0.60,
+    # 0.65 since the iter14 port (2026-11-19): equal to min_prob, the
+    # control — the emitter never passes a strength below the floor it
+    # implies. Was 0.60.
+    "entry_min_prob": 0.65,
     # exit-side band — package-declared, beyond the twelve CLI knobs
     # (D6/D7), reachable only through ``--param exit_threshold=...``.
     # Why:  reversal loop decision 8 (phase E). While positioned, an opposite
@@ -193,12 +247,13 @@ PARAMS: Dict[str, Any] = {
 #       explicit ``--param stop_pct=...`` still overrides it.
 
 # Tech: the emitter knobs deliberately absent from PARAMS — `short_window`,
-#       `min_trend_ticks`, `path_momentum`, `trend_filter`.
+#       `min_trend_ticks`.
 # Why:  `real_data.py` has never exposed them as flags, so every recorded run
-#       used `ThresholdEmitter`'s own class defaults (3 / 3.0 / True / True,
-#       which is also what `LiveConfig` declares). Leaving them to the copied
-#       emitter's defaults reproduces those runs exactly; a search that wants to
-#       move them edits `emitter.py`, which this package owns.
+#       used `ThresholdEmitter`'s own class defaults (3 / 3.0). Leaving them to
+#       the copied emitter's defaults reproduces those runs exactly; a search
+#       that wants to move them edits `emitter.py`, which this package owns.
+#       `trend_filter` and `path_momentum` are declared above since the iter14
+#       port, because iter14 turns the trend filter off.
 
 
 def make_strategy(
@@ -270,6 +325,7 @@ def make_strategy(
         horizon_bars=p["horizon_bars"],
         context_length=p["context_length"],
         checkpoint=p["checkpoint"],
+        forecaster=p["forecaster"],
     )
     emitter = ThresholdEmitter(
         buy_threshold=p["buy_threshold"],
@@ -277,6 +333,8 @@ def make_strategy(
         min_prob=p["min_prob"],
         full_confidence_prob=p["full_confidence_prob"],
         exit_threshold=p["exit_threshold"],
+        trend_filter=p["trend_filter"],
+        path_momentum=p["path_momentum"],
     )
 
     def make_trader(execution: Any) -> Trader:
@@ -292,6 +350,9 @@ def make_strategy(
             # the cooldown keys on a stop-sized loss, so without a stop it is off
             stop_cooldown_minutes=(p["stop_cooldown_minutes"] if p["stop_pct"] is not None else 0),
             stop_cooldown_loss=(0.98 * p["stop_pct"] if p["stop_pct"] is not None else None),
+            entry_passive_ticks=p["entry_passive_ticks"],
+            entry_rest_forecasts=p["entry_rest_forecasts"],
+            night_only_open=p["night_only_open"],
         )
         # Tech: bind the emitter to the trader this factory just built, so the
         #       exit band knows which side is the exit side.
@@ -331,6 +392,11 @@ def make_strategy(
                                     p["tp_giveback_frac"])
     if trail is not None:
         exit_rules.append(trail)
+    # Tech: append the horizon exit when time_exit_bars is set.
+    # Why:  iter14 holds each fade for the forecast horizon (time_exit.py).
+    #       With every other exit off, it is the bare rule, as iter14 ran it.
+    if p["time_exit_bars"] is not None:
+        exit_rules.append(BarsInTradeExit(bars=p["time_exit_bars"]))
     if not exit_rules:
         exit_rule = None
     elif len(exit_rules) == 1:

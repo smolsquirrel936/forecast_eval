@@ -146,7 +146,14 @@ class TestWiring:
         strat = w.make_strategy(warmup_bars=10)
         declared = w.PARAMS["stop_pct"]
         if declared is None:
-            assert strat["exit_rule"] is None
+            rule = strat["exit_rule"]
+            if session == "fullday" and rule is not None:
+                # fullday's iter14 port (2026-11-19) declares no stop but
+                # builds its horizon exit; no percent stop may hide in it.
+                from forecast_eval.strategy.fullday.time_exit import BarsInTradeExit
+                assert isinstance(rule, BarsInTradeExit)
+            else:
+                assert rule is None
         else:
             rule = strat["exit_rule"]
             if session in ("fullday", "day", "night"):

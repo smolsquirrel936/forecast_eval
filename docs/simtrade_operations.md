@@ -760,7 +760,7 @@ that branch only.
 |---|---|---|
 | day | `day_split_iter02` (09-29) | band ±0.001, `min_prob` 0.65, stride 30, stop 0.10 |
 | night | `night_iter30` (10-05; launched as `night_iter10`) + price ridge (11-09) | ridge forecaster (horizon 1140, history 3421 bars), band ±0.00044, `min_prob` 0.6 (inert), two-sided, stride 15, stop 0.05 |
-| fullday | `fullday_rev_iter34` (10-27; launched as `fullday_split_iter07`) | band ±0.001, `min_prob` 0.50 / entry 0.60, stride 10, stop 0.05, lock 0.03, cooldown 16, stop cooldown 3 days (11-08) |
+| fullday | `fullday_split_iter14` (11-19; launched as `fullday_split_iter07`, then `fullday_rev_iter34` 10-27) | Timestral-209M, ctx 2048, horizon/stride 5, band ±0.001, `min_prob` 0.65, trend filter off; passive entries 1 tick, rest 3 forecasts; night-only opens; 5-bar exit; no stop |
 | hybrid | `hybrid_split_iter22` (registered 10-27, **not yet started**) | day half ±0.0005 / 0.60, no opens 09:30–12:59; night half ±0.0007 / 0.50, opens and closes (11-16; closes only before); stride 30, stop 0.05 day / 0.06 night (11-01), take-profit trail day 0.10 / 0.03, night 0.12 / 0.02 (11-12) |
 
 **2026-11-09: night's forecaster is the price ridge (user decision).** Toto2
@@ -844,6 +844,23 @@ support for a second DAY+NIGHT deployment came from `main` (merges `8db3335`,
 `bars_cache_hybrid.csv`. Then start it like the others (§5, with
 `--fresh-start`), owner first. Settings and cautions: `strategy/README.md`
 (caution 19).
+
+**2026-11-19: live fullday adopts `fullday_split_iter14` (user decision; ported, not merged).**
+The tag's strategy was rebuilt inside simtrade's fullday package: Timestral-209M
+forecaster, passive 1-tick entries resting up to 3 forecasts, night-only opens,
+a 5-bar horizon exit, and every iter34 rule (stop, lock, cooldowns, entry gate)
+at its control. A bare `--strategy fullday` replays the iter14 run folder byte
+for byte. Details and cautions 20–22: `strategy/README.md`.
+
+- **Before the first start:** install the `timestral` package into `.venv`
+  (`uv pip install`, after a `--dry-run` that leaves torch `2.14.0+cu130`
+  alone). It is not on PyPI; the loop's copy is on the VM.
+- **Restart rule:** the horizon exit is adoptable as expired. `--resume` into a
+  held lot is accepted and closes it on the first bar. No `--exit-state` is
+  needed; `exit_state_day_night.json` is no longer read or written.
+- **The lot on record:** `owner_positions.json` (11-13) still shows fullday
+  `+1 TXFK6 @ 43615`, and TXFK6 settled on 11-18 while nothing ran. Reconcile
+  the owner file and ledger with the venue (§6.5, §6.11) before restarting.
 
 **2026-10-26: live fullday adopts `fullday_rev_iter34`.**
 `candidate_fullday_iter34` was merged into `simtrade_0929` as `4104409` (user decision;

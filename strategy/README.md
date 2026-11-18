@@ -13,7 +13,7 @@ places orders on.** `live/config.py` holds only the provenance record.
 
 | | |
 |---|---|
-| Forecaster | Toto2-1B (`Datadog/Toto-2.0-1B`), context 3008 bars, horizon 30 bars |
+| Forecaster | Toto2-1B (`Datadog/Toto-2.0-1B`), context 3008 bars, horizon 30 bars — except night (price ridge, since 11-09) and fullday (Timestral-209M, since 11-19) |
 | Emitter | `ThresholdEmitter`, trend filter + path momentum on, `full_confidence_prob` 0.9 (hybrid: one per half, behind a router) |
 | Trader | limit orders at `aggression_ticks` 0, `max_position` 1, no-flip, no pyramiding |
 | Exit rule | `EntryPercentStop` (`exits/pct_stop.py`) at each package's `stop_pct` — closes when the price moves `entry_price × stop_pct` against the position, checked every tick, filled at the next print. Otherwise positions close only on an opposite signal. Hybrid routes one per half (`RoutedExitRule`) |
@@ -137,7 +137,45 @@ places orders on.** `live/config.py` holds only the provenance record.
   package on disk. The stop adoptions changed `strategy_sha` again, for night
   and fullday on 2026-10-12 and 2026-10-18 and for day on 2026-10-12.
 
-## Fullday — `fullday_rev_iter34` (since 2026-10-27)
+## Fullday — `fullday_split_iter14` (since 2026-11-19)
+
+| Knob | Value |
+|---|---|
+| forecaster | **Timestral-209M** (`mistralai/Timestral-209M`, `strategy/fullday/timestral.py`), context **2048**, horizon **5**, stride **5** |
+| band | buy +0.001 / sell −0.001 |
+| `min_prob` | **0.65**; `entry_min_prob` 0.65 (= `min_prob`, inert) |
+| filters | `trend_filter` **off** (the stream is a fade; the momentum filter vetoes it), `path_momentum` on |
+| entries | **passive**: a limit 1 tick beyond the price (SELL above, BUY below), resting through up to **3** HOLD forecasts (`entry_passive_ticks` 1, `entry_rest_forecasts` 3) |
+| sessions | opens in the **NIGHT** session only (`night_only_open`); closes and exits at any time |
+| exits | **5-bar horizon exit** (`time_exit_bars` 5, `strategy/fullday/time_exit.py`), marketable. No stop, no lock, no cooldowns (all at their controls) |
+
+- **Source:** tag `fullday_split_iter14` (`f3efaa4`) on
+  `autoresearch_split_0.7_fullday_b`, forked from `main` @ `72e801e`; plan
+  `../../autoresearch_trading_plan_fullday_split07.md` (loop restart
+  2026-11-17), ledger `results_fullday.tsv` on that branch. The loop ran the
+  config as command-line flags on main's untuned package; here it is `PARAMS`.
+  Ported, not merged (user decision 2026-11-19).
+- **Port check:** a bare `--strategy fullday` (warmup 5000, `--train-bars
+  1690953`, the loop's forecast cache, 483 130 hit / 0 computed) reproduces
+  `outputs/fullday_split_iter14_20261117_060713` byte for byte: trades, fills,
+  orders, signals and forecasts.
+- **Score (train 70 %, to 2024-03-18):** Calmar **286.3**, 355 trades, net
+  +17 826.6, max drawdown −62.3, hit 0.744.
+- **Held-out 30 %** (read after the loop, from the same run's trades, by exit
+  time): 116 trades, net **+8 544.9**, max drawdown −158.0, hit 0.647. Since
+  2026-08-21: 21 trades, +810.1. The holdout took no part in the search.
+- **Robustness the loop measured (iters 15–17, not kept):** 2-tick passive
+  entries keep 79 % of the Calmar; fees ×2 keep 81 %; every year 2018–2023 is
+  net positive.
+- **Restart:** the horizon exit is *adoptable as expired*. A lot adopted on
+  `--resume` closes on the first bar, so fullday no longer needs
+  `exit_state_day_night.json` or `--exit-state` (caution 16 no longer applies
+  to it).
+- **Live roll:** a roll's re-open bypasses the night-only gate and the passive
+  offset (fullday rolls at 12:45, in the DAY session).
+- **Replaced:** `fullday_rev_iter34` (Toto2-1B), below. Cautions 20–22.
+
+## Fullday 2026-10-27 → 2026-11-19 — `fullday_rev_iter34`
 
 | Knob | Value |
 |---|---|
@@ -406,6 +444,21 @@ half manages it (`strategy/hybrid/router.py`).
       a restart into a held lot.
     - **VRAM:** four Toto2 copies are about 17–21 GiB of the 32 GiB card; check
       `nvidia-smi` after its first start.
+20. **Fullday needs the `timestral` package.** It is not on PyPI under that
+    name and was not in the host's `.venv` on 2026-11-19 (the loop ran on the
+    VM). Without it fullday fails at its first forecast. Install it into
+    `.venv` with `uv pip install` (never `uv sync`), after a `--dry-run` that
+    shows torch `2.14.0+cu130` untouched. `live/cli.py`'s VRAM check looks for
+    Toto2 only, so fullday now starts without it; the 209M model is small.
+21. **Fullday's fills are the optimistic end.** A passive entry fills in the
+    backtest when a later print strictly crosses the limit. On the venue it
+    waits in the queue and may not fill on a 1-tick cross. The loop's 2-tick
+    run (iter15) kept 79 % of the Calmar. The edge is also a first-minute
+    effect: a forecast that arrives late in live loses part of it.
+22. **Fullday trades short holds.** Every position lasts 5 bars; caution 6
+    (positions are long-lived) no longer applies to fullday. Opens are night
+    only, so day-session fullday is flat except for the 5-bar tail of a night
+    trade.
 
 ## How to run
 

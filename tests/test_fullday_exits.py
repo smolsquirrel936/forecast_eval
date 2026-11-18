@@ -21,6 +21,12 @@ from forecast_eval.strategy.fullday.exits import (
 )
 from forecast_eval.strategy.fullday.wiring import make_strategy
 
+# The iter34 exit stack (stop 0.05 + lock 0.03, no horizon exit) that live
+# fullday traded until the iter14 port of 2026-11-19. PARAMS now set every one
+# of these rules to its control, so the wiring tests below name the stack
+# explicitly to keep exercising the composition.
+IT34 = dict(stop_pct=0.05, lock_after_pct=0.03, time_exit_bars=None)
+
 
 def _mkt(price, minutes=0):
     return MarketEvent(
@@ -190,15 +196,15 @@ def test_anyof_adoptable_is_the_and_of_its_members():
 
 def test_control_returns_the_bare_percent_stop():
     strat = make_strategy(
-        warmup_bars=100,
-        lock_after_pct=None, giveback_frac=None, channel_exit_bars=None,
+        warmup_bars=100, **{**IT34,
+        "lock_after_pct": None}, giveback_frac=None, channel_exit_bars=None,
     )
     assert type(strat["exit_rule"]) is EntryPercentStop
     assert strat["exit_rule"].stop_pct == 0.05
 
 
 def test_lock_composes_with_the_stop_through_anyof():
-    strat = make_strategy(warmup_bars=100, lock_after_pct=0.02)
+    strat = make_strategy(warmup_bars=100, **{**IT34, "lock_after_pct": 0.02})
     rule = strat["exit_rule"]
     assert type(rule) is AnyOf
     assert len(rule.rules) == 2
@@ -207,7 +213,7 @@ def test_lock_composes_with_the_stop_through_anyof():
 
 def test_giveback_composes_with_the_stop_through_anyof():
     strat = make_strategy(
-        warmup_bars=100, lock_after_pct=None, giveback_frac=0.5
+        warmup_bars=100, **{**IT34, "lock_after_pct": None}, giveback_frac=0.5
     )
     rule = strat["exit_rule"]
     assert type(rule) is AnyOf
@@ -215,13 +221,14 @@ def test_giveback_composes_with_the_stop_through_anyof():
 
 
 def test_all_three_exit_rules_compose():
-    strat = make_strategy(warmup_bars=100, lock_after_pct=0.02, giveback_frac=0.5)
+    strat = make_strategy(warmup_bars=100, **{**IT34, "lock_after_pct": 0.02},
+                          giveback_frac=0.5)
     assert len(strat["exit_rule"].rules) == 3
 
 
 def test_no_exit_knobs_set_means_no_exit_rule():
     strat = make_strategy(
-        warmup_bars=100, stop_pct=None,
+        warmup_bars=100, stop_pct=None, time_exit_bars=None,
         lock_after_pct=None, giveback_frac=None, channel_exit_bars=None,
     )
     assert strat["exit_rule"] is None
@@ -300,7 +307,7 @@ def test_channel_rejects_bad_bar_counts():
 
 
 def test_channel_composes_through_wiring():
-    strat = make_strategy(warmup_bars=100, channel_exit_bars=1140)
+    strat = make_strategy(warmup_bars=100, **IT34, channel_exit_bars=1140)
     rule = strat["exit_rule"]
     assert type(rule) is AnyOf
     assert len(rule.rules) == 3          # stop + lock + channel (lock is kept)
@@ -375,21 +382,21 @@ def test_a_channel_in_the_set_keeps_it_refused():
     assert combo.restorable is False
 
 
-def test_the_live_fullday_rule_is_restorable():
-    """The adopted config (iter34: stop 0.05 + lock 0.03) — the rule that refused
-    to resume on 2026-10-29."""
-    rule = make_strategy(warmup_bars=100)["exit_rule"]
+def test_the_iter34_fullday_rule_is_restorable():
+    """The iter34 config (stop 0.05 + lock 0.03), live until 2026-11-19 — the
+    rule that refused to resume on 2026-10-29."""
+    rule = make_strategy(warmup_bars=100, **IT34)["exit_rule"]
     assert rule.adoptable is False
     assert rule.restorable is True and rule.state_keys == ("best_price",)
 
 
 @pytest.mark.usefixtures("cheap_strategy")
-def test_a_resume_restores_the_live_rule(tmp_path):
+def test_a_resume_restores_the_iter34_rule(tmp_path):
     from forecast_eval.live.broker.base import HeldPosition
 
     from .test_live_resume import NOW, _runtime
     rt = _runtime(HeldPosition(1, 46616.0))
-    rule = rt.loop.exit_rule = make_strategy(warmup_bars=100)["exit_rule"]
+    rule = rt.loop.exit_rule = make_strategy(warmup_bars=100, **IT34)["exit_rule"]
     adopted = rt.adopt_position(timestamp=NOW,
                                 exit_state_path=tmp_path / "absent.json",
                                 exit_state_injected={"best_price": 47376.0})

@@ -9,6 +9,16 @@ The entry point for FULL-DAY's strategy set: `PARAMS` declares the session's def
 knobs, and `make_strategy()` builds its Forecaster, SignalEmitter and Trader
 factory. This is the file a search for this session edits first.
 
+> **simtrade_0929, since 2026-11-19: `PARAMS` are `fullday_split_iter14`**
+> (tag `fullday_split_iter14`). Timestral-209M (`forecaster` `timestral`,
+> context 2048, horizon/stride 5), band ±0.001, `min_prob` 0.65, `trend_filter`
+> off, `entry_passive_ticks` 1, `entry_rest_forecasts` 3, `night_only_open`
+> on, `time_exit_bars` 5. Every rule the iter34 stack added (stop, lock, both
+> cooldowns, `entry_min_prob` 0.60) is at its control, so the exit rule is the
+> bare `BarsInTradeExit`. A bare `--strategy fullday` replays the iter14 run
+> folder byte for byte. The notes below describe the knobs; values quoted in
+> them may be older ones. Settings and evidence: `strategy/README.md`.
+
 ## Public surface
 | Symbol | Kind | One-liner |
 |---|---|---|
@@ -37,10 +47,15 @@ factory. This is the file a search for this session edits first.
   otherwise — the class of mismatch `live/config.py` was written to end.
 - `warmup_bars` and `tick_size` come from the run, not the strategy; everything
   else defaults from `PARAMS` and is beaten by an explicit CLI flag.
-- Four emitter knobs are deliberately **not** in `PARAMS` — `short_window`,
-  `min_trend_ticks`, `path_momentum`, `trend_filter`. `real_data.py` never
-  exposed them, so every recorded run used the emitter's class defaults; leaving
-  them there is what reproduces those runs.
+- Two emitter knobs are deliberately **not** in `PARAMS` — `short_window`,
+  `min_trend_ticks`. `real_data.py` never exposed them, so every recorded run
+  used the emitter's class defaults; leaving them there is what reproduces
+  those runs. `trend_filter` and `path_momentum` are declared since the iter14
+  port (iter14 turns the trend filter off).
+- **`forecaster`, `time_exit_bars`, `entry_passive_ticks`,
+  `entry_rest_forecasts`, `night_only_open`** (iter14 port, 2026-11-19): see
+  [timestral.py](timestral.md), [time_exit.py](time_exit.md) and
+  [trader.py](trader.md).
 - **`entry_min_prob` (added `fullday_rev_iter02`)** is a package-declared knob
   beyond the twelve CLI knobs, like `stop_pct`: the Trader skips an OPEN from
   flat whose signal strength falls below the floor it implies. `make_strategy`

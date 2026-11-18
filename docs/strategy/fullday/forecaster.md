@@ -1,7 +1,7 @@
 # [strategy/fullday/forecaster.py](../../../strategy/fullday/forecaster.py)
 
 **Role:** FULL-DAY's Forecaster construction site.
-**Pipeline:** builds the `Toto2Forecaster` the FULL-DAY pipeline runs.
+**Pipeline:** builds the forecaster the FULL-DAY pipeline runs — `Toto2Forecaster` or, with `forecaster="timestral"` (simtrade_0929's `PARAMS` since 2026-11-19), [timestral.py](timestral.md)'s `TimestralForecaster`.
 **Depends on:** [forecaster/toto2.py](../../forecaster/toto2.md)   **Used by:** [strategy/fullday/wiring.py](wiring.md)
 
 ## Responsibility

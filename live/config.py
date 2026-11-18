@@ -434,16 +434,18 @@ PINNED_FULLDAY = LiveConfig(
     source_commit=None,
     source_calmar=None,
     source_dataset=r"\\DESKTOP-SQUIRRE\dataset\RPT\TXF_RPT_minute_fullday.csv",
-    # autoresearch_fullday_reversal_1026 and candidate_fullday_iter34 were
-    # deleted 2026-11-15; their commits are on simtrade_0929 (loop tip
-    # a17466a, merge 4104409).
+    # The row is in results_fullday.tsv on autoresearch_split_0.7_fullday_b
+    # (tag fullday_split_iter14), not results.tsv, so source_commit stays None.
+    # The replaced iter34's branches were deleted 2026-11-15; its commits are
+    # on simtrade_0929 (loop tip a17466a, merge 4104409).
     source_note=(
-        "SIMTRADE_0929 since 2026-10-27: fullday_rev_iter34 "
-        "(autoresearch_fullday_reversal_1026, via candidate_fullday_iter34); "
-        "train-70% Calmar 4.4463, 181 trades; held-out approx Calmar 4.06 but "
-        "read after selection (optimistic). stride 10, band 0.001, min_prob "
-        "0.50, entry_min_prob 0.60, stop 0.05, lock_after_pct 0.03, "
-        "reentry_cooldown_signals 16. Replaced fullday_split_iter07 + stop 0.05"
+        "SIMTRADE_0929 since 2026-11-19: fullday_split_iter14 "
+        "(tag fullday_split_iter14, autoresearch_split_0.7_fullday_b); "
+        "train-70% Calmar 286.2952, 355 trades, net +17826.6, DD -62.3; "
+        "held-out 30% read after the loop: 116 trades, net +8544.9, DD -158.0. "
+        "Timestral-209M ctx 2048 h5/s5, band 0.001, min_prob 0.65, trend "
+        "filter off, passive entries 1 tick / rest 3, night-only opens, "
+        "5-bar exit, no stop. Replaced fullday_rev_iter34 (Toto2-1B)"
     ),
     policy=SessionPolicy.both(),
 )
