@@ -45,6 +45,19 @@ uv run --no-sync python -m forecast_eval.real_data --strategy fullday `
   --warmup-bars 3008 --precompute --output-dir outputs\<run>
 ```
 
+## Install
+
+`timestral` is not on PyPI. Install it from GitHub at the pinned commit, after
+torch (`UV_SETUP.md` Step 3b, repo root):
+
+```powershell
+uv pip install "timestral @ git+https://github.com/mistralai/timestral.git@a534bdbd244d64f3d9d743f46c7bf6fc330ed4ff"
+```
+
+The forecast cache's runtime key (`forecast_cache.py`) does not record
+`timestral`'s version, so a cache is only safe to share between machines on
+the same commit.
+
 TF32 is disabled at model load so the batched precompute stays
 bit-identical to sequential forecasts (same rationale as the incumbent's
 wrapper). Lazy torch/timestral imports keep the package importable

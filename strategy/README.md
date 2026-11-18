@@ -444,12 +444,15 @@ half manages it (`strategy/hybrid/router.py`).
       a restart into a held lot.
     - **VRAM:** four Toto2 copies are about 17–21 GiB of the 32 GiB card; check
       `nvidia-smi` after its first start.
-20. **Fullday needs the `timestral` package.** It is not on PyPI under that
-    name and was not in the host's `.venv` on 2026-11-19 (the loop ran on the
-    VM). Without it fullday fails at its first forecast. Install it into
-    `.venv` with `uv pip install` (never `uv sync`), after a `--dry-run` that
-    shows torch `2.14.0+cu130` untouched. `live/cli.py`'s VRAM check looks for
-    Toto2 only, so fullday now starts without it; the 209M model is small.
+20. **Fullday needs the `timestral` package**, which is not on PyPI. It is
+    installed in the host's `.venv` since 2026-11-19 from GitHub at the VM's
+    commit: `uv pip install "timestral @
+    git+https://github.com/mistralai/timestral.git@a534bdbd244d64f3d9d743f46c7bf6fc330ed4ff"`
+    (`../../UV_SETUP.md` Step 3b). A rebuilt venv loses it; without it fullday
+    fails at its first forecast. The forecast-cache key does not include its
+    version, so keep the host and the VM on that one commit. `live/cli.py`'s
+    VRAM check looks for Toto2 only, so fullday starts without it; the 209M
+    model is small.
 21. **Fullday's fills are the optimistic end.** A passive entry fills in the
     backtest when a later print strictly crosses the limit. On the venue it
     waits in the queue and may not fill on a 1-tick cross. The loop's 2-tick

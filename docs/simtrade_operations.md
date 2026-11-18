@@ -852,9 +852,9 @@ a 5-bar horizon exit, and every iter34 rule (stop, lock, cooldowns, entry gate)
 at its control. A bare `--strategy fullday` replays the iter14 run folder byte
 for byte. Details and cautions 20–22: `strategy/README.md`.
 
-- **Before the first start:** install the `timestral` package into `.venv`
-  (`uv pip install`, after a `--dry-run` that leaves torch `2.14.0+cu130`
-  alone). It is not on PyPI; the loop's copy is on the VM.
+- **`timestral` is installed** (2026-11-19) in the host's `.venv`, from GitHub
+  at the VM's commit `a534bdb` (not on PyPI; `UV_SETUP.md` Step 3b). A rebuilt
+  venv needs it again.
 - **Restart rule:** the horizon exit is adoptable as expired. `--resume` into a
   held lot is accepted and closes it on the first bar. No `--exit-state` is
   needed; `exit_state_day_night.json` is no longer read or written.
