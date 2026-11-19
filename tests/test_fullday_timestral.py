@@ -161,6 +161,34 @@ class TestDecileLadder:
         # DECILE_LEVELS[1] == 0.2 -> row 1 of the fan
         assert (fans[:, 1, :] == 7.0).all()
 
+    def test_sequential_forecast_matches_batch(self):
+        # the live per-tick path: timestral returns (1, 1, H, 21) for a single
+        # (T,) context, as for a batch of one (measured 2026-11-19; the first
+        # live start crashed with IndexError on an extra axis)
+        import types
+
+        import pandas as pd
+
+        class _Fake:
+            def forecast(self, ctx, prediction_length):
+                n = 1 if ctx.ndim == 1 else ctx.shape[0]
+                q = np.zeros((n, 1, prediction_length, 21))
+                for i in range(21):
+                    q[:, :, :, i] = 100.0 + i
+                return types.SimpleNamespace(quantiles=q)
+
+        fc = TimestralForecaster(
+            warmup_bars=10, forecast_stride_bars=5, forecast_horizon_bars=3,
+            context_length=8,
+        )
+        fc._model = _Fake()
+        ts = pd.date_range("2026-11-19 08:45", periods=12, freq="min")
+        prices = np.linspace(100.0, 111.0, 12)
+        one = fc.forecast(pd.DataFrame({"timestamp": ts, "price": prices}))
+        [batch] = fc.forecast_series_batch(ts, prices, [11])
+        assert one.payload == batch.payload
+        assert one.timestamp == batch.timestamp
+
 
 class TestPayload:
     def test_payload_contract_matches_toto2(self):

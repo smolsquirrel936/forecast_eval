@@ -138,8 +138,12 @@ class TimestralForecaster(Forecaster):
         # Tech: load on first use, build the context, run one forecast and
         #       hand the fan to the shared payload builder.
         # Why:  this is the per-tick path the run loop uses without
-        #       --precompute; identical inputs/outputs to the batched path
-        #       (same _make_forecast), so cache hits and fresh runs agree.
+        #       --precompute (live trades through it); identical inputs/outputs
+        #       to the batched path (same _make_forecast), so cache hits and
+        #       fresh runs agree. A single (T,) context already comes back
+        #       batch-shaped, (1, 1, H, 21) — measured 2026-11-19 after the
+        #       first live start crashed on an extra [None] axis — so the
+        #       quantiles go to _fans_from_quantiles as they are.
         if self._model is None:
             self._model = self._load_model()
         ctx = self._context_array(history_df)
@@ -147,7 +151,7 @@ class TimestralForecaster(Forecaster):
         q = out.quantiles
         if hasattr(q, "detach"):
             q = q.detach().cpu().numpy()
-        fan = self._fans_from_quantiles(np.asarray(q)[None])[0]  # (9, H)
+        fan = self._fans_from_quantiles(np.asarray(q))[0]  # (9, H)
         return self._make_forecast(
             fan, float(ctx[-1]), history_df["timestamp"].iloc[-1]
         )
