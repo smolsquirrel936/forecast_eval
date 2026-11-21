@@ -231,13 +231,77 @@ def _now(run: Dict[str, Any]) -> Any:
     return p["ledger_now"] if p.get("ledger_now") is not None else p["now"]
 
 
+def _fill_price_gaps(ticks: Any, dep: Deployment, outputs: Path, marks: Any) -> Any:
+    """`ticks` with the minutes it lacks taken from the other price records."""
+    # Tech: over the span of the soak's capture and the markers, take each
+    #       minute from the first source that has it: the soak's own capture
+    #       (`ticks`), this deployment's `bars_cache_<slug>.csv`, the other
+    #       `live_*` folders' captures, then the other bar caches.
+    # Why:  the capture only exists while the deployment runs, so the line
+    #       stopped at every downtime and plotly bridged it with a straight
+    #       segment; fills booked while stopped (a flatten, a catch-up, an
+    #       expiry settle, a replayed ledger) sat in empty space (2026-11-21:
+    #       11-14 -> 11-19 on every chart). The other records are the same TXF
+    #       market: a start backfills the bar cache with the venue's kbars over
+    #       the downtime, and the other deployments capture the same feed. Own
+    #       data always wins a minute, so a running soak's chart is unchanged.
+    #       Reads only; the report still writes nothing under outputs/.
+    import pandas as pd
+
+    from .prices import capture_span, minute_series
+
+    edges = []
+    for frame, col in ((ticks, "timestamp"), (marks, "timestamp")):
+        if frame is not None and not frame.empty:
+            ts = pd.to_datetime(frame[col])
+            edges += [ts.min(), ts.max()]
+    if not edges:
+        return ticks
+    lo, hi = min(edges).floor("min"), max(edges)
+
+    def cache(path: Path) -> Any:
+        try:
+            df = pd.read_csv(path, usecols=["timestamp", "price"])
+        except (OSError, ValueError):
+            return None
+        df["timestamp"] = pd.to_datetime(df["timestamp"], format="mixed")
+        return df[(df["timestamp"] >= lo) & (df["timestamp"] <= hi)]
+
+    own = {Path(d).resolve() for d in (dep.run_dirs or (dep.run_dir,))}
+    others = []
+    for capture in sorted(outputs.glob("live_*/ticks.csv")):
+        if capture.parent.resolve() in own:
+            continue
+        span = capture_span(capture)
+        if span and span[0].floor("min") <= hi and span[1] >= lo:
+            others.append(minute_series(capture))
+    own_cache = outputs / f"bars_cache_{dep.slug}.csv"
+    sources = [ticks, cache(own_cache), *others,
+               *(cache(p) for p in sorted(outputs.glob("bars_cache_*.csv")) if p != own_cache)]
+    frames = [f[["timestamp", "price"]].assign(_rank=i)
+              for i, f in enumerate(sources) if f is not None and not f.empty]
+    if not frames:
+        return ticks
+    merged = pd.concat(frames, ignore_index=True)
+    merged["timestamp"] = pd.to_datetime(merged["timestamp"])
+    merged = merged[(merged["timestamp"] >= lo) & (merged["timestamp"] <= hi)]
+    merged = (merged.sort_values(["timestamp", "_rank"], kind="stable")
+              .drop_duplicates("timestamp", keep="first"))
+    return merged[["timestamp", "price"]].reset_index(drop=True)
+
+
 def collect_performance(dep: Deployment, *, ledger_fills: List[Dict[str, str]] = (),
-                        ledger_trades: List[Dict[str, Any]] = ()) -> Dict[str, Any]:
+                        ledger_trades: List[Dict[str, Any]] = (),
+                        chart_fills: Optional[List[Dict[str, str]]] = None,
+                        outputs: Optional[Path] = None) -> Dict[str, Any]:
     """The per-run report's trading metrics and two charts, for one deployment.
 
     `ledger_fills` / `ledger_trades` are the soak's fills that only
     `fills_<slug>.csv` has and the round trips they close (`collect_transactions`);
     they join the run folder's, so the metrics and charts match section 6.
+    `chart_fills`, when given, are the price chart's markers instead of the run
+    folder's fills (`collect_run` passes the soak's ledger rows). `outputs`, when
+    given, fills the price line's missing minutes (`_fill_price_gaps`).
     """
     # Tech: imported here, not at module level.
     # Why:  `reports` pulls matplotlib and plotly, and `metrics` pulls pandas;
@@ -296,6 +360,26 @@ def collect_performance(dep: Deployment, *, ledger_fills: List[Dict[str, str]] =
               if f is not None]
     ticks = pd.concat(frames).sort_values("timestamp", ignore_index=True) if frames else None
 
+    # Tech: the price chart's markers are `chart_fills` (the soak's ledger rows)
+    #       when the caller has them, else the run folder's fills as above.
+    # Why:  the newest folder's fills.csv is not always the soak's record. A
+    #       `--resume` whose ledger replay disagrees with the venue seeds ONE
+    #       synthetic opening fill at the venue's average price, stamped at the
+    #       restart (`live/cli.py`, `fills_synthesised`): on 2026-11-21 night's
+    #       chart drew a SELL @ 35765 at 03:30 against a market near 34000, and
+    #       none of the soak's earlier fills. The ledger is what the owner seeds
+    #       from and holds no synthetic rows.
+    marks = fills
+    if chart_fills is not None:
+        marks = pd.DataFrame([{
+            "timestamp": pd.Timestamp(f["timestamp"]), "side": f["side"],
+            "fill_price": float(f["fill_price"]), "quantity": int(float(f["quantity"])),
+            "fee": float(f.get("fee") or 0.0)} for f in chart_fills],
+            columns=["timestamp", "side", "fill_price", "quantity", "fee"])
+        marks = marks.sort_values("timestamp", ignore_index=True)
+    if outputs is not None:
+        ticks = _fill_price_gaps(ticks, dep, outputs, marks)
+
     # Tech: the two plotly figures, as JSON for `Plotly.newPlot` in the page.
     # Why:  the same functions the per-run report draws with, so the charts are
     #       identical to it; without plotly the section keeps its table.
@@ -303,7 +387,7 @@ def collect_performance(dep: Deployment, *, ledger_fills: List[Dict[str, str]] =
     if reports._HAS_PLOTLY:
         figs["equity"] = json.loads(reports.plot_equity_drawdown_plotly(
             trades, ticks=ticks, fee_rate=fee_rate, point_value=point_value).to_json())
-        figs["price"] = json.loads(reports.plot_price_fills_plotly(fills, ticks).to_json())
+        figs["price"] = json.loads(reports.plot_price_fills_plotly(marks, ticks).to_json())
     # Why:  pairs, not a dict — the page JSON is written with sorted keys, and the
     #       table should keep the per-run report's row order.
     return {"metrics": list(m.items()), "point_value": point_value, "figs": figs}
@@ -751,9 +835,16 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
             "owner_values": {str(k): v for k, v in owner_pos.items()}, "owner_now": owner_last,
             "ledger_now": ledger_now,
         },
+        # Tech: the price chart's markers are this soak's ledger rows when there
+        #       is a ledger and a soak id; None keeps the run folder's fills.
+        # Why:  see `collect_performance` — the folder can hold a synthetic
+        #       resume fill and miss the soak's earlier ones; the ledger cannot.
         "performance": collect_performance(
             dep, ledger_fills=ledger_later,
-            ledger_trades=[t for t in tx["trades"] if t.get("source") == "ledger"]),
+            ledger_trades=[t for t in tx["trades"] if t.get("source") == "ledger"],
+            chart_fills=([f for f in ledger if f.get("soak_id") == params.get("soak_id")]
+                         if ledger and params.get("soak_id") else None),
+            outputs=outputs),
         # Section 5 stays the venue's record; section 6 follows the strategy.
         "transactions": with_catchup(tx, collect_catchup(outputs / f"catchup_{dep.slug}.csv")),
         "stability": {

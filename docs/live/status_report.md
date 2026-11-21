@@ -29,6 +29,8 @@ snapshot by nature.
 | Ticks | every folder's `ticks.csv` |
 | Orders | every folder's `orders.csv`, summed |
 | Fills, trades, PnL, `params.json`, warm-up | the **newest** folder only: a `--resume` replays the soak's earlier fills into it, so summing would double-count |
+| §5 price chart: markers | the soak's rows of `fills_<slug>.csv` (rows whose `soak_id` is the run's); the newest folder's fills only when there is no ledger or soak id |
+| §5 price chart and buy-and-hold: price line | the soak's `ticks.csv` at one row a minute; minutes it lacks, over its span and the markers', from `bars_cache_<slug>.csv`, then the other `live_*` captures, then the other bar caches (`_fill_price_gaps`) |
 | Transactions (§6) | every folder's `orders.csv`, with the newest folder's `fills.csv` and `trades.csv` (`collect_transactions`); round trips and realised P&L from `catchup_<slug>.csv` where it exists (`collect_catchup`, `with_catchup`) |
 | Heartbeat, failures | `live_restart_<slug>.json` |
 | Owner's position view | `events_<slug>.jsonl` |
@@ -91,6 +93,23 @@ appears in no file as such.
   fill, a round trip they close is added to the trades with both fills' fees
   (marked *from the ledger*), and they are counted apart from `fills.csv`
   ("+ N from the ledger"), never as fills that match no order.
+- **Section 5's price chart marks the ledger, on a line with no downtime
+  holes** (since 2026-11-21). Two things put markers in empty space. The
+  newest folder's `fills.csv` is not always the soak's record: a `--resume`
+  whose ledger replay disagrees with the venue seeds one synthetic opening
+  fill at the venue's average price, stamped at the restart
+  (`fills_synthesised`), and none of the earlier fills. On 2026-11-21 night's
+  chart drew a SELL @ 35765 at 03:30 against a market near 34000. The markers
+  are therefore the soak's ledger rows. And the capture only exists while the
+  deployment runs, so the line stopped at every downtime and plotly bridged it
+  with a straight segment, under fills booked while stopped (a flatten, a
+  catch-up, an expiry settle). The missing minutes now come from the bar cache,
+  which a start backfills with the venue's kbars, and from the other
+  deployments' records of the same market. The deployment's own capture always
+  wins a minute, so a soak that ran throughout charts as before. The bar
+  caches carry what the backfill fetched: after the 2026-11-19 start, the
+  minutes before the 11-17 roll are the December contract, so November fills
+  there sit one month spread (about 40 to 150 points) off the line.
 - **A catch-up record replaces the venue's round trips it covers** (since
   2026-11-12, the user's decision). Where `catchup_<slug>.csv` exists
   ([catchup](catchup.md)), section 6's round trips are the record's paper round

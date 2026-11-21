@@ -661,3 +661,63 @@ def test_performance_counts_the_round_trip_only_the_ledger_has(tmp_path, monkeyp
     assert m["net_pnl_points"] == pytest.approx(run_data["transactions"]["net_points"])
     if run_data["performance"]["figs"]["price"] is not None:
         assert [t["name"] for t in run_data["performance"]["figs"]["price"]["data"]] == ["price", "BUY", "SELL"]
+
+
+# ---- section 5's price chart: ledger markers on a gap-free line ---------------
+
+def _trace(fig, name):
+    import base64
+    import numpy as np
+    t = next(t for t in fig["data"] if t["name"] == name)
+    dec = lambda v: (np.frombuffer(base64.b64decode(v["bdata"]), dtype=v["dtype"]).tolist()
+                     if isinstance(v, dict) else list(v))
+    return list(zip(dec(t["x"]), dec(t["y"])))
+
+
+def test_price_chart_marks_the_soaks_ledger_rows_not_a_synthetic_resume_fill(tmp_path, monkeypatch):
+    # 2026-11-21: a resume whose ledger replay disagreed with the venue seeded one
+    # synthetic SELL @ the venue's average, stamped at the restart; the chart drew
+    # it far from the market and none of the soak's real fills
+    pytest.importorskip("plotly")
+    _fake_packages(tmp_path, monkeypatch)
+    out, log = _outputs(tmp_path)
+    run = out / "live_night_20260930_080000"
+    (run / "fills.csv").write_text(FILLS_HEAD + "\n2026-09-30T15:04:00,SELL,135,1,0.0\n",
+                                   encoding="utf-8")
+    soak = "soak_20260930_080000_000000"
+    (out / "fills_night.csv").write_text(
+        LEDGER_HEAD + "\n"
+        "2026-09-30 07:55:00,BUY,90.0,1,0.018,soak_old,TXFK6\n"           # another epoch
+        f"2026-09-30 15:01:00,SELL,100.0,1,0.02,{soak},TXFK6\n"
+        f"2026-09-30 15:03:00,BUY,100.0,1,0.02,{soak},TXFK6\n", encoding="utf-8")
+    fig = sr.collect(out, log, NOW, processes=_procs(), hardware=HW, tz=UTC)["runs"][0]["performance"]["figs"]["price"]
+    assert [y for _, y in _trace(fig, "SELL")] == [100.0]
+    assert [y for _, y in _trace(fig, "BUY")] == [100.0]
+
+
+def test_price_line_fills_the_downtime_from_the_other_price_records(tmp_path, monkeypatch):
+    # the capture stops while the deployment is down; a fill booked then sat in
+    # empty space. The bar cache and another deployment's capture hold the market.
+    pytest.importorskip("plotly")
+    _fake_packages(tmp_path, monkeypatch)
+    out, log = _outputs(tmp_path)
+    soak = "soak_20260930_080000_000000"
+    (out / "fills_night.csv").write_text(
+        LEDGER_HEAD + f"\n2026-09-30 15:20:00,BUY,107.0,1,0.02,{soak},TXFK6\n", encoding="utf-8")
+    (out / "bars_cache_night.csv").write_text(
+        "timestamp,price,volume,contract\n"
+        "2026-09-30 15:01:00,555.0,1,202610\n"            # the capture has this minute: it wins
+        "2026-09-30 15:10:00,105.0,1,202610\n"            # downtime, from the cache
+        "2026-09-29 10:00:00,1.0,1,202610\n", encoding="utf-8")   # outside the span: dropped
+    other = out / "live_day_20260930_150000"
+    other.mkdir()
+    (other / "ticks.csv").write_text(
+        "timestamp,received,code,price,volume,simtrade\n"
+        "2026-09-30T15:20:10,2026-09-30T15:20:11,TXF,107,1,0\n", encoding="utf-8")
+    before = sorted(str(p) for p in out.rglob("*"))
+    fig = sr.collect(out, log, NOW, processes=_procs(), hardware=HW, tz=UTC)["runs"][0]["performance"]["figs"]["price"]
+    assert sorted(str(p) for p in out.rglob("*")) == before        # reads only
+    line = dict((x[:16], y) for x, y in _trace(fig, "price"))
+    assert line["2026-09-30T15:01"] == 100.0
+    assert line["2026-09-30T15:10"] == 105.0 and line["2026-09-30T15:20"] == 107.0
+    assert not any(k.startswith("2026-09-29") for k in line)
