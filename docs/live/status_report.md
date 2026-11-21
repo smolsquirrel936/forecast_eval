@@ -113,6 +113,14 @@ appears in no file as such.
   Without a ledger, section 6 is the newest folder's `fills.csv`/`trades.csv`
   with the soak's later ledger-only fills (`ledger_fills=`, marked *from the
   ledger*), as before.
+- **Section 5 draws "Price with fills" above "Cumulative net PnL", on one time
+  axis** (since 2026-11-21). The PnL chart (`plot_equity_drawdown_plotly`)
+  spans the first round trip's entry to the last one's exit, with buy-and-hold
+  cut to that window; the price chart spans its line and markers. Read one
+  above the other they showed different dates (day: PnL to 11-17, prices to
+  11-21), so `collect_performance` pins every x axis of both figures to the
+  earliest and latest time either draws. The curves are unchanged, so after
+  the last exit (a lot still held) the PnL chart is empty.
 - **Section 5's price line has no downtime holes** (since 2026-11-21). The
   capture only exists while the
   deployment runs, so the line stopped at every downtime and plotly bridged it
