@@ -28,10 +28,10 @@ snapshot by nature.
 | Sessions, bars, decisions, re-logins, alerts | every folder's `session.jsonl`, in order |
 | Ticks | every folder's `ticks.csv` |
 | Orders | every folder's `orders.csv`, summed |
-| Fills, trades, PnL, `params.json`, warm-up | the **newest** folder only: a `--resume` replays the soak's earlier fills into it, so summing would double-count |
-| §5 price chart: markers | the soak's rows of `fills_<slug>.csv` (rows whose `soak_id` is the run's); the newest folder's fills only when there is no ledger or soak id |
-| §5 price chart and buy-and-hold: price line | the soak's `ticks.csv` at one row a minute; minutes it lacks, over its span and the markers', from `bars_cache_<slug>.csv`, then the other `live_*` captures, then the other bar caches (`_fill_price_gaps`) |
-| Transactions (§6) | every folder's `orders.csv`, with the newest folder's `fills.csv` and `trades.csv` (`collect_transactions`); round trips and realised P&L from `catchup_<slug>.csv` where it exists (`collect_catchup`, `with_catchup`) |
+| `params.json`, warm-up | the **newest** folder only |
+| Fills, round trips, P&L, open lot (§5 metrics, equity curve and price-chart markers; §6) | **every row of the fill ledger `fills_<slug>.csv`**, paired FIFO from its first row (`collect_transactions(..., book=)`, `collect_performance(..., ledger_only=True)`), since 2026-11-21. Without a ledger: the newest folder's `fills.csv` and `trades.csv` plus `catchup_<slug>.csv` (`with_catchup`), as before |
+| §5 price line and buy-and-hold | the soak's `ticks.csv` at one row a minute; minutes it lacks, over its span and the markers', from `bars_cache_<slug>.csv`, then the other `live_*` captures, then the other bar caches (`_fill_price_gaps`) |
+| Orders and whether each filled (§6) | every folder's `orders.csv`, summed, matched against every folder's `fills.csv` (each fill once) |
 | Heartbeat, failures | `live_restart_<slug>.json` |
 | Owner's position view | `events_<slug>.jsonl` |
 | Position "now" | the fill ledger `fills_<slug>.csv`, net of every row (what the owner seeds from); the last bar's position when there is no ledger |
@@ -51,10 +51,12 @@ correct:
   (folder, bar_idx). A forecast's realized return is the price `horizon` bars
   later along the soak's whole bar series, so a horizon that crosses a restart
   is still scored, against the next bars the model actually saw.
-- **Fills and trades come from the newest folder only.** `live/cli.py` seeds
-  the replayed ledger into each resumed run (`fills_replayed`), so the newest
-  `fills.csv`/`trades.csv` already hold the soak. Orders are not replayed and
-  are summed.
+- **Fills and trades are the ledger's, not a folder's** (since 2026-11-21).
+  `live/cli.py` seeds the replayed ledger into each resumed run
+  (`fills_replayed`), which is why the newest `fills.csv`/`trades.csv` were read
+  until then. But a refused replay leaves only a synthetic fill there (below),
+  and a ledger replayed afterwards matches no folder. Orders are not replayed
+  and are summed.
 
 ## The transaction record (§6, since 2026-10-18)
 Per deployment: the position still held, every order with its outcome, and
@@ -69,14 +71,21 @@ appears in no file as such.
   an unfilled limit after 15 min, so that window holds at most its own fill.
   One with none is **no fill**: on 2026-10-17 night's two closes were cancelled
   this way and its long stayed open.
-- **Fill records ≥ filled orders, always.** "Orders: filled / not filled"
-  counts `orders.csv` rows by outcome; "Fill records" counts `fills.csv` rows.
-  Each fill is claimed by one order at most, so the records can only exceed the
-  filled orders, and they are equal when every fill is explained by an order.
-  The difference is `unmatched_fills`, flagged in the row, in a callout above
-  the deployment's tables, and as a WARN finding. Causes: an order filled in
-  parts, a fill added to the ledger by hand (2026-10-06), or a fill that
-  arrived after the next order's bar.
+  The outcome is read from every folder's `fills.csv`, each fill once: a
+  refused resume replay leaves only a synthetic fill in the newest folder, and
+  on 2026-11-21 all 11 of night's orders read *no fill* against it.
+- **With a ledger, no fill is "unmatched"** (since 2026-11-21, the user's
+  decision). "Fill records" counts the ledger's rows, marked *(ledger)*. A
+  ledger row with no order behind it (a replay, an expiry settle, a catch-up,
+  a hand-added row) is not a fault, so `unmatched_fills` is 0 and neither the
+  callout nor the WARN finding appears.
+- **Without a ledger, fill records ≥ filled orders, always.** "Fill records"
+  counts `fills.csv` rows. Each fill is claimed by one order at most, so the
+  records can only exceed the filled orders, and they are equal when every
+  fill is explained by an order. The difference is `unmatched_fills`, flagged
+  in the row, in a callout above the deployment's tables, and as a WARN
+  finding. Causes: an order filled in parts, a fill added to the ledger by hand
+  (2026-10-06), or a fill that arrived after the next order's bar.
 - **The open position is the fills' FIFO remainder.** `trades.csv` holds only
   closed round trips.
 - **"Now" is the fill ledger, and a disagreement with the last bar is a WARN**
@@ -84,23 +93,28 @@ appears in no file as such.
   runbook) or a row added by hand (§6.9) reaches `fills_<slug>.csv` and no bar,
   so the last bar would still show the lot. The finding names both numbers.
   First seen after the 2026-11-11 flatten.
-- **Sections 5 and 6 add the soak's ledger-only fills.** Section 5's metrics and
-  charts (`collect_performance(..., ledger_fills=, ledger_trades=)`) take the same
-  fills and the round trips section 6 books from them, so both count the same
-  trades. In section 6, `fills_<slug>.csv` rows of the
-  run's `soak_id` dated after the newest folder's last fill are passed to
-  `collect_transactions(..., ledger_fills=...)`: they close lots by FIFO like any
-  fill, a round trip they close is added to the trades with both fills' fees
-  (marked *from the ledger*), and they are counted apart from `fills.csv`
-  ("+ N from the ledger"), never as fills that match no order.
-- **Section 5's price chart marks the ledger, on a line with no downtime
-  holes** (since 2026-11-21). Two things put markers in empty space. The
-  newest folder's `fills.csv` is not always the soak's record: a `--resume`
-  whose ledger replay disagrees with the venue seeds one synthetic opening
-  fill at the venue's average price, stamped at the restart
-  (`fills_synthesised`), and none of the earlier fills. On 2026-11-21 night's
-  chart drew a SELL @ 35765 at 03:30 against a market near 34000. The markers
-  are therefore the soak's ledger rows. And the capture only exists while the
+- **Sections 5 and 6 are the whole fill ledger** (since 2026-11-21, the user's
+  decision: "the graph should reflect what venue recorded, even they are
+  generated by replay"). Every row of `fills_<slug>.csv`, from its first, goes
+  to `collect_transactions(..., book=)`, which pairs them FIFO into the round
+  trips, the open lot and the fees; section 5's metrics, equity curve and
+  price-chart markers (`collect_performance(..., ledger_only=True)`) take the
+  same rows and round trips, so both sections count the same trades. The run
+  folders' `fills.csv`/`trades.csv` are no longer read for them, for two
+  reasons. A `--resume` whose ledger replay disagrees with the venue seeds one
+  synthetic opening fill at the venue's average price, stamped at the restart
+  (`fills_synthesised`), and none of the earlier fills: on 2026-11-21 night's
+  chart drew a SELL @ 35765 at 03:30 against a market near 34000. And the
+  ledgers replayed on 2026-11-19 and 11-21 match no run folder: fullday showed
+  the folder's −6,703 from trades the ledger no longer has, and hybrid a SELL @
+  39056 the paper venue booked against a 38542 limit. The window is the
+  ledger's, not the soak's, so a deployment whose ledger has no row in the
+  current soak (fullday, flat since 10-31) still shows its round trips.
+  Without a ledger, section 6 is the newest folder's `fills.csv`/`trades.csv`
+  with the soak's later ledger-only fills (`ledger_fills=`, marked *from the
+  ledger*), as before.
+- **Section 5's price line has no downtime holes** (since 2026-11-21). The
+  capture only exists while the
   deployment runs, so the line stopped at every downtime and plotly bridged it
   with a straight segment, under fills booked while stopped (a flatten, a
   catch-up, an expiry settle). The missing minutes now come from the bar cache,
@@ -110,8 +124,10 @@ appears in no file as such.
   caches carry what the backfill fetched: after the 2026-11-19 start, the
   minutes before the 11-17 roll are the December contract, so November fills
   there sit one month spread (about 40 to 150 points) off the line.
-- **A catch-up record replaces the venue's round trips it covers** (since
-  2026-11-12, the user's decision). Where `catchup_<slug>.csv` exists
+- **A catch-up record replaces the venue's round trips it covers — only
+  without a ledger** (2026-11-12 to 11-21, the user's decision; since
+  2026-11-21 a deployment with a ledger shows the ledger alone and
+  `catchup_<slug>.csv` is not read). Where `catchup_<slug>.csv` exists
   ([catchup](catchup.md)), section 6's round trips are the record's paper round
   trips, paired FIFO from flat and marked *catch-up, paper*, plus the venue's
   round trips **entered after the record's last row**. "Realised net P&L" and

@@ -474,7 +474,7 @@ def test_a_fill_is_claimed_once_and_only_on_its_own_side():
 
 def test_no_orders_is_an_empty_record():
     t = sr.collect_transactions([], [], [])
-    assert t == {"orders": [], "fills": 0, "ledger_fills": 0, "trades": [], "open": [], "unfilled": 0,
+    assert t == {"orders": [], "fills": 0, "ledger_fills": 0, "basis": "run", "trades": [], "open": [], "unfilled": 0,
                  "unmatched_fills": 0, "net_points": 0.0, "unrealised_points": 0.0, "mark": None,
                  "fees_points": 0.0, "wins": 0}
 
@@ -623,23 +623,46 @@ def test_a_ledger_fill_closes_the_open_lot_and_books_the_round_trip():
     assert t["fees_points"] == pytest.approx(19.0)
 
 
-def test_collect_passes_only_this_soaks_later_ledger_fills(tmp_path, monkeypatch):
+def test_with_a_ledger_section_6_is_the_whole_ledger(tmp_path, monkeypatch):
+    # user decision 2026-11-21: sections 5 and 6 are what the venue recorded,
+    # the ledger from its first row (other epochs and replayed rows included),
+    # not the run folder; orders still say whether they filled, from fills.csv
     _fake_packages(tmp_path, monkeypatch)
     out, log = _outputs(tmp_path)
     run = out / "live_night_20260930_080000"
-    (run / "fills.csv").write_text(FILLS_HEAD + "\n2026-09-30 15:00:30,SELL,100.0,1,0.02\n",
-                                   encoding="utf-8")
+    (run / "orders.csv").write_text("timestamp,side,limit_price,intent,quantity\n"
+                                    "2026-09-30 15:00:00,SELL,100,CLOSE,1\n", encoding="utf-8")
+    (run / "fills.csv").write_text(FILLS_HEAD + "\n2026-09-30 15:00:30,SELL,135.0,1,0.0\n",
+                                   encoding="utf-8")         # e.g. a synthetic resume fill
+    (run / "trades.csv").write_text(
+        TRADES_HEAD + "\n2026-09-30T15:00:30,2026-09-30T15:01:30,SHORT,135,1,134,0,134,NIGHT,1,0\n",
+        encoding="utf-8")
     soak = "soak_20260930_080000_000000"
     (out / "fills_night.csv").write_text(
         LEDGER_HEAD + "\n"
         "2026-09-30 07:55:00,BUY,90.0,1,0.018,soak_old,TXFK6\n"           # another epoch
-        f"2026-09-30 15:00:30,SELL,100.0,1,0.02,{soak},TXFK6\n"           # in the folder
-        f"2026-10-01 17:14:39,BUY,98.0,1,0.0196,{soak},TXFK6\n",          # the flatten
+        f"2026-09-30 15:00:30,SELL,100.0,1,0.02,{soak},TXFK6\n"           # closes it
+        f"2026-10-01 17:14:39,SELL,98.0,1,0.0196,{soak},TXFK6\n",         # a replayed row
         encoding="utf-8")
-    t = sr.collect(out, log, NOW, processes=_procs(), hardware=HW)["runs"][0]["transactions"]
-    assert (t["fills"], t["ledger_fills"]) == (1, 1)
-    assert t["open"] == [] and t["trades"][-1]["source"] == "ledger"
-    assert t["trades"][-1]["points"] == pytest.approx(2.0)
+    (out / "catchup_night.csv").write_text(
+        "timestamp,side,fill_price,quantity,fee,catchup_run\n"
+        "2026-09-30 15:00:00,BUY,1,1,0,x\n2026-09-30 16:00:00,SELL,999,1,0,x\n", encoding="utf-8")
+    r = sr.collect(out, log, NOW, processes=_procs(), hardware=HW)["runs"][0]
+    t = r["transactions"]
+    assert (t["basis"], t["fills"], t["ledger_fills"], t["unmatched_fills"]) == ("ledger", 3, 0, 0)
+    (rt,) = t["trades"]                                   # the catch-up record is not read
+    assert (rt["side"], rt["entry"], rt["exit"], rt["points"]) == ("LONG", 90.0, 100.0, 10.0)
+    assert "source" not in rt and "catchup" not in t
+    assert t["open"] == [{"side": "SHORT", "qty": 1, "entry": 98.0, "since": "2026-10-01T17:14:39"}]
+    assert t["fees_points"] == pytest.approx(0.0576)
+    assert t["orders"][0]["outcome"] == "filled"          # matched against fills.csv
+    m = dict(r["performance"]["metrics"])                 # section 5 counts the same trade
+    assert m["n_trades"] == 1 and m["net_pnl_points"] == pytest.approx(t["net_points"])
+
+
+def test_without_a_ledger_section_6_is_the_run_folder():
+    t = sr.collect_transactions([], [_fill("2026-10-01 09:00:00", "BUY", 100)], [])
+    assert t["basis"] == "run" and t["fills"] == 1 and t["open"][0]["entry"] == 100.0
 
 
 def test_performance_counts_the_round_trip_only_the_ledger_has(tmp_path, monkeypatch):
@@ -674,7 +697,7 @@ def _trace(fig, name):
     return list(zip(dec(t["x"]), dec(t["y"])))
 
 
-def test_price_chart_marks_the_soaks_ledger_rows_not_a_synthetic_resume_fill(tmp_path, monkeypatch):
+def test_price_chart_marks_every_ledger_row_not_a_synthetic_resume_fill(tmp_path, monkeypatch):
     # 2026-11-21: a resume whose ledger replay disagreed with the venue seeded one
     # synthetic SELL @ the venue's average, stamped at the restart; the chart drew
     # it far from the market and none of the soak's real fills
@@ -692,7 +715,7 @@ def test_price_chart_marks_the_soaks_ledger_rows_not_a_synthetic_resume_fill(tmp
         f"2026-09-30 15:03:00,BUY,100.0,1,0.02,{soak},TXFK6\n", encoding="utf-8")
     fig = sr.collect(out, log, NOW, processes=_procs(), hardware=HW, tz=UTC)["runs"][0]["performance"]["figs"]["price"]
     assert [y for _, y in _trace(fig, "SELL")] == [100.0]
-    assert [y for _, y in _trace(fig, "BUY")] == [100.0]
+    assert [y for _, y in _trace(fig, "BUY")] == [90.0, 100.0]       # every epoch's rows
 
 
 def test_price_line_fills_the_downtime_from_the_other_price_records(tmp_path, monkeypatch):
