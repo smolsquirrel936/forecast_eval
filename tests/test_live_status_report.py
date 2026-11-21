@@ -295,7 +295,8 @@ def test_performance_is_the_per_run_reports_metrics_and_charts(tmp_path):
     assert m["hit_rate"] == 0.5 and m["max_drawdown_points"] == pytest.approx(-1.04)
     assert perf["point_value"] == 200.0                     # the per-run report's TXF default
     assert "strategy" in {t["name"] for t in perf["figs"]["equity"]["data"]}
-    assert [t["name"] for t in perf["figs"]["price"]["data"]] == ["price", "BUY", "SELL"]
+    assert [t["name"] for t in perf["figs"]["price"]["data"]] == [
+        "price", "winning round trip", "losing round trip", "BUY", "SELL"]
 
 
 def test_performance_without_trades_is_valid_json(tmp_path):
@@ -683,7 +684,8 @@ def test_performance_counts_the_round_trip_only_the_ledger_has(tmp_path, monkeyp
     assert m["n_trades"] == 1 and m["net_pnl_points"] == pytest.approx(3 - 0.0394)
     assert m["net_pnl_points"] == pytest.approx(run_data["transactions"]["net_points"])
     if run_data["performance"]["figs"]["price"] is not None:
-        assert [t["name"] for t in run_data["performance"]["figs"]["price"]["data"]] == ["price", "BUY", "SELL"]
+        assert [t["name"] for t in run_data["performance"]["figs"]["price"]["data"]] == [
+            "price", "winning round trip", "BUY", "SELL"]
 
 
 # ---- section 5's price chart: ledger markers on a gap-free line ---------------
@@ -764,3 +766,30 @@ def test_price_and_pnl_charts_share_one_time_range(tmp_path):
     assert len(ranges["equity"]) == 2                     # both panels of the PnL chart
     assert {tuple(r) for rs in ranges.values() for r in rs} == {
         ("2026-09-30T15:00:00", "2026-09-30T15:04:00")}   # the price line's span
+    # buy & hold runs from the first entry to the chart's end, past the last exit
+    bh = _trace(figs["equity"], "buy & hold")
+    assert (bh[0][0][:16], bh[-1][0][:16]) == ("2026-09-30T15:01", "2026-09-30T15:04")
+
+
+def test_price_chart_draws_each_round_trip_by_result(tmp_path):
+    # user request 2026-11-21: each closed round trip entry -> exit, green for a
+    # win and red for a loss, no end markers of its own (they overlapped the
+    # BUY/SELL markers), numbered in exit order like section 6's table
+    pytest.importorskip("plotly")
+    out, log = _outputs(tmp_path)
+    run = out / "live_night_20260930_080000"
+    (run / "trades.csv").write_text(
+        TRADES_HEAD + "\n"
+        "2026-09-30T15:00:30,2026-09-30T15:01:30,LONG,100,103,3,0.04,2.96,NIGHT,1,0\n"
+        "2026-09-30T15:03:30,2026-09-30T15:04:30,SHORT,102,103,-1,0.04,-1.04,NIGHT,1,0\n",
+        encoding="utf-8")
+    fig = sr.collect(out, log, NOW, processes=_procs(), hardware=HW, tz=UTC)["runs"][0]["performance"]["figs"]["price"]
+    by_name = {t["name"]: t for t in fig["data"]}
+    win, loss = by_name["winning round trip"], by_name["losing round trip"]
+    assert (win["line"]["color"], loss["line"]["color"]) == ("#2ca02c", "#d62728")
+    assert win["mode"] == loss["mode"] == "lines"                    # no end markers
+    assert [y for _, y in _trace(fig, "winning round trip")] == [100.0, 103.0, None]
+    assert [y for _, y in _trace(fig, "losing round trip")] == [102.0, 103.0, None]
+    assert win["hovertext"][0].startswith("#1 LONG 100 → 103")
+    assert loss["hovertext"][0].startswith("#2 SHORT 102 → 103")
+    assert "held 0h 1m" in loss["hovertext"][0]
