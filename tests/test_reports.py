@@ -263,6 +263,24 @@ def test_plotly_axis_carrier_is_invisible_and_scaled():
 
 
 @pytestmark_plotly
+def test_plotly_until_holds_the_curve_flat_and_extends_buy_and_hold():
+    """2026-11-21 live status page: a deployment that stopped trading lost its
+    buy-and-hold line at its last exit. `until` holds realised P&L flat to it and
+    runs buy & hold from the first entry to it; without it nothing changes."""
+    trades = _trades([10.0], hold_min=5)                 # entry 08:55, exit 09:00
+    ticks = _ticks(range(100, 160), start="2024-01-02 08:55:00")
+    until = pd.Timestamp("2024-01-02 09:50:00")
+    names = lambda f: {t.name: t for t in f.data}
+    base = names(plot_equity_drawdown_plotly(trades, ticks=ticks, point_value=PV))
+    assert pd.Timestamp(base["buy & hold"].x[-1]) == pd.Timestamp("2024-01-02 09:00:00")
+    ext = names(plot_equity_drawdown_plotly(trades, ticks=ticks, point_value=PV, until=until))
+    assert pd.Timestamp(ext["strategy"].x[-1]) == until
+    assert list(ext["strategy"].y) == pytest.approx([0.0, 10.0, 10.0])
+    assert pd.Timestamp(ext["buy & hold"].x[0]) == pd.Timestamp("2024-01-02 08:55:00")
+    assert pd.Timestamp(ext["buy & hold"].x[-1]) == until
+
+
+@pytestmark_plotly
 def test_plotly_toggle_masks_cover_every_trace():
     """Stale masks would blank a carrier (killing an axis) or the drawdown."""
     fig = plot_equity_drawdown_plotly(

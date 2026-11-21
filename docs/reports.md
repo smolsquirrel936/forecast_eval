@@ -45,6 +45,13 @@ previously collapsed it to one print, so the reference line vanished.
 
 A bundle whose `trades` frame predates `entry_ts` simply gets no origin.
 
+`plot_equity_drawdown_plotly(..., until=)` (since 2026-11-21) holds the curve
+and its drawdown flat from the last exit to `until`, so buy & hold runs from
+the first entry to `until` too. The live status page passes its chart's end:
+fullday's one round trip ended 10-31, and its buy-and-hold line stopped there
+under a price chart that ran to 11-21. Realised P&L does not move while flat.
+The per-run report passes nothing and draws as before.
+
 ## Key points / gotchas
 - **PNGs always work** (matplotlib is a hard dep); the combined `report.html` is
   produced only when `plotly` is installed (`_HAS_PLOTLY`).

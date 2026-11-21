@@ -299,6 +299,7 @@ def plot_equity_drawdown_plotly(
     fee_rate: float = 0.0002,
     point_value: float = 200.0,
     split_ts=None,
+    until=None,
 ) -> "go.Figure":
     # Tech: the interactive twin of the equity/drawdown chart — two stacked panels,
     #       each with a left points axis and a right currency axis that is the exact
@@ -311,6 +312,19 @@ def plot_equity_drawdown_plotly(
     #       each currency axis (otherwise plotly won't render an axis with no trace)
     #       is what keeps them visible and in lock-step.
     eq = _equity_series(trades)
+    # Tech: with `until` past the last exit, hold the curve (and its drawdown)
+    #       flat to `until`, so buy & hold also runs from the first entry to it.
+    # Why:  the live status page (2026-11-21) reads this chart under a price
+    #       chart that runs to the latest print; a deployment that stopped
+    #       trading (fullday: one round trip, to 10-31) lost its buy-and-hold
+    #       line there although the market went on. Realised P&L does not move
+    #       while flat. None (the per-run report) draws exactly as before.
+    if until is not None and not eq.empty and pd.Timestamp(until) > pd.Timestamp(eq["timestamp"].max()):
+        last = eq.iloc[-1]
+        eq = pd.concat([eq, pd.DataFrame([{"timestamp": pd.Timestamp(until),
+                                           "equity": last["equity"],
+                                           "drawdown": last["drawdown"]}])],
+                       ignore_index=True)
     bh = _buy_and_hold_curve(eq, ticks, fee_rate)
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True,

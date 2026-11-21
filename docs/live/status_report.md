@@ -119,8 +119,19 @@ appears in no file as such.
   cut to that window; the price chart spans its line and markers. Read one
   above the other they showed different dates (day: PnL to 11-17, prices to
   11-21), so `collect_performance` pins every x axis of both figures to the
-  earliest and latest time either draws. The curves are unchanged, so after
-  the last exit (a lot still held) the PnL chart is empty.
+  earliest and latest time either draws. The strategy curve is held flat from
+  its last exit to that end and buy & hold runs from the first entry to it
+  (`until=`, the user's choice): fullday's dotted line had stopped at its one
+  round trip's exit, 10-31.
+- **Each closed round trip is drawn on the price chart** (since 2026-11-21,
+  the user's request). `_round_trip_traces` adds one trace per result
+  ("winning round trip" green for net > 0, section 6's wins; "losing round
+  trip" red): a plain line from the entry fill to the exit fill, under the
+  BUY/SELL markers and with no end markers of its own, which overlapped them.
+  The hover reads `#n SIDE entry → exit`, points, net and
+  holding time; `#n` is the round trip's number in exit order, the "#" column
+  of section 6's table. The open lot and roll legs get no line of their own (a
+  ledger roll pair closes one round trip and opens the next).
 - **Section 5's price line has no downtime holes** (since 2026-11-21). The
   capture only exists while the
   deployment runs, so the line stopped at every downtime and plotly bridged it

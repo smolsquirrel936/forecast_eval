@@ -290,6 +290,53 @@ def _fill_price_gaps(ticks: Any, dep: Deployment, outputs: Path, marks: Any) -> 
     return merged[["timestamp", "price"]].reset_index(drop=True)
 
 
+def _held(delta: Any) -> str:
+    # Why:  a hover label is read at a glance; "3d 14h" beats "3 days 14:02:00".
+    mins = int(delta.total_seconds() // 60)
+    d, h, m = mins // 1440, mins % 1440 // 60, mins % 60
+    return f"{d}d {h}h" if d else f"{h}h {m}m"
+
+
+def _round_trip_traces(trades: Any) -> List[Any]:
+    """Two plotly line traces, winning and losing: each closed round trip as entry -> exit."""
+    # Tech: number the round trips 1.. in exit order (section 6's table order),
+    #       then draw the winners (net > 0, section 6's "wins") in green and the
+    #       rest in red, each group one line trace with segments split by None;
+    #       the hover names the number, side, prices, points, net and holding
+    #       time. Lines only: the ends sit on the BUY/SELL markers.
+    # Why:  a BUY can open or close a lot, so the markers alone did not say
+    #       which fills made a trade. The user asked (2026-11-21) for each
+    #       closed round trip, colored green/red for win/loss, with no end
+    #       markers of its own (they overlapped the BUY/SELL ones). One trace per
+    #       result keeps the legend to two toggles however many trades there are.
+    import pandas as pd
+    import plotly.graph_objects as go
+
+    if trades is None or trades.empty:
+        return []
+    t = trades.sort_values("exit_ts", kind="stable").reset_index(drop=True)
+    win = t["net_pnl_points"].astype(float) > 0
+    out = []
+    for name, color, rows in (("winning round trip", "#2ca02c", t[win]),
+                              ("losing round trip", "#d62728", t[~win])):
+        xs: List[Any] = []
+        ys: List[Any] = []
+        text: List[str] = []
+        for i, r in rows.iterrows():
+            entry, exit_ = pd.Timestamp(r["entry_ts"]), pd.Timestamp(r["exit_ts"])
+            label = (f"#{i + 1} {r['side']} {float(r['entry_price']):,.0f} → {float(r['exit_price']):,.0f}"
+                     f"<br>{float(r['pnl_points']):+,.0f} pts · net {float(r['net_pnl_points']):+,.1f}"
+                     f" · held {_held(exit_ - entry)}")
+            xs += [entry, exit_, None]
+            ys += [float(r["entry_price"]), float(r["exit_price"]), None]
+            text += [label, label, ""]
+        if xs:
+            out.append(go.Scatter(
+                x=xs, y=ys, mode="lines", name=name, line=dict(color=color, width=2),
+                hovertext=text, hoverinfo="text"))
+    return out
+
+
 def collect_performance(dep: Deployment, *, ledger_fills: List[Dict[str, str]] = (),
                         ledger_trades: List[Dict[str, Any]] = (),
                         ledger_only: bool = False,
@@ -381,23 +428,37 @@ def collect_performance(dep: Deployment, *, ledger_fills: List[Dict[str, str]] =
     #       identical to it; without plotly the section keeps its table.
     figs = {"equity": None, "price": None}
     if reports._HAS_PLOTLY:
-        equity = reports.plot_equity_drawdown_plotly(
-            trades, ticks=ticks, fee_rate=fee_rate, point_value=point_value)
-        price = reports.plot_price_fills_plotly(fills, ticks)
-        # Tech: give both figures one x range: from the earliest to the latest
+        # Tech: one x range for both figures: from the earliest to the latest
         #       time either draws (price line, fills, round-trip entries and
         #       exits); every x axis of the equity figure (both panels) included.
+        #       The equity curve is held flat to its end (`until`), so buy & hold
+        #       runs from the first entry to it.
         # Why:  the equity curve spans first entry -> last exit and the price
         #       line its capture and markers, so the two charts, read one above
         #       the other, showed different dates (2026-11-21: day's PnL ended
-        #       at 11-17, its prices ran to 11-21). The curves are unchanged.
+        #       at 11-17, its prices ran to 11-21), and a deployment that stopped
+        #       trading lost its buy-and-hold line (fullday, after 10-31). The
+        #       user wants buy & hold from the first entry (2026-11-21).
         stamps = [pd.to_datetime(s, format="mixed") for s in (
             ticks["timestamp"] if ticks is not None and not ticks.empty else None,
             fills["timestamp"] if not fills.empty else None,
             trades["entry_ts"] if not trades.empty else None,
             trades["exit_ts"] if not trades.empty else None) if s is not None]
-        if stamps:
-            span = [min(s.min() for s in stamps), max(s.max() for s in stamps)]
+        span = [min(s.min() for s in stamps), max(s.max() for s in stamps)] if stamps else None
+        equity = reports.plot_equity_drawdown_plotly(
+            trades, ticks=ticks, fee_rate=fee_rate, point_value=point_value,
+            until=span[1] if span else None)
+        price = reports.plot_price_fills_plotly(fills, ticks)
+        # Tech: the round trips go between the price line and the BUY/SELL
+        #       markers, so the markers stay on top.
+        # Why:  a marker is what a reader hovers for the fill's own time and
+        #       price; the connectors explain which fills belong together.
+        pairs = _round_trip_traces(trades)
+        if pairs:
+            n = len(price.data)
+            price.add_traces(pairs)                  # plotly only reorders traces it holds
+            price.data = price.data[:1] + price.data[n:] + price.data[1:n]
+        if span:
             for fig in (equity, price):
                 fig.update_xaxes(range=span)
         figs["equity"] = json.loads(equity.to_json())
