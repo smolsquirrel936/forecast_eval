@@ -292,16 +292,17 @@ def _fill_price_gaps(ticks: Any, dep: Deployment, outputs: Path, marks: Any) -> 
 
 def collect_performance(dep: Deployment, *, ledger_fills: List[Dict[str, str]] = (),
                         ledger_trades: List[Dict[str, Any]] = (),
-                        chart_fills: Optional[List[Dict[str, str]]] = None,
+                        ledger_only: bool = False,
                         outputs: Optional[Path] = None) -> Dict[str, Any]:
     """The per-run report's trading metrics and two charts, for one deployment.
 
     `ledger_fills` / `ledger_trades` are the soak's fills that only
     `fills_<slug>.csv` has and the round trips they close (`collect_transactions`);
     they join the run folder's, so the metrics and charts match section 6.
-    `chart_fills`, when given, are the price chart's markers instead of the run
-    folder's fills (`collect_run` passes the soak's ledger rows). `outputs`, when
-    given, fills the price line's missing minutes (`_fill_price_gaps`).
+    With `ledger_only`, they are the whole record instead (`collect_run` then
+    passes every ledger row and the round trips section 6 pairs from them) and
+    the run folder's fills and trades are not read. `outputs`, when given,
+    fills the price line's missing minutes (`_fill_price_gaps`).
     """
     # Tech: imported here, not at module level.
     # Why:  `reports` pulls matplotlib and plotly, and `metrics` pulls pandas;
@@ -322,6 +323,18 @@ def collect_performance(dep: Deployment, *, ledger_fills: List[Dict[str, str]] =
     #       numbers rather than a second implementation of them.
     trades = reports._read_artifact(dep.run_dir, "trades")
     fills = reports._read_artifact(dep.run_dir, "fills")
+    # Tech: in `ledger_only` mode start from empty frames in the artifacts'
+    #       columns, so only the ledger's fills and round trips go in below.
+    # Why:  the newest folder's fills.csv is not the venue's record: a
+    #       `--resume` whose ledger replay disagrees with the venue seeds ONE
+    #       synthetic opening fill at the venue's average price, stamped at the
+    #       restart (`live/cli.py`, `fills_synthesised`) — on 2026-11-21 night's
+    #       chart drew a SELL @ 35765 at 03:30 against a market near 34000 — and
+    #       a ledger replayed afterwards (2026-11-19, 11-21) no longer matches
+    #       any run folder. The user's decision (2026-11-21): show the ledger.
+    if ledger_only:
+        trades = pd.DataFrame(columns=list(TradeRecord.__dataclass_fields__))
+        fills = pd.DataFrame(columns=["timestamp", "side", "fill_price", "quantity", "fee"])
     # Tech: append the ledger-only fills and the round trips they close, in the
     #       artifacts' own columns, then re-sort by time.
     # Why:  a fill booked while the deployment was stopped (a flatten, a row
@@ -360,25 +373,8 @@ def collect_performance(dep: Deployment, *, ledger_fills: List[Dict[str, str]] =
               if f is not None]
     ticks = pd.concat(frames).sort_values("timestamp", ignore_index=True) if frames else None
 
-    # Tech: the price chart's markers are `chart_fills` (the soak's ledger rows)
-    #       when the caller has them, else the run folder's fills as above.
-    # Why:  the newest folder's fills.csv is not always the soak's record. A
-    #       `--resume` whose ledger replay disagrees with the venue seeds ONE
-    #       synthetic opening fill at the venue's average price, stamped at the
-    #       restart (`live/cli.py`, `fills_synthesised`): on 2026-11-21 night's
-    #       chart drew a SELL @ 35765 at 03:30 against a market near 34000, and
-    #       none of the soak's earlier fills. The ledger is what the owner seeds
-    #       from and holds no synthetic rows.
-    marks = fills
-    if chart_fills is not None:
-        marks = pd.DataFrame([{
-            "timestamp": pd.Timestamp(f["timestamp"]), "side": f["side"],
-            "fill_price": float(f["fill_price"]), "quantity": int(float(f["quantity"])),
-            "fee": float(f.get("fee") or 0.0)} for f in chart_fills],
-            columns=["timestamp", "side", "fill_price", "quantity", "fee"])
-        marks = marks.sort_values("timestamp", ignore_index=True)
     if outputs is not None:
-        ticks = _fill_price_gaps(ticks, dep, outputs, marks)
+        ticks = _fill_price_gaps(ticks, dep, outputs, fills)
 
     # Tech: the two plotly figures, as JSON for `Plotly.newPlot` in the page.
     # Why:  the same functions the per-run report draws with, so the charts are
@@ -387,7 +383,7 @@ def collect_performance(dep: Deployment, *, ledger_fills: List[Dict[str, str]] =
     if reports._HAS_PLOTLY:
         figs["equity"] = json.loads(reports.plot_equity_drawdown_plotly(
             trades, ticks=ticks, fee_rate=fee_rate, point_value=point_value).to_json())
-        figs["price"] = json.loads(reports.plot_price_fills_plotly(marks, ticks).to_json())
+        figs["price"] = json.loads(reports.plot_price_fills_plotly(fills, ticks).to_json())
     # Why:  pairs, not a dict — the page JSON is written with sorted keys, and the
     #       table should keep the per-run report's row order.
     return {"metrics": list(m.items()), "point_value": point_value, "figs": figs}
@@ -411,7 +407,8 @@ def _sec(ts: str) -> str:
 def collect_transactions(orders: List[Dict[str, str]], fills: List[Dict[str, str]],
                          trades: List[Dict[str, str]],
                          mark: Optional[Dict[str, Any]] = None,
-                         ledger_fills: List[Dict[str, str]] = ()) -> Dict[str, Any]:
+                         ledger_fills: List[Dict[str, str]] = (),
+                         book: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
     """One deployment's transaction record: orders with outcomes, closed trades, open lot.
 
     `mark` is the newest bar (`timestamp`, `price`); the open lot is valued at it.
@@ -419,13 +416,33 @@ def collect_transactions(orders: List[Dict[str, str]], fills: List[Dict[str, str
     folder's last one (a flatten with the deployment stopped, a row added by
     hand): they close lots like any fill, and a round trip they close is added
     to the trades, since no `trades.csv` holds it.
+
+    With `book` (every row of `fills_<slug>.csv`), the round trips, the open
+    lot and the fees are the ledger's alone, paired FIFO from its first row;
+    `fills` then only tell which orders filled, and `trades` and
+    `ledger_fills` are not used.
     """
     def _fill(f: Dict[str, str], ledger: bool) -> Dict[str, Any]:
         return {"ts": _sec(f.get("timestamp", "")), "side": f.get("side", ""),
                 "price": _num(f.get("fill_price")), "qty": int(_num(f.get("quantity")) or 0),
                 "fee": _num(f.get("fee")), "ledger": ledger}
-    fl = sorted([_fill(f, False) for f in fills] + [_fill(f, True) for f in ledger_fills],
-                key=lambda f: f["ts"])
+    # Tech: with `book`, the record is the ledger's rows (all flagged `ledger`,
+    #       so every lot they close is booked below) and the orders are matched
+    #       against the run folder's fills on their own.
+    # Why:  the user's decision (2026-11-21): sections 5 and 6 show what the
+    #       venue recorded, which is the ledger, even where a replay wrote it
+    #       (the 2026-11-19 and 11-21 replays rewrote night/day/hybrid/fullday).
+    #       The run folders keep what each live process saw, so they still say
+    #       whether an order filled; a ledger row with no order behind it (a
+    #       replay, a settle, a catch-up) is not a fault, so none is counted.
+    if book is not None:
+        fl = sorted((_fill(f, True) for f in book), key=lambda f: f["ts"])
+        to_match = sorted((_fill(f, False) for f in fills), key=lambda f: f["ts"])
+        trades = []
+    else:
+        fl = sorted([_fill(f, False) for f in fills] + [_fill(f, True) for f in ledger_fills],
+                    key=lambda f: f["ts"])
+        to_match = fl
     od = sorted(({"ts": _sec(o.get("timestamp", "")), "side": o.get("side", ""),
                   "intent": o.get("intent", ""), "limit": _num(o.get("limit_price")),
                   "qty": int(_num(o.get("quantity")) or 0)} for o in orders), key=lambda o: o["ts"])
@@ -443,12 +460,13 @@ def collect_transactions(orders: List[Dict[str, str]], fills: List[Dict[str, str
     claimed: set = set()
     for i, o in enumerate(od):
         end = od[i + 1]["ts"] if i + 1 < len(od) else None
-        hit = next((j for j, f in enumerate(fl) if j not in claimed and not f["ledger"]
+        hit = next((j for j, f in enumerate(to_match) if j not in claimed and not f["ledger"]
                     and f["side"] == o["side"] and f["ts"] >= o["ts"]
                     and (end is None or f["ts"] < end)), None)
         if hit is not None:
             claimed.add(hit)
-            o.update(outcome="filled", fill_ts=fl[hit]["ts"], fill_price=fl[hit]["price"])
+            o.update(outcome="filled", fill_ts=to_match[hit]["ts"],
+                     fill_price=to_match[hit]["price"])
         else:
             o.update(outcome="no fill", fill_ts=None, fill_price=None)
 
@@ -473,7 +491,9 @@ def collect_transactions(orders: List[Dict[str, str]], fills: List[Dict[str, str
                     "entry_ts": lots[0]["ts"], "exit_ts": f["ts"],
                     "side": "LONG" if lots[0]["sign"] > 0 else "SHORT",
                     "entry": lots[0]["price"], "exit": f["price"], "points": points,
-                    "fees": fees, "net": points - fees, "source": "ledger"})
+                    "fees": fees, "net": points - fees,
+                    # the ledger IS the record in `book` mode: nothing to mark
+                    **({} if book is not None else {"source": "ledger"})})
             lots[0]["qty"] -= take
             q -= take
             if not lots[0]["qty"]:
@@ -503,17 +523,19 @@ def collect_transactions(orders: List[Dict[str, str]], fills: List[Dict[str, str
            "entry": _num(t.get("entry_price")), "exit": _num(t.get("exit_price")),
            "points": _num(t.get("pnl_points")), "fees": _num(t.get("fees_points")),
            "net": _num(t.get("net_pnl_points"))} for t in trades] + closed_by_ledger
-    n_ledger = sum(f["ledger"] for f in fl)
+    n_ledger = 0 if book is not None else sum(f["ledger"] for f in fl)
     return {
         "orders": od, "fills": len(fl) - n_ledger, "ledger_fills": n_ledger,
+        "basis": "ledger" if book is not None else "run",
         "trades": tr, "open": open_lots,
         "unfilled": sum(o["outcome"] != "filled" for o in od),
         # Tech: fills no order claimed. Never negative: a fill is claimed once.
+        #       Not counted in `book` mode (see above).
         # Why:  zero means every fill is explained by an order. More means an
         #       order filled in parts, a fill added by hand (2026-10-06), or a
         #       fill landing after the next order's bar, which the matching
         #       window then misreads — each one a reason to read the files.
-        "unmatched_fills": len(fl) - n_ledger - len(claimed),
+        "unmatched_fills": 0 if book is not None else len(fl) - n_ledger - len(claimed),
         "net_points": sum(t["net"] or 0.0 for t in tr),
         "unrealised_points": unrealised,
         "mark": {"ts": _sec(str(mark.get("timestamp") or "")), "price": mark_price}
@@ -795,7 +817,29 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
     lat = ticks.pop("lat")
     # Tech: transactions first; their ledger-closed round trips feed performance.
     # Why:  sections 5 and 6 must count the same trades.
-    tx = collect_transactions(orders, fills, trades, bars[-1] if bars else None, ledger_later)
+    # Tech: with a ledger, both sections are its rows (`book`); without one, the
+    #       run folder's fills and trades plus the catch-up record, as before.
+    # Why:  the user's decision (2026-11-21): sections 5 and 6 show what the
+    #       venue recorded — the ledger, replayed rows included — over the
+    #       ledger's whole history, not the soak, and no longer swap in
+    #       `catchup_<slug>.csv` (which nothing then reads).
+    if ledger:
+        # Tech: the orders are matched against every folder's fills.csv, each
+        #       fill once (same timestamp, side and price), not the newest's.
+        # Why:  orders come from every folder, and a resume whose ledger replay
+        #       is refused keeps only a synthetic fill in the new folder: on
+        #       2026-11-21 all 11 of night's orders read "no fill" against it.
+        seen, venue_fills = set(), []
+        for f in (f for rd in dirs for f in _rows(rd / "fills.csv")):
+            key = (_sec(f.get("timestamp", "")), f.get("side"), f.get("fill_price"))
+            if key not in seen:
+                seen.add(key)
+                venue_fills.append(f)
+        tx = collect_transactions(orders, venue_fills, [], bars[-1] if bars else None, book=ledger)
+    else:
+        tx = with_catchup(collect_transactions(orders, fills, trades, bars[-1] if bars else None,
+                                               ledger_later),
+                          collect_catchup(outputs / f"catchup_{dep.slug}.csv"))
 
     return {
         "slug": dep.slug, "package": package, "dir": d.name, "dirs": [x.name for x in dirs],
@@ -835,18 +879,13 @@ def collect_run(dep: Deployment, outputs: Path, now: datetime) -> Dict[str, Any]
             "owner_values": {str(k): v for k, v in owner_pos.items()}, "owner_now": owner_last,
             "ledger_now": ledger_now,
         },
-        # Tech: the price chart's markers are this soak's ledger rows when there
-        #       is a ledger and a soak id; None keeps the run folder's fills.
-        # Why:  see `collect_performance` — the folder can hold a synthetic
-        #       resume fill and miss the soak's earlier ones; the ledger cannot.
+        # Sections 5 and 6 count the same trades: the ledger's, when there is one.
         "performance": collect_performance(
-            dep, ledger_fills=ledger_later,
-            ledger_trades=[t for t in tx["trades"] if t.get("source") == "ledger"],
-            chart_fills=([f for f in ledger if f.get("soak_id") == params.get("soak_id")]
-                         if ledger and params.get("soak_id") else None),
-            outputs=outputs),
-        # Section 5 stays the venue's record; section 6 follows the strategy.
-        "transactions": with_catchup(tx, collect_catchup(outputs / f"catchup_{dep.slug}.csv")),
+            dep, ledger_fills=ledger if ledger else ledger_later,
+            ledger_trades=(tx["trades"] if ledger
+                           else [t for t in tx["trades"] if t.get("source") == "ledger"]),
+            ledger_only=bool(ledger), outputs=outputs),
+        "transactions": tx,
         "stability": {
             "relogins": [e.get("when") for e in relogins],
             "relogin_failed": [{"when": e.get("wall"), "backoff": e.get("backoff_seconds")} for e in failed],
@@ -1063,9 +1102,9 @@ def findings(data: Mapping[str, Any]) -> List[Dict[str, str]]:
                  f"event reported 0 ({sum(r['position']['owner_events'] for r in runs):,} events).")})
 
     # Tech: warn when the ledger's net and the last bar's position differ.
-    # Why:  the ledger is the newer record then (a flatten or a hand-added
-    #       fill after the last bar), and section 6's lots and P&L are built
-    #       from the newest run folder's fills, which do not have that fill.
+    # Why:  the ledger is the newer record then (a flatten, a hand-added fill
+    #       or a replayed ledger after the last bar); sections 5 and 6 are
+    #       built from the ledger, so the last bar is the one that is stale.
     split = [r for r in runs if r["position"]["ledger_now"] is not None
              and r["position"]["now"] is not None
              and r["position"]["ledger_now"] != r["position"]["now"]]
@@ -1075,9 +1114,8 @@ def findings(data: Mapping[str, Any]) -> List[Dict[str, str]]:
                     + esc(", ".join(f'{names[r["package"]]} ledger {r["position"]["ledger_now"]:+d}, '
                                     f'last bar {r["position"]["now"]:+d}' for r in split))
                     + ". A fill reached the ledger after the deployment's last bar: a flatten run "
-                      "with the deployments stopped (§6.2) or a row added by hand (§6.9). "
-                      "\"Now\" above is the ledger, and section 6 adds the soak's ledger fills "
-                      "that no run folder has, marked \"from the ledger\"."})
+                      "with the deployments stopped (§6.2), a row added by hand (§6.9) or a "
+                      "replayed ledger. \"Now\" above and sections 5 and 6 are the ledger."})
 
     unmatched = [r for r in runs if r["transactions"]["unmatched_fills"]]
     if unmatched:

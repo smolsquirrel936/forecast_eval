@@ -47,7 +47,9 @@ the fill that **opened** that lot, even though it is older than the downtime
 (`entry_before`, since 2026-11-12). Without it the first row closes a lot the
 record never opened, and the status page, which pairs the record into round
 trips and shows them as section 6's realised P&L
-([status_report](status_report.md)), could not price it.
+([status_report](status_report.md)), could not price it. Since 2026-11-21 the
+status page reads the record only for a deployment with no fill ledger; with a
+ledger it shows the ledger alone (the user's decision).
 
 ## Exit codes
 | Code | Meaning |
