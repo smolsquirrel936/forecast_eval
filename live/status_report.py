@@ -381,9 +381,27 @@ def collect_performance(dep: Deployment, *, ledger_fills: List[Dict[str, str]] =
     #       identical to it; without plotly the section keeps its table.
     figs = {"equity": None, "price": None}
     if reports._HAS_PLOTLY:
-        figs["equity"] = json.loads(reports.plot_equity_drawdown_plotly(
-            trades, ticks=ticks, fee_rate=fee_rate, point_value=point_value).to_json())
-        figs["price"] = json.loads(reports.plot_price_fills_plotly(fills, ticks).to_json())
+        equity = reports.plot_equity_drawdown_plotly(
+            trades, ticks=ticks, fee_rate=fee_rate, point_value=point_value)
+        price = reports.plot_price_fills_plotly(fills, ticks)
+        # Tech: give both figures one x range: from the earliest to the latest
+        #       time either draws (price line, fills, round-trip entries and
+        #       exits); every x axis of the equity figure (both panels) included.
+        # Why:  the equity curve spans first entry -> last exit and the price
+        #       line its capture and markers, so the two charts, read one above
+        #       the other, showed different dates (2026-11-21: day's PnL ended
+        #       at 11-17, its prices ran to 11-21). The curves are unchanged.
+        stamps = [pd.to_datetime(s, format="mixed") for s in (
+            ticks["timestamp"] if ticks is not None and not ticks.empty else None,
+            fills["timestamp"] if not fills.empty else None,
+            trades["entry_ts"] if not trades.empty else None,
+            trades["exit_ts"] if not trades.empty else None) if s is not None]
+        if stamps:
+            span = [min(s.min() for s in stamps), max(s.max() for s in stamps)]
+            for fig in (equity, price):
+                fig.update_xaxes(range=span)
+        figs["equity"] = json.loads(equity.to_json())
+        figs["price"] = json.loads(price.to_json())
     # Why:  pairs, not a dict — the page JSON is written with sorted keys, and the
     #       table should keep the per-run report's row order.
     return {"metrics": list(m.items()), "point_value": point_value, "figs": figs}

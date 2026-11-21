@@ -744,3 +744,23 @@ def test_price_line_fills_the_downtime_from_the_other_price_records(tmp_path, mo
     assert line["2026-09-30T15:01"] == 100.0
     assert line["2026-09-30T15:10"] == 105.0 and line["2026-09-30T15:20"] == 107.0
     assert not any(k.startswith("2026-09-29") for k in line)
+
+
+def test_price_and_pnl_charts_share_one_time_range(tmp_path):
+    # 2026-11-21: the PnL chart spanned first entry -> last exit while the price
+    # chart ran to the last print, so the two charts showed different dates
+    pytest.importorskip("plotly")
+    out, log = _outputs(tmp_path)
+    run = out / "live_night_20260930_080000"
+    (run / "trades.csv").write_text(
+        TRADES_HEAD + "\n2026-09-30T15:01:00,2026-09-30T15:02:00,LONG,100,103,3,0.04,2.96,NIGHT,1,0\n",
+        encoding="utf-8")
+    (run / "fills.csv").write_text(
+        FILLS_HEAD + "\n2026-09-30T15:01:00,BUY,100,1,0.02\n2026-09-30T15:02:00,SELL,103,1,0.02\n",
+        encoding="utf-8")
+    figs = sr.collect(out, log, NOW, processes=_procs(), hardware=HW, tz=UTC)["runs"][0]["performance"]["figs"]
+    ranges = {k: [v["range"] for a, v in figs[k]["layout"].items() if a.startswith("xaxis")]
+              for k in ("price", "equity")}
+    assert len(ranges["equity"]) == 2                     # both panels of the PnL chart
+    assert {tuple(r) for rs in ranges.values() for r in rs} == {
+        ("2026-09-30T15:00:00", "2026-09-30T15:04:00")}   # the price line's span
